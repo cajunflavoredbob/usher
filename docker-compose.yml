@@ -1,0 +1,24 @@
+services:
+  hermes:
+    # For local development: build .
+    # For published image: image: ghcr.io/cajunflavoredbob/hermes:latest
+    build: .
+    container_name: hermes
+    restart: unless-stopped
+    environment:
+      # --- Required ---
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      SEERR_URL: ${SEERR_URL}
+      SEERR_API_KEY: ${SEERR_API_KEY}
+      ADMIN_TELEGRAM_ID: ${ADMIN_TELEGRAM_ID}
+      # --- Optional: enables movie auto-fix ---
+      RADARR_URL: ${RADARR_URL:-}
+      RADARR_API_KEY: ${RADARR_API_KEY:-}
+      # --- Optional: enables TV auto-fix ---
+      SONARR_URL: ${SONARR_URL:-}
+      SONARR_API_KEY: ${SONARR_API_KEY:-}
+      # --- Optional: comma-separated Telegram user IDs ---
+      # Who can use auto-fix. Defaults to admin only if unset.
+      ALLOWED_AUTOFIX_TELEGRAM_IDS: ${ALLOWED_AUTOFIX_TELEGRAM_IDS:-}
+    volumes:
+      - ./data:/data
