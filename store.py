@@ -205,6 +205,35 @@ class UserStore:
                 (telegram_id, seerr_id, seerr_display, enc, plex_uuid, plex_username),
             )
 
+    def find_by_plex_username(self, plex_username: str) -> Optional[Mapping]:
+        """Lookup by Plex username (case-insensitive). Used to map Seerr
+        webhook payloads (which include reportedBy_username) back to a
+        linked Telegram user.
+        """
+        if not plex_username:
+            return None
+        with self._conn() as c:
+            row = c.execute(
+                """
+                SELECT telegram_id, seerr_id, seerr_display,
+                       plex_token_enc, plex_uuid, plex_username
+                FROM user_mapping
+                WHERE LOWER(plex_username) = LOWER(?)
+                LIMIT 1
+                """,
+                (plex_username,),
+            ).fetchone()
+        if row is None:
+            return None
+        return Mapping(
+            telegram_id=row[0],
+            seerr_id=row[1],
+            seerr_display=row[2],
+            plex_token=self.crypto.safe_decrypt(row[3]),
+            plex_uuid=row[4],
+            plex_username=row[5],
+        )
+
     def unlink(self, telegram_id: int) -> bool:
         with self._conn() as c:
             cur = c.execute(

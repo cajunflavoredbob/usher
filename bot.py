@@ -19,6 +19,7 @@ import html
 import logging
 import os
 import sys
+from pathlib import Path
 from typing import Final, Optional
 
 from telegram import (
@@ -39,11 +40,16 @@ from telegram.ext import (
 
 import asyncio
 
+from aiohttp import web
+
 from seerr import SeerrClient, CreatedIssue, IssueListItem
 from store import UserStore, TokenCrypto
 from radarr import RadarrClient
 from sonarr import SonarrClient
 from plex import PlexClient
+from webhook import attach_webhook, start_http_server
+from webui import attach_webui
+from settings import SettingsStore, load_or_create_session_secret
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s | %(message)s",
@@ -71,59 +77,101 @@ DAILY_AUTOFIX_LIMIT = 3
 
 # --- App setup ---------------------------------------------------------------
 
-def _parse_allowlist(raw: str) -> set[int]:
-    if not raw:
-        return set()
-    out: set[int] = set()
-    for chunk in raw.split(","):
-        chunk = chunk.strip()
-        if chunk.isdigit():
-            out.add(int(chunk))
-    return out
+
+def _build_clients_from_settings(app: Application) -> None:
+    """(Re)build Seerr/Radarr/Sonarr clients and update the allowlist + webhook
+    secret from the current SettingsStore. Used at startup AND on hot reload.
+
+    Closes any prior httpx clients so we don't leak connections.
+    """
+    settings_store: SettingsStore = app.bot_data["settings_store"]
+    s = settings_store.settings
+    admin_id: int = app.bot_data["admin_id"]
+
+    # Close prior async httpx clients if any (best effort; loop may be running)
+    async def _close_prior() -> None:
+        for key in ("seerr", "radarr", "sonarr"):
+            client = app.bot_data.get(key)
+            if client is None:
+                continue
+            close = getattr(client, "close", None)
+            if close is None:
+                continue
+            try:
+                await close()
+            except Exception:
+                logger.exception("Error closing prior %s client", key)
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.create_task(_close_prior())
+    except RuntimeError:
+        pass
+
+    seerr = SeerrClient(
+        s.seerr_url, s.seerr_api_key,
+        public_url=s.seerr_public_url or None,
+    ) if (s.seerr_url and s.seerr_api_key) else None
+    radarr = RadarrClient(s.radarr_url, s.radarr_api_key) if (s.radarr_url and s.radarr_api_key) else None
+    sonarr = SonarrClient(s.sonarr_url, s.sonarr_api_key) if (s.sonarr_url and s.sonarr_api_key) else None
+
+    allowlist = set(s.allowed_autofix_telegram_ids)
+    if not allowlist:
+        allowlist = {admin_id}
+
+    app.bot_data["seerr"] = seerr
+    app.bot_data["radarr"] = radarr
+    app.bot_data["sonarr"] = sonarr
+    app.bot_data["allowlist"] = allowlist
+
+    logger.info(
+        "Clients (re)built: Seerr=%s Radarr=%s Sonarr=%s allowlist=%d",
+        "yes" if seerr else "no",
+        "yes" if radarr else "no",
+        "yes" if sonarr else "no",
+        len(allowlist),
+    )
 
 
 def _build_app() -> Application:
     token = os.environ["TELEGRAM_BOT_TOKEN"]
-    seerr_url = os.environ["SEERR_URL"]
-    seerr_key = os.environ["SEERR_API_KEY"]
-    seerr_public_url = os.environ.get("SEERR_PUBLIC_URL", "").strip() or None
     admin_id = int(os.environ["ADMIN_TELEGRAM_ID"])
-    db_path = os.environ.get("STORE_PATH", "/data/mappings.sqlite")
+    data_dir = Path(os.environ.get("DATA_DIR", "/data"))
+    db_path = os.environ.get("STORE_PATH", str(data_dir / "mappings.sqlite"))
+    settings_path = data_dir / "settings.json"
 
-    # Optional auto-fix configuration
-    radarr_url = os.environ.get("RADARR_URL", "").strip()
-    radarr_key = os.environ.get("RADARR_API_KEY", "").strip()
-    sonarr_url = os.environ.get("SONARR_URL", "").strip()
-    sonarr_key = os.environ.get("SONARR_API_KEY", "").strip()
-    allowlist = _parse_allowlist(os.environ.get("ALLOWED_AUTOFIX_TELEGRAM_IDS", ""))
-    if not allowlist:
-        # Default: only the admin can use auto-fix unless explicitly broadened
-        allowlist = {admin_id}
-        logger.info("ALLOWED_AUTOFIX_TELEGRAM_IDS unset; defaulting to admin only")
+    # Single HTTP server for webhook + webui
+    http_port = int(os.environ.get("WEBHOOK_PORT", "8765"))
+    http_bind = os.environ.get("WEBHOOK_BIND", "0.0.0.0").strip() or "0.0.0.0"
 
-    seerr = SeerrClient(seerr_url, seerr_key, public_url=seerr_public_url)
-    crypto = TokenCrypto(key_path=os.environ.get("ENCRYPTION_KEY_PATH", "/data/encryption.key"))
-    store = UserStore(db_path, crypto=crypto)
-    radarr = RadarrClient(radarr_url, radarr_key) if (radarr_url and radarr_key) else None
-    sonarr = SonarrClient(sonarr_url, sonarr_key) if (sonarr_url and sonarr_key) else None
+    settings_store = SettingsStore(settings_path)
+    session_secret = load_or_create_session_secret(data_dir / "session_secret")
+    crypto = TokenCrypto(key_path=os.environ.get("ENCRYPTION_KEY_PATH", str(data_dir / "encryption.key")))
+    user_store = UserStore(db_path, crypto=crypto)
     plex = PlexClient(
-        client_id_path=os.environ.get("PLEX_CLIENT_ID_PATH", "/data/client_id"),
+        client_id_path=os.environ.get("PLEX_CLIENT_ID_PATH", str(data_dir / "client_id")),
     )
 
-    if not radarr:
-        logger.info("Radarr not configured; auto-fix for movies disabled")
-    if not sonarr:
-        logger.info("Sonarr not configured; auto-fix for TV disabled")
-    logger.info("Auto-fix allowlist size: %d", len(allowlist))
-
-    app = Application.builder().token(token).post_init(_post_init).build()
-    app.bot_data["seerr"] = seerr
-    app.bot_data["store"] = store
-    app.bot_data["radarr"] = radarr
-    app.bot_data["sonarr"] = sonarr
+    app = (
+        Application.builder()
+        .token(token)
+        .post_init(_post_init)
+        .post_shutdown(_post_shutdown)
+        .build()
+    )
+    app.bot_data["settings_store"] = settings_store
+    app.bot_data["session_secret"] = session_secret
+    app.bot_data["data_dir"] = data_dir
+    app.bot_data["settings_path"] = settings_path
+    app.bot_data["db_path"] = db_path
+    app.bot_data["store"] = user_store
     app.bot_data["plex"] = plex
-    app.bot_data["allowlist"] = allowlist
     app.bot_data["admin_id"] = admin_id
+    app.bot_data["http_port"] = http_port
+    app.bot_data["http_bind"] = http_bind
+
+    _build_clients_from_settings(app)
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
@@ -135,28 +183,65 @@ def _build_app() -> Application:
     app.add_handler(_resolve_conversation())
     app.add_error_handler(on_error)
 
-    # Periodic poller for pending auto-fixes
-    if radarr or sonarr:
-        app.job_queue.run_repeating(
-            poll_pending_autofixes,
-            interval=60,
-            first=30,
-            name="autofix_poller",
-        )
+    # Periodic poller for pending auto-fixes (runs only when needed -- the job
+    # itself bails out cleanly if Radarr/Sonarr aren't configured at tick time)
+    app.job_queue.run_repeating(
+        poll_pending_autofixes,
+        interval=60,
+        first=30,
+        name="autofix_poller",
+    )
 
     return app
 
 
 async def _post_init(app: Application) -> None:
-    """Run startup health checks and try to DM the admin a welcome notice."""
+    """Run startup checks, start the HTTP server (webhook + webui), DM admin."""
     summary = await _check_connections(app)
     logger.info("Startup checks: %s", " | ".join(f"{k}={v}" for k, v in summary.items()))
+
+    # Build a single aiohttp app that serves both webhook and webui
+    web_app = web.Application(client_max_size=32 * 1024 * 1024)  # 32 MB for backup restores
+
+    async def _on_comment(payload: dict) -> None:
+        await handle_seerr_comment(app, payload)
+
+    def _secret_provider() -> str:
+        settings_store: SettingsStore = app.bot_data["settings_store"]
+        return settings_store.settings.webhook_secret or ""
+
+    async def _on_settings_changed() -> None:
+        logger.info("Settings changed; rebuilding clients")
+        _build_clients_from_settings(app)
+
+    attach_webhook(
+        web_app,
+        on_comment=_on_comment,
+        secret_provider=_secret_provider,
+    )
+    attach_webui(
+        web_app,
+        settings_store=app.bot_data["settings_store"],
+        session_secret=app.bot_data["session_secret"],
+        data_dir=app.bot_data["data_dir"],
+        settings_path=app.bot_data["settings_path"],
+        db_path=Path(app.bot_data["db_path"]),
+        on_settings_changed=_on_settings_changed,
+    )
+
+    runner = await start_http_server(
+        web_app,
+        host=app.bot_data["http_bind"],
+        port=app.bot_data["http_port"],
+    )
+    app.bot_data["http_runner"] = runner
+
     admin_id = app.bot_data["admin_id"]
     msg = (
         "👋 Bot is online.\n\n"
         f"{_format_status(summary)}\n\n"
-        "If you haven't yet, DM me `/link <your-seerr-or-plex-username>` to link your account.\n"
-        "Then `/issue` from here or any group I'm in."
+        "Admin UI: http://<host>:" + str(app.bot_data["http_port"]) + "/admin\n"
+        "Run `/link` to authorize with Plex (per-user issue attribution)."
     )
     try:
         await app.bot.send_message(chat_id=admin_id, text=msg, parse_mode="Markdown")
@@ -168,16 +253,126 @@ async def _post_init(app: Application) -> None:
         )
 
 
+async def _post_shutdown(app: Application) -> None:
+    runner = app.bot_data.get("http_runner")
+    if runner is not None:
+        try:
+            await runner.cleanup()
+            logger.info("HTTP server stopped")
+        except Exception:
+            logger.exception("HTTP server cleanup failed")
+
+
+async def handle_seerr_comment(app: Application, payload: dict) -> None:
+    """Process an ISSUE_COMMENT webhook from Seerr and DM the reporter."""
+    issue = payload.get("issue") or {}
+    comment = payload.get("comment") or {}
+    media = payload.get("media") or {}
+
+    try:
+        issue_id = int(issue.get("issue_id"))
+    except (TypeError, ValueError):
+        logger.warning("Webhook comment: missing/invalid issue_id; dropping")
+        return
+
+    reporter_username = (issue.get("reportedBy_username") or "").strip()
+    commenter_username = (comment.get("commentedBy_username") or "").strip()
+    comment_text = (comment.get("comment_message") or "").strip()
+
+    if not reporter_username:
+        logger.info("Webhook comment on issue #%d: no reporter username; dropping", issue_id)
+        return
+    if commenter_username and commenter_username.lower() == reporter_username.lower():
+        # Don't echo the user's own comment back at them
+        logger.info("Webhook comment on issue #%d: commenter == reporter; skipping", issue_id)
+        return
+    if not comment_text:
+        logger.info("Webhook comment on issue #%d: empty comment; dropping", issue_id)
+        return
+
+    store: UserStore = app.bot_data["store"]
+    mapping = store.find_by_plex_username(reporter_username)
+    if mapping is None:
+        logger.info(
+            "Webhook comment on issue #%d: reporter '%s' not linked in Hermes; dropping",
+            issue_id, reporter_username,
+        )
+        return
+
+    # Fetch media context for the message (best-effort)
+    title_line = ""
+    seerr: SeerrClient = app.bot_data["seerr"]
+    media_type = media.get("media_type") or ""
+    tmdb_raw = media.get("tmdbId")
+    try:
+        tmdb_id = int(tmdb_raw) if tmdb_raw not in (None, "") else 0
+    except (TypeError, ValueError):
+        tmdb_id = 0
+    if media_type in ("movie", "tv") and tmdb_id:
+        try:
+            title, year = await seerr.get_media_title(media_type, tmdb_id)
+            emoji = "🎬" if media_type == "movie" else "📺"
+            title_line = f"{emoji} {title}"
+            if year:
+                title_line += f" ({year})"
+            se_bits = []
+            if issue.get("problemSeason") is not None:
+                try:
+                    s = int(issue["problemSeason"])
+                    e_raw = issue.get("problemEpisode")
+                    e = int(e_raw) if e_raw not in (None, "") else None
+                    se_bits.append(f"S{s:02d}E{e:02d}" if e else f"S{s:02d}")
+                except (TypeError, ValueError):
+                    pass
+            if se_bits:
+                title_line += " — " + " ".join(se_bits)
+        except Exception:
+            logger.exception("Failed to fetch media title for issue #%d", issue_id)
+
+    safe_comment = html.escape(comment_text)
+    safe_commenter = html.escape(commenter_username or "Seerr")
+    safe_title = html.escape(title_line) if title_line else ""
+
+    lines = [f"💬 New comment on issue #{issue_id}"]
+    if safe_title:
+        lines.append(safe_title)
+    lines.append("")
+    lines.append(f"<i>from {safe_commenter}:</i>")
+    lines.append(f"\"{safe_comment}\"")
+    lines.append("")
+    lines.append(f"View: {seerr.public_url}/issues/{issue_id}")
+
+    try:
+        await app.bot.send_message(
+            chat_id=mapping.telegram_id,
+            text="\n".join(lines),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+        logger.info(
+            "Notified telegram_id=%d of comment on issue #%d from '%s'",
+            mapping.telegram_id, issue_id, commenter_username,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to DM telegram_id=%d about issue #%d comment",
+            mapping.telegram_id, issue_id,
+        )
+
+
 async def _check_connections(app: Application) -> dict[str, str]:
     """Probe configured services. Returns dict of service -> status string."""
     out: dict[str, str] = {}
-    seerr: SeerrClient = app.bot_data["seerr"]
-    try:
-        r = await seerr._client.get("/status")
-        r.raise_for_status()
-        out["Seerr"] = f"✅ {r.json().get('version', 'ok')}"
-    except Exception as exc:
-        out["Seerr"] = f"❌ {exc}"
+    seerr: Optional[SeerrClient] = app.bot_data.get("seerr")
+    if seerr is None:
+        out["Seerr"] = "— not configured"
+    else:
+        try:
+            r = await seerr._client.get("/status")
+            r.raise_for_status()
+            out["Seerr"] = f"✅ {r.json().get('version', 'ok')}"
+        except Exception as exc:
+            out["Seerr"] = f"❌ {exc}"
     radarr: Optional[RadarrClient] = app.bot_data.get("radarr")
     if radarr:
         try:
@@ -203,6 +398,18 @@ async def _check_connections(app: Application) -> dict[str, str]:
 
 def _format_status(summary: dict[str, str]) -> str:
     return "\n".join(f"  • *{k}*: {v}" for k, v in summary.items())
+
+
+async def _require_seerr(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Optional[SeerrClient]:
+    """Bail out gracefully if Seerr isn't configured yet."""
+    seerr: Optional[SeerrClient] = ctx.bot_data.get("seerr")
+    if seerr is None:
+        port = ctx.bot_data.get("http_port", 8765)
+        await update.effective_message.reply_text(
+            f"Hermes isn't configured yet. The admin needs to fill in Seerr settings at "
+            f"http://<host>:{port}/admin",
+        )
+    return seerr
 
 
 # --- Simple commands ---------------------------------------------------------
@@ -273,10 +480,12 @@ def _format_age(created_at_iso: str) -> str:
 
 
 async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    seerr = await _require_seerr(update, ctx)
+    if seerr is None:
+        return
     user_id = update.effective_user.id
     admin_id = ctx.bot_data.get("admin_id")
     is_admin = user_id == admin_id
-    seerr: SeerrClient = ctx.bot_data["seerr"]
     store: UserStore = ctx.bot_data["store"]
     mapping = store.get(user_id)
 
@@ -363,6 +572,8 @@ async def cmd_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     msg = update.effective_message
     if msg.chat.type != ChatType.PRIVATE:
         await msg.reply_text("Please DM me to link your account.")
+        return ConversationHandler.END
+    if await _require_seerr(update, ctx) is None:
         return ConversationHandler.END
     rows = [[
         InlineKeyboardButton("✅ Yes, continue", callback_data="link_consent:yes"),
@@ -496,6 +707,8 @@ def _issue_conversation() -> ConversationHandler:
 
 
 async def issue_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    if await _require_seerr(update, ctx) is None:
+        return ConversationHandler.END
     store: UserStore = ctx.bot_data["store"]
     if store.get(update.effective_user.id) is None:
         await update.effective_message.reply_text(
@@ -1104,7 +1317,7 @@ async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 # --- Main --------------------------------------------------------------------
 
 def main() -> None:
-    for var in ("TELEGRAM_BOT_TOKEN", "SEERR_URL", "SEERR_API_KEY", "ADMIN_TELEGRAM_ID"):
+    for var in ("TELEGRAM_BOT_TOKEN", "ADMIN_TELEGRAM_ID"):
         if not os.environ.get(var):
             print(f"Missing required env var: {var}", file=sys.stderr)
             sys.exit(1)

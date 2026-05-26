@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-25
+
+### Added
+- **Slim admin web UI** at `/admin` on the same port as the webhook receiver (default `8765`). Features:
+  - First-run flow at `/admin/setup` to create the admin username and password (pbkdf2_sha256, 600k iterations)
+  - Settings page for Seerr / Radarr / Sonarr URLs and API keys, Seerr public URL, auto-fix allowlist, and webhook secret. **Hot reload** -- saving rebuilds the Seerr/Radarr/Sonarr clients in place, no container restart needed
+  - Backup download: ZIP containing `settings.json`, `mappings.sqlite`, and `encryption.key`
+  - Backup restore: upload that ZIP, atomic swap, container exits to pick up the new state
+  - Change-password form
+- `settings.py` module with `SettingsStore` (JSON-backed, env-var seed on first run), pbkdf2 password helpers, session-secret loader
+- `webui.py` module with aiohttp routes, inline HTML, signed-cookie sessions (HMAC-SHA256, 7-day TTL)
+- Stdlib-only auth (no new deps: pbkdf2 from hashlib, HMAC from hmac, sessions from json + base64)
+
+### Changed
+- Most settings moved from env vars to `/data/settings.json`. Env vars are still read once on first run as initial seeds, then ignored. **Existing installs upgrade transparently** -- current env vars get baked into `settings.json` on the next start.
+- `SEERR_URL` and `SEERR_API_KEY` no longer required env vars; Hermes will start with no Seerr configured and prompt users in Telegram + admin UI to fill them in
+- Unified the webhook and webui under a single aiohttp `web.Application` and single HTTP server. One port covers everything.
+- Webhook secret is now read from settings on every request (rotates without a restart)
+
+### Notes
+- The Unraid template now exposes the web UI via Unraid's "WebUI" button (top-right of the container card)
+- A backup includes the encryption key. Treat backup ZIPs as secret -- anyone who has the file can decrypt the stored Plex tokens.
+
+## [0.6.0] - 2026-05-25
+
+### Added
+- **Comment-reply notifications via Seerr webhook.** When someone replies to an issue inside Seerr's UI, Hermes DMs the reporter on Telegram with the comment text and a link to the issue. Configure in Seerr: Settings → Notifications → Webhook, point at `http://<host>:8765/webhook/seerr`, enable the **Issue Comment** event.
+- New aiohttp webhook server inside Hermes, listening on `/webhook/seerr` (port `8765` by default). Also exposes `/healthz` for liveness checks.
+- New env vars: `WEBHOOK_PORT` (default `8765`), `WEBHOOK_BIND` (default `0.0.0.0`), `HERMES_WEBHOOK_SECRET` (optional; if set, requires matching Authorization header on incoming webhooks).
+- `UserStore.find_by_plex_username` for mapping Seerr's `reportedBy_username` back to a linked Telegram user.
+
+### Notes
+- Hermes silently drops webhook events for users it doesn't have a Telegram mapping for. Users on legacy username-only links still work for this -- as long as `plex_username` is on the record, comment notifications will route.
+- Hermes skips notifying the reporter when the commenter IS the reporter (no echo-back).
+- Added `aiohttp==3.10.10` dependency.
+
 ## [0.5.2] - 2026-05-25
 
 ### Added
