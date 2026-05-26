@@ -63,6 +63,8 @@ TITLE, PICK_MEDIA, PICK_SEASON, PICK_EPISODE, PICK_TYPE, DESCRIPTION, OFFER_AUTO
 AWAIT_COMMENT = 100
 # Conversation states (Plex link flow)
 AWAIT_LINK_CONSENT = 200
+# Conversation states (ticket management)
+AWAIT_TICKET_REPLY = 400
 
 ISSUE_TYPES: Final = {
     1: ("🎥", "Video"),
@@ -173,6 +175,13 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CommandHandler("tickets", cmd_tickets))
     app.add_handler(_issue_conversation())
     app.add_handler(_resolve_conversation())
+    # Ticket-management callbacks (must be registered before the conversation
+    # so the non-conversation taps -- open / close-menu / close-direct -- work
+    # even when no conversation is active)
+    app.add_handler(CallbackQueryHandler(tk_open, pattern=r"^tkopen:\d+$"))
+    app.add_handler(CallbackQueryHandler(tk_close_menu, pattern=r"^tkc:\d+$"))
+    app.add_handler(CallbackQueryHandler(tk_close_direct, pattern=r"^tkcd:\d+$"))
+    app.add_handler(_ticket_conversation())
     app.add_error_handler(on_error)
 
     # Periodic poller for pending auto-fixes (runs only when needed -- the job
@@ -352,8 +361,14 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
     lines.append("")
     lines.append(f"<i>from {safe_commenter}:</i>")
     lines.append(f"\"{safe_comment}\"")
-    lines.append("")
-    lines.append(f"View: {seerr.public_url}/issues/{issue_id}")
+
+    # Offer an inline Reply button when the ticket is still open
+    issue_status = (issue.get("issue_status") or "").upper()
+    reply_kb = None
+    if issue_status == "OPEN":
+        reply_kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("💬 Reply", callback_data=f"tkr:{issue_id}"),
+        ]])
 
     try:
         await app.bot.send_message(
@@ -361,6 +376,7 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
             text="\n".join(lines),
             parse_mode="HTML",
             disable_web_page_preview=True,
+            reply_markup=reply_kb,
         )
         logger.info(
             "Notified telegram_id=%d of comment on issue #%d from '%s'",
@@ -504,15 +520,9 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Eligibility check for non-admin users
     if not is_admin:
-        if not mapping:
+        if not mapping or not mapping.plex_token:
             await update.effective_message.reply_text(
-                "DM me /link first so I know which Seerr account is yours."
-            )
-            return
-        if not mapping.plex_token:
-            await update.effective_message.reply_text(
-                "Your link is legacy (no Plex token). DM /link to re-link with Plex; "
-                "after that, /tickets will show your open issues."
+                "DM me /link first so I know which Plex account is yours."
             )
             return
 
@@ -558,12 +568,216 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             line += f" — {issue.created_by}"
         lines.append(line)
     lines.append("")
-    lines.append(f"Manage in Seerr: {seerr.public_url}/issues")
+    lines.append("Tap a ticket number below to manage it.")
     text = "\n".join(lines)
-    # Telegram message limit is 4096; truncate gracefully if needed
     if len(text) > 4000:
         text = text[:3990] + "\n…(truncated)"
-    await update.effective_message.reply_text(text)
+
+    # Inline keyboard: one button per ticket (#N), 4 per row
+    button_rows: list[list[InlineKeyboardButton]] = []
+    current: list[InlineKeyboardButton] = []
+    for issue in issues:
+        current.append(InlineKeyboardButton(f"#{issue.id}", callback_data=f"tkopen:{issue.id}"))
+        if len(current) == 4:
+            button_rows.append(current)
+            current = []
+    if current:
+        button_rows.append(current)
+
+    await update.effective_message.reply_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(button_rows) if button_rows else None,
+    )
+
+
+# --- Ticket management (reply / close from inside Telegram) ----------------
+
+def _token_for(ctx: ContextTypes.DEFAULT_TYPE, tg_id: int) -> tuple[bool, Optional[str]]:
+    """Return (is_admin, plex_token_or_None).
+
+    For admin, token is None (we want admin-key attribution via SeerrClient
+    bare _client). For non-admin, token is their Plex token; caller must
+    bail if it's None (user isn't linked).
+    """
+    admin_id = ctx.bot_data.get("admin_id")
+    if tg_id == admin_id:
+        return True, None
+    store: UserStore = ctx.bot_data["store"]
+    mapping = store.get(tg_id)
+    if mapping is None or not mapping.plex_token:
+        return False, None
+    return False, mapping.plex_token
+
+
+def _ticket_detail_kb(issue_id: int, is_admin: bool) -> InlineKeyboardMarkup:
+    row = [InlineKeyboardButton("💬 Reply", callback_data=f"tkr:{issue_id}")]
+    if is_admin:
+        row.append(InlineKeyboardButton("✅ Close", callback_data=f"tkc:{issue_id}"))
+    return InlineKeyboardMarkup([row])
+
+
+async def tk_open(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Tapped [#N] from /tickets list. Sends NEW detail message."""
+    q = update.callback_query
+    await q.answer()
+    try:
+        issue_id = int(q.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        return
+    tg_id = update.effective_user.id
+    is_admin, token = _token_for(ctx, tg_id)
+    if not is_admin and token is None:
+        await q.message.reply_text("DM me /link first so I can act on tickets as you.")
+        return
+    await q.message.reply_text(
+        f"Ticket #{issue_id} — choose an action:",
+        reply_markup=_ticket_detail_kb(issue_id, is_admin),
+    )
+
+
+async def tk_close_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin tapped [Close] -- show the with/without comment options."""
+    q = update.callback_query
+    await q.answer()
+    try:
+        issue_id = int(q.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        return
+    if update.effective_user.id != ctx.bot_data.get("admin_id"):
+        return
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("💬 With comment", callback_data=f"tkcc:{issue_id}"),
+        InlineKeyboardButton("✓ Without comment", callback_data=f"tkcd:{issue_id}"),
+    ]])
+    await q.edit_message_text(f"Close ticket #{issue_id}?", reply_markup=kb)
+
+
+async def tk_close_direct(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin tapped [Without comment]. Resolve immediately."""
+    q = update.callback_query
+    await q.answer()
+    try:
+        issue_id = int(q.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        return
+    if update.effective_user.id != ctx.bot_data.get("admin_id"):
+        return
+    seerr: SeerrClient = ctx.bot_data["seerr"]
+    try:
+        await seerr.resolve_issue(issue_id, as_plex_token=None)
+    except Exception as exc:
+        logger.exception("resolve_issue failed for #%d", issue_id)
+        await q.edit_message_text(f"Couldn't close #{issue_id}: {exc}")
+        return
+    await q.edit_message_text(f"✅ Closed ticket #{issue_id}.")
+
+
+# --- Ticket reply conversation ----------------------------------------------
+
+async def tk_reply_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Entry point for `tkr:<id>` -- reply only (no close)."""
+    q = update.callback_query
+    await q.answer()
+    try:
+        issue_id = int(q.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        return ConversationHandler.END
+    is_admin, token = _token_for(ctx, update.effective_user.id)
+    if not is_admin and token is None:
+        await q.message.reply_text("DM me /link first so I can post comments as you.")
+        return ConversationHandler.END
+    ctx.user_data["tk_reply_id"] = issue_id
+    ctx.user_data["tk_close_after"] = False
+    await q.edit_message_text(
+        f"Send the reply text for ticket #{issue_id} (or /cancel)."
+    )
+    return AWAIT_TICKET_REPLY
+
+
+async def tk_close_with_comment_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Entry point for `tkcc:<id>` -- post comment then close (admin only)."""
+    q = update.callback_query
+    await q.answer()
+    try:
+        issue_id = int(q.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        return ConversationHandler.END
+    if update.effective_user.id != ctx.bot_data.get("admin_id"):
+        return ConversationHandler.END
+    ctx.user_data["tk_reply_id"] = issue_id
+    ctx.user_data["tk_close_after"] = True
+    await q.edit_message_text(
+        f"Send the closing comment for ticket #{issue_id} (or /cancel)."
+    )
+    return AWAIT_TICKET_REPLY
+
+
+async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Receive the reply text, post it, optionally close."""
+    issue_id = ctx.user_data.get("tk_reply_id")
+    close_after = bool(ctx.user_data.get("tk_close_after"))
+    if not issue_id:
+        return ConversationHandler.END
+    text = (update.effective_message.text or "").strip()
+    if not text:
+        await update.effective_message.reply_text("Empty message. Send a few words or /cancel.")
+        return AWAIT_TICKET_REPLY
+    is_admin, token = _token_for(ctx, update.effective_user.id)
+    if not is_admin and token is None:
+        await update.effective_message.reply_text("Your /link is gone or incomplete. /link to re-link.")
+        ctx.user_data.pop("tk_reply_id", None)
+        ctx.user_data.pop("tk_close_after", None)
+        return ConversationHandler.END
+    seerr: SeerrClient = ctx.bot_data["seerr"]
+    try:
+        await seerr.add_issue_comment(issue_id, text, as_plex_token=token)
+    except Exception as exc:
+        logger.exception("add_issue_comment failed for #%d", issue_id)
+        await update.effective_message.reply_text(f"Couldn't post comment on #{issue_id}: {exc}")
+        ctx.user_data.pop("tk_reply_id", None)
+        ctx.user_data.pop("tk_close_after", None)
+        return ConversationHandler.END
+    if close_after:
+        try:
+            await seerr.resolve_issue(issue_id, as_plex_token=None)
+        except Exception as exc:
+            logger.exception("resolve_issue failed for #%d", issue_id)
+            await update.effective_message.reply_text(
+                f"💬 Comment posted on #{issue_id}, but couldn't close: {exc}"
+            )
+            ctx.user_data.pop("tk_reply_id", None)
+            ctx.user_data.pop("tk_close_after", None)
+            return ConversationHandler.END
+        await update.effective_message.reply_text(f"💬 Replied and ✅ closed ticket #{issue_id}.")
+    else:
+        await update.effective_message.reply_text(f"💬 Replied to ticket #{issue_id}.")
+    ctx.user_data.pop("tk_reply_id", None)
+    ctx.user_data.pop("tk_close_after", None)
+    return ConversationHandler.END
+
+
+async def tk_reply_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    ctx.user_data.pop("tk_reply_id", None)
+    ctx.user_data.pop("tk_close_after", None)
+    await update.effective_message.reply_text("Cancelled.")
+    return ConversationHandler.END
+
+
+def _ticket_conversation() -> ConversationHandler:
+    return ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(tk_reply_start, pattern=r"^tkr:\d+$"),
+            CallbackQueryHandler(tk_close_with_comment_start, pattern=r"^tkcc:\d+$"),
+        ],
+        states={
+            AWAIT_TICKET_REPLY: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, tk_reply_text),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", tk_reply_cancel)],
+        name="ticket_reply",
+        persistent=False,
+    )
 
 
 def _link_conversation() -> ConversationHandler:
@@ -1019,18 +1233,13 @@ async def _submit_issue(
     episode = ctx.user_data.get("episode")
 
     mapping = store.get(update.effective_user.id)
-    if not (mapping and issue_type and media):
-        await update.effective_message.reply_text("Lost conversation state. /issue to start over.")
+    if not (mapping and mapping.plex_token and issue_type and media):
+        await update.effective_message.reply_text(
+            "Lost conversation state or your /link is incomplete. /link then /issue to start over."
+        )
         return ConversationHandler.END
 
-    tg_name = update.effective_user.full_name or update.effective_user.username or "Telegram user"
-    # Prefix only included as belt-and-suspenders when we DON'T have a Plex
-    # token (true attribution unavailable). When we do, Seerr's UI shows the
-    # real user already.
-    if mapping.plex_token:
-        full_message = description
-    else:
-        full_message = f"[from Telegram: {tg_name} ↔ {mapping.seerr_display}]\n\n{description}"
+    full_message = description
     if autofix:
         full_message += "\n\n(Auto-fix triggered by reporter.)"
 
@@ -1098,7 +1307,7 @@ async def _submit_issue(
         else:
             lines.append(f"⚠️ Auto-fix didn't run: {detail}")
 
-    lines.append(f"\nView: {created.url}")
+    lines.append("\nUse /tickets to manage it.")
     await update.effective_message.reply_text("\n".join(lines))
     ctx.user_data.clear()
     return ConversationHandler.END
@@ -1265,7 +1474,7 @@ async def resolve_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         seerr: SeerrClient = ctx.bot_data["seerr"]
         store: UserStore = ctx.bot_data["store"]
         mapping = store.get(update.effective_user.id)
-        token = mapping.plex_token if mapping else None
+        token = mapping.plex_token if (mapping and mapping.plex_token) else None
         try:
             await seerr.resolve_issue(issue_id, as_plex_token=token)
         except Exception as exc:
@@ -1296,15 +1505,9 @@ async def resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     store: UserStore = ctx.bot_data["store"]
     seerr: SeerrClient = ctx.bot_data["seerr"]
     mapping = store.get(update.effective_user.id)
-    token = mapping.plex_token if mapping else None
-    if token:
-        full_comment = comment
-    else:
-        tg_name = update.effective_user.full_name or update.effective_user.username or "Telegram user"
-        who = tg_name + (f" ↔ {mapping.seerr_display}" if mapping else "")
-        full_comment = f"[follow-up from Telegram: {who}]\n\n{comment}"
+    token = mapping.plex_token if (mapping and mapping.plex_token) else None
     try:
-        await seerr.add_issue_comment(issue_id, full_comment, as_plex_token=token)
+        await seerr.add_issue_comment(issue_id, comment, as_plex_token=token)
     except Exception as exc:
         logger.exception("add_issue_comment failed")
         await update.effective_message.reply_text(f"Couldn't add comment: {exc}")

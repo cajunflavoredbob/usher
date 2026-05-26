@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-26
+
+### Added
+- **In-Telegram ticket management.** `/tickets` now renders one `#N` button per open ticket. Tap a button → bot opens a detail message with the action buttons:
+  - **Users** see `[💬 Reply]` for their own tickets.
+  - **Admin** sees `[💬 Reply]` and `[✅ Close]`. Close opens a sub-menu: `[💬 With comment]` (post a closing comment, then resolve) / `[✓ Without comment]` (resolve immediately).
+- **Reply from the webhook DM.** When the bot DMs you about a new comment on your ticket, the DM now includes a `[💬 Reply]` button (only if the ticket is still open per `issue.issue_status`). Tap to reply without going through `/tickets` first.
+- User comments are posted via the per-user Plex token (correct Seerr attribution). Admin actions use the admin API key.
+
+### Changed
+- **Removed all user-facing Seerr URLs.** No more "View: http://..." link in the issue-creation reply, no more "View:" line in webhook DMs, no more "Manage in Seerr" footer in `/tickets`. The bot is now self-contained for users -- the only browser they need is the Plex sign-in popup during `/link`.
+- **Removed legacy username-only link support.** Pre-v0.4.0 mappings (no `plex_token_enc`) are no longer accepted for any action. The `/issue` flow, `/tickets`, resolve follow-up, and ticket reply all require a Plex-OAuth-linked account. Affected users get the same "DM `/link`" prompt as anyone unlinked; their DB row stays around until they re-link (which UPSERTs it).
+- Dropped the `[from Telegram: name ↔ seerr_user]` body-prefix attribution hack from issue creation and resolve-follow-up comments. With Plex OAuth required, attribution is correct natively in Seerr's UI.
+
+### Migration
+- Anyone still on a legacy username-only mapping will see "DM me /link first..." when they try to use the bot. They just need to run `/link` once.
+
 ## [0.8.4] - 2026-05-26
 
 ### Fixed
