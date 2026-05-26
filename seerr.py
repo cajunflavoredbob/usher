@@ -86,17 +86,26 @@ class SeerrClient:
         )
 
     async def _as_user(self, plex_token: str) -> httpx.AsyncClient:
-        """Return a fresh client authenticated as a Plex user (session cookie set).
+        """Return a fresh client authenticated as a Plex user.
+
+        Auth and subsequent calls happen on the SAME client so the session
+        cookie jar persists naturally (transferring cookies across clients
+        was unreliable).
 
         Caller MUST aclose() the returned client.
         """
-        _, _, cookies = await self.login_with_plex(plex_token)
-        return httpx.AsyncClient(
+        user_client = httpx.AsyncClient(
             base_url=f"{self.base_url}/api/v1",
             headers={"Accept": "application/json"},
-            cookies=cookies,
             timeout=15.0,
         )
+        try:
+            r = await user_client.post("/auth/plex", json={"authToken": plex_token})
+            r.raise_for_status()
+        except Exception:
+            await user_client.aclose()
+            raise
+        return user_client
 
     async def search(self, query: str, limit: int = 5) -> list[MediaResult]:
         """Search Seerr for movies + TV shows matching the query."""
