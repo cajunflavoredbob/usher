@@ -107,9 +107,9 @@ def _esc(s) -> str:
 CSS = """
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
        background: #1e1e2e; color: #cdd6f4; margin: 0; padding: 20px; line-height: 1.5; }
-.container { max-width: 720px; margin: 0 auto; }
+.container { max-width: 760px; margin: 0 auto; }
 h1, h2 { color: #f5e0dc; }
-h2 { margin-top: 24px; border-bottom: 1px solid #45475a; padding-bottom: 6px; }
+h2 { margin-top: 0; border-bottom: 1px solid #45475a; padding-bottom: 6px; }
 form { background: #313244; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
 label { display: block; margin: 12px 0 4px; font-weight: 600; color: #cba6f7; }
 input[type="text"], input[type="password"], input[type="file"], textarea {
@@ -130,6 +130,38 @@ nav { margin-bottom: 20px; padding: 12px; background: #313244; border-radius: 8p
 nav a { color: #89b4fa; text-decoration: none; margin-right: 18px; font-weight: 600; }
 nav a:hover { text-decoration: underline; }
 a { color: #89b4fa; }
+code { background: #45475a; padding: 2px 6px; border-radius: 3px; font-size: 13px; }
+
+/* Tabs (CSS-only via radio inputs) */
+.tabs > input[type="radio"] { position: absolute; left: -9999px; }
+.tab-labels { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 0;
+              border-bottom: 2px solid #45475a; }
+.tab-labels label {
+  display: inline-block; padding: 10px 18px; cursor: pointer;
+  background: #313244; color: #a6adc8; font-weight: 600;
+  border-radius: 6px 6px 0 0; margin: 0; user-select: none;
+  border: 1px solid transparent; border-bottom: none;
+}
+.tab-labels label:hover { color: #cdd6f4; }
+#tab-telegram:checked ~ .tab-labels label[for="tab-telegram"],
+#tab-seerr:checked    ~ .tab-labels label[for="tab-seerr"],
+#tab-autofix:checked  ~ .tab-labels label[for="tab-autofix"],
+#tab-webhook:checked  ~ .tab-labels label[for="tab-webhook"],
+#tab-account:checked  ~ .tab-labels label[for="tab-account"] {
+  background: #313244; color: #f5e0dc; border-color: #45475a;
+  border-bottom: 2px solid #313244; margin-bottom: -2px;
+}
+.tab-content { display: none; }
+#tab-telegram:checked ~ .tab-contents .tab-c-telegram,
+#tab-seerr:checked    ~ .tab-contents .tab-c-seerr,
+#tab-autofix:checked  ~ .tab-contents .tab-c-autofix,
+#tab-webhook:checked  ~ .tab-contents .tab-c-webhook,
+#tab-account:checked  ~ .tab-contents .tab-c-account { display: block; }
+.url-box {
+  background: #1e1e2e; border: 1px solid #45475a; border-radius: 4px;
+  padding: 10px 12px; font-family: ui-monospace, Menlo, monospace; font-size: 13px;
+  color: #a6e3a1; word-break: break-all;
+}
 """
 
 
@@ -152,66 +184,91 @@ def _flash(message: str = "", error: str = "") -> str:
     return out
 
 
-def _settings_page(s: Settings, *, message: str = "", error: str = "") -> str:
+TAB_KEYS = ("telegram", "seerr", "autofix", "webhook", "account")
+
+
+def _settings_page(
+    s: Settings,
+    *,
+    message: str = "",
+    error: str = "",
+    active_tab: str = "telegram",
+    webhook_url: str = "",
+) -> str:
+    if active_tab not in TAB_KEYS:
+        active_tab = "telegram"
     ids_str = ",".join(str(i) for i in s.allowed_autofix_telegram_ids)
     admin_tg_val = str(s.admin_telegram_id) if s.admin_telegram_id else ""
-    return _page("Admin", f"""
-<nav>
-  <a href="/admin">Settings</a>
-  <a href="/admin/backup">Download Backup</a>
-  <a href="/admin/logout">Log out</a>
-</nav>
-<h1>Hermes Settings</h1>
-{_flash(message, error)}
-<form method="POST" action="/admin">
-  <h2>Telegram <span class="note">(changes restart the container)</span></h2>
-  <label>Bot Token</label>
-  <input type="password" name="telegram_bot_token" value="{_esc(s.telegram_bot_token)}">
-  <label>Admin Telegram User ID</label>
-  <input type="text" name="admin_telegram_id" value="{_esc(admin_tg_val)}" inputmode="numeric" pattern="[0-9]+">
 
+    def chk(key: str) -> str:
+        return ' checked' if active_tab == key else ''
+
+    telegram_form = f"""
+<form method="POST" action="/admin/telegram">
+  <h2>Telegram</h2>
+  <div class="note">Changes to these fields restart the container so the new identity takes effect.</div>
+  <label>Bot Token <span class="note">(from @BotFather)</span></label>
+  <input type="password" name="telegram_bot_token" value="{_esc(s.telegram_bot_token)}" required>
+  <label>Admin Telegram User ID <span class="note">(DM @userinfobot)</span></label>
+  <input type="text" name="admin_telegram_id" value="{_esc(admin_tg_val)}" inputmode="numeric" pattern="[0-9]+" required>
+  <button type="submit">Save &amp; Restart</button>
+</form>
+"""
+
+    seerr_form = f"""
+<form method="POST" action="/admin/seerr">
   <h2>Seerr</h2>
   <label>Seerr URL</label>
-  <input type="text" name="seerr_url" value="{_esc(s.seerr_url)}" placeholder="http://192.168.1.10:5056">
+  <input type="text" name="seerr_url" value="{_esc(s.seerr_url)}" placeholder="http://192.168.1.10:5056" required>
   <label>Seerr API Key</label>
-  <input type="password" name="seerr_api_key" value="{_esc(s.seerr_api_key)}">
-  <label>Seerr Public URL <span class="note">(optional, for reverse-proxy links)</span></label>
+  <input type="password" name="seerr_api_key" value="{_esc(s.seerr_api_key)}" required>
+  <label>Seerr Public URL <span class="note">(optional, for reverse-proxy links sent to users)</span></label>
   <input type="text" name="seerr_public_url" value="{_esc(s.seerr_public_url)}" placeholder="https://seerr.example.com">
+  <button type="submit">Save</button>
+</form>
+"""
 
-  <h2>Radarr <span class="note">(optional)</span></h2>
+    autofix_form = f"""
+<form method="POST" action="/admin/autofix">
+  <h2>Auto-fix (Radarr / Sonarr)</h2>
+  <div class="note">Optional. Both Radarr and Sonarr are independent -- configure whichever you use.</div>
+
   <label>Radarr URL</label>
   <input type="text" name="radarr_url" value="{_esc(s.radarr_url)}" placeholder="http://192.168.1.10:7878">
   <label>Radarr API Key</label>
   <input type="password" name="radarr_api_key" value="{_esc(s.radarr_api_key)}">
 
-  <h2>Sonarr <span class="note">(optional)</span></h2>
   <label>Sonarr URL</label>
   <input type="text" name="sonarr_url" value="{_esc(s.sonarr_url)}" placeholder="http://192.168.1.10:8989">
   <label>Sonarr API Key</label>
   <input type="password" name="sonarr_api_key" value="{_esc(s.sonarr_api_key)}">
 
-  <h2>Auto-fix</h2>
   <label>Allowed Telegram User IDs</label>
   <input type="text" name="allowed_autofix_telegram_ids" value="{_esc(ids_str)}" placeholder="123456,789012">
   <div class="note">Comma-separated. Leave empty for admin-only.</div>
 
+  <button type="submit">Save</button>
+</form>
+"""
+
+    webhook_form = f"""
+<form method="POST" action="/admin/webhook">
   <h2>Webhook</h2>
+  <p>Hermes receives webhook events from Seerr on this URL:</p>
+  <div class="url-box">{_esc(webhook_url)}</div>
+  <div class="note">Configure in Seerr: Settings → Notifications → Webhook. Set the URL above and enable the <strong>Issue Comment</strong> event.</div>
+
   <label>Webhook Secret <span class="note">(optional)</span></label>
   <input type="password" name="webhook_secret" value="{_esc(s.webhook_secret)}">
-  <div class="note">If set, Seerr must send this value in the Authorization header.</div>
+  <div class="note">If set, paste the same value into Seerr's Webhook <code>Authorization Header</code> field. Hermes rejects requests without a matching header.</div>
 
-  <button type="submit">Save Settings</button>
+  <button type="submit">Save</button>
 </form>
+"""
 
-<h2>Restore from Backup</h2>
-<form method="POST" action="/admin/restore" enctype="multipart/form-data">
-  <input type="file" name="backup" accept=".zip" required>
-  <div class="note">Overwrites settings, mappings DB, and encryption key. The container will restart.</div>
-  <button type="submit" class="danger">Restore</button>
-</form>
-
-<h2>Change Admin Password</h2>
+    account_section = """
 <form method="POST" action="/admin/password">
+  <h2>Change Password</h2>
   <label>Current password</label>
   <input type="password" name="current" required>
   <label>New password</label>
@@ -220,7 +277,58 @@ def _settings_page(s: Settings, *, message: str = "", error: str = "") -> str:
   <input type="password" name="confirm" required minlength="8">
   <button type="submit">Change Password</button>
 </form>
+
+<form method="GET" action="/admin/backup">
+  <h2>Download Backup</h2>
+  <div class="note">Downloads a ZIP containing settings.json, the mappings database, and the encryption key. Treat this file as secret.</div>
+  <button type="submit">Download Backup</button>
+</form>
+
+<form method="POST" action="/admin/restore" enctype="multipart/form-data">
+  <h2>Restore from Backup</h2>
+  <input type="file" name="backup" accept=".zip" required>
+  <div class="note">Overwrites settings, mappings DB, and encryption key. The container will restart.</div>
+  <button type="submit" class="danger">Restore</button>
+</form>
+"""
+
+    return _page("Admin", f"""
+<nav>
+  <a href="/admin">Settings</a>
+  <a href="/admin/logout">Log out</a>
+</nav>
+<h1>Hermes Settings</h1>
+{_flash(message, error)}
+<div class="tabs">
+  <input type="radio" name="tab" id="tab-telegram"{chk('telegram')}>
+  <input type="radio" name="tab" id="tab-seerr"{chk('seerr')}>
+  <input type="radio" name="tab" id="tab-autofix"{chk('autofix')}>
+  <input type="radio" name="tab" id="tab-webhook"{chk('webhook')}>
+  <input type="radio" name="tab" id="tab-account"{chk('account')}>
+  <div class="tab-labels">
+    <label for="tab-telegram">Telegram</label>
+    <label for="tab-seerr">Seerr</label>
+    <label for="tab-autofix">Auto-fix</label>
+    <label for="tab-webhook">Webhook</label>
+    <label for="tab-account">Account</label>
+  </div>
+  <div class="tab-contents">
+    <div class="tab-content tab-c-telegram">{telegram_form}</div>
+    <div class="tab-content tab-c-seerr">{seerr_form}</div>
+    <div class="tab-content tab-c-autofix">{autofix_form}</div>
+    <div class="tab-content tab-c-webhook">{webhook_form}</div>
+    <div class="tab-content tab-c-account">{account_section}</div>
+  </div>
+</div>
 """)
+
+
+def _webhook_url_from_request(request: web.Request) -> str:
+    """Construct the webhook URL using the request's Host header so users see
+    the actual host:port they hit (works behind reverse proxies that set Host)."""
+    scheme = request.headers.get("X-Forwarded-Proto") or request.scheme or "http"
+    host = request.host
+    return f"{scheme}://{host}/webhook/seerr"
 
 
 # --- Route handlers ---------------------------------------------------------
@@ -367,25 +475,95 @@ async def logout(request: web.Request) -> web.Response:
 
 async def admin_get(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
-    return web.Response(text=_settings_page(store.settings), content_type="text/html")
+    active_tab = request.query.get("tab", "telegram")
+    return web.Response(
+        text=_settings_page(
+            store.settings,
+            active_tab=active_tab,
+            webhook_url=_webhook_url_from_request(request),
+        ),
+        content_type="text/html",
+    )
 
 
-async def admin_post(request: web.Request) -> web.Response:
+async def _save_and_render(
+    request: web.Request,
+    *,
+    active_tab: str,
+    success_msg: str = "Settings saved.",
+    error: str = "",
+    skip_hot_reload: bool = False,
+) -> web.Response:
+    """Common epilogue: persist, trigger hot reload, render the current tab."""
+    store: SettingsStore = request.app["settings_store"]
+    store.save()
+    msg = success_msg
+    err = error
+    if not skip_hot_reload:
+        reload_cb: Optional[ReloadCallback] = request.app.get("on_settings_changed")
+        if reload_cb:
+            try:
+                await reload_cb()
+            except Exception as exc:
+                logger.exception("Hot reload failed")
+                err = f"Saved, but hot reload failed: {exc}. Restart the container."
+    return web.Response(
+        text=_settings_page(
+            store.settings,
+            message=msg, error=err,
+            active_tab=active_tab,
+            webhook_url=_webhook_url_from_request(request),
+        ),
+        content_type="text/html",
+    )
+
+
+async def telegram_post(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
     form = await request.post()
     s = store.settings
-    s.telegram_bot_token = (form.get("telegram_bot_token") or "").strip()
+    token = (form.get("telegram_bot_token") or "").strip()
     admin_tg_raw = (form.get("admin_telegram_id") or "").strip()
-    try:
-        s.admin_telegram_id = int(admin_tg_raw) if admin_tg_raw else 0
-    except ValueError:
+    if not token:
         return web.Response(
-            text=_settings_page(store.settings, error="Admin Telegram User ID must be a positive integer."),
+            text=_settings_page(s, error="Bot token is required.",
+                                active_tab="telegram",
+                                webhook_url=_webhook_url_from_request(request)),
             content_type="text/html", status=400,
         )
+    try:
+        admin_tg = int(admin_tg_raw)
+        if admin_tg <= 0:
+            raise ValueError
+    except ValueError:
+        return web.Response(
+            text=_settings_page(s, error="Admin Telegram User ID must be a positive integer.",
+                                active_tab="telegram",
+                                webhook_url=_webhook_url_from_request(request)),
+            content_type="text/html", status=400,
+        )
+    s.telegram_bot_token = token
+    s.admin_telegram_id = admin_tg
+    return await _save_and_render(
+        request, active_tab="telegram",
+        success_msg="Saved. Container restarting in ~2s to apply the new Telegram identity.",
+    )
+
+
+async def seerr_post(request: web.Request) -> web.Response:
+    store: SettingsStore = request.app["settings_store"]
+    form = await request.post()
+    s = store.settings
     s.seerr_url = (form.get("seerr_url") or "").strip()
     s.seerr_api_key = (form.get("seerr_api_key") or "").strip()
     s.seerr_public_url = (form.get("seerr_public_url") or "").strip()
+    return await _save_and_render(request, active_tab="seerr")
+
+
+async def autofix_post(request: web.Request) -> web.Response:
+    store: SettingsStore = request.app["settings_store"]
+    form = await request.post()
+    s = store.settings
     s.radarr_url = (form.get("radarr_url") or "").strip()
     s.radarr_api_key = (form.get("radarr_api_key") or "").strip()
     s.sonarr_url = (form.get("sonarr_url") or "").strip()
@@ -397,18 +575,15 @@ async def admin_post(request: web.Request) -> web.Response:
         if chunk.isdigit():
             parsed_ids.append(int(chunk))
     s.allowed_autofix_telegram_ids = parsed_ids
+    return await _save_and_render(request, active_tab="autofix")
+
+
+async def webhook_post(request: web.Request) -> web.Response:
+    store: SettingsStore = request.app["settings_store"]
+    form = await request.post()
+    s = store.settings
     s.webhook_secret = (form.get("webhook_secret") or "").strip()
-    store.save()
-    reload_cb: Optional[ReloadCallback] = request.app.get("on_settings_changed")
-    msg = "Settings saved."
-    err = ""
-    if reload_cb:
-        try:
-            await reload_cb()
-        except Exception as exc:
-            logger.exception("Hot reload failed")
-            err = f"Saved, but hot reload failed: {exc}. Restart the container."
-    return web.Response(text=_settings_page(store.settings, message=msg, error=err), content_type="text/html")
+    return await _save_and_render(request, active_tab="webhook")
 
 
 async def change_password(request: web.Request) -> web.Response:
@@ -419,15 +594,27 @@ async def change_password(request: web.Request) -> web.Response:
     confirm = form.get("confirm") or ""
     admin = store.settings.admin
     if not verify_password(current, admin.password_hash):
-        return web.Response(text=_settings_page(store.settings, error="Current password is incorrect."),
-                            content_type="text/html", status=400)
+        return web.Response(
+            text=_settings_page(store.settings, error="Current password is incorrect.",
+                                active_tab="account",
+                                webhook_url=_webhook_url_from_request(request)),
+            content_type="text/html", status=400,
+        )
     if len(new) < 8 or new != confirm:
-        return web.Response(text=_settings_page(store.settings, error="New password must be >= 8 chars and match confirm."),
-                            content_type="text/html", status=400)
+        return web.Response(
+            text=_settings_page(store.settings, error="New password must be >= 8 chars and match confirm.",
+                                active_tab="account",
+                                webhook_url=_webhook_url_from_request(request)),
+            content_type="text/html", status=400,
+        )
     admin.password_hash = hash_password(new)
     store.save()
-    return web.Response(text=_settings_page(store.settings, message="Password changed."),
-                        content_type="text/html")
+    return web.Response(
+        text=_settings_page(store.settings, message="Password changed.",
+                            active_tab="account",
+                            webhook_url=_webhook_url_from_request(request)),
+        content_type="text/html",
+    )
 
 
 async def backup_download(request: web.Request) -> web.Response:
@@ -465,7 +652,9 @@ async def restore_upload(request: web.Request) -> web.Response:
     reader = await request.multipart()
     field = await reader.next()
     if field is None or field.name != "backup":
-        return web.Response(text=_settings_page(store.settings, error="No backup file in upload."),
+        return web.Response(text=_settings_page(store.settings, error="No backup file in upload.",
+                                                        active_tab="account",
+                                                        webhook_url=_webhook_url_from_request(request)),
                             content_type="text/html", status=400)
     data = await field.read()
 
@@ -478,8 +667,12 @@ async def restore_upload(request: web.Request) -> web.Response:
             if "settings.json" in names:
                 json.loads(zf.read("settings.json").decode())  # parse-check
     except Exception as exc:
-        return web.Response(text=_settings_page(store.settings, error=f"Invalid backup: {exc}"),
-                            content_type="text/html", status=400)
+        return web.Response(
+            text=_settings_page(store.settings, error=f"Invalid backup: {exc}",
+                                active_tab="account",
+                                webhook_url=_webhook_url_from_request(request)),
+            content_type="text/html", status=400,
+        )
 
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
@@ -490,8 +683,12 @@ async def restore_upload(request: web.Request) -> web.Response:
             if "encryption.key" in names:
                 enc_key_path.write_bytes(zf.read("encryption.key"))
     except Exception as exc:
-        return web.Response(text=_settings_page(store.settings, error=f"Restore failed: {exc}"),
-                            content_type="text/html", status=500)
+        return web.Response(
+            text=_settings_page(store.settings, error=f"Restore failed: {exc}",
+                                active_tab="account",
+                                webhook_url=_webhook_url_from_request(request)),
+            content_type="text/html", status=500,
+        )
 
     logger.info("Restore complete; exiting in 2s so the container restarts and picks up new state")
     loop = asyncio.get_event_loop()
@@ -550,7 +747,10 @@ def attach_webui(
     app.router.add_post("/admin/login", login_post)
     app.router.add_get("/admin/logout", logout)
     app.router.add_get("/admin", admin_get)
-    app.router.add_post("/admin", admin_post)
+    app.router.add_post("/admin/telegram", telegram_post)
+    app.router.add_post("/admin/seerr", seerr_post)
+    app.router.add_post("/admin/autofix", autofix_post)
+    app.router.add_post("/admin/webhook", webhook_post)
     app.router.add_post("/admin/password", change_password)
     app.router.add_get("/admin/backup", backup_download)
     app.router.add_post("/admin/restore", restore_upload)
