@@ -48,8 +48,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("hermes")
 
-# Conversation states
+# Conversation states (issue creation)
 TITLE, PICK_MEDIA, PICK_SEASON, PICK_EPISODE, PICK_TYPE, DESCRIPTION, OFFER_AUTOFIX, CONFIRM_AUTOFIX = range(8)
+# Conversation states (post-completion follow-up)
+AWAIT_COMMENT = 100
 
 ISSUE_TYPES: Final = {
     1: ("🎥", "Video"),
@@ -118,6 +120,7 @@ def _build_app() -> Application:
     app.add_handler(CommandHandler("unlink", cmd_unlink))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(_issue_conversation())
+    app.add_handler(_resolve_conversation())
     app.add_error_handler(on_error)
 
     # Periodic poller for pending auto-fixes
@@ -513,21 +516,25 @@ async def issue_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     )
     if not eligible:
         return await _submit_issue(update, ctx, autofix=False)
-    used = store.count_autofix_24h(tg_id)
-    if used >= DAILY_AUTOFIX_LIMIT:
-        await update.effective_message.reply_text(
-            f"(You've used your {DAILY_AUTOFIX_LIMIT} auto-fixes today; "
-            f"submitting issue without auto-fix.)"
-        )
-        return await _submit_issue(update, ctx, autofix=False)
+    # Admin bypasses the daily rate limit
+    is_admin = tg_id == ctx.bot_data.get("admin_id")
+    if not is_admin:
+        used = store.count_autofix_24h(tg_id)
+        if used >= DAILY_AUTOFIX_LIMIT:
+            await update.effective_message.reply_text(
+                f"(You've used your {DAILY_AUTOFIX_LIMIT} auto-fixes today; "
+                f"submitting issue without auto-fix.)"
+            )
+            return await _submit_issue(update, ctx, autofix=False)
+        remaining_msg = f"\n(Auto-fixes remaining today: {DAILY_AUTOFIX_LIMIT - used})"
+    else:
+        remaining_msg = ""
     rows = [[
         InlineKeyboardButton("✅ Try auto-fix", callback_data="autofix:yes"),
         InlineKeyboardButton("📨 Just report", callback_data="autofix:no"),
     ]]
-    remaining = DAILY_AUTOFIX_LIMIT - used
     await update.effective_message.reply_text(
-        f"Try to auto-fix? This will delete the file and trigger a new search.\n"
-        f"(Auto-fixes remaining today: {remaining})",
+        f"Try to auto-fix? This will delete the file and trigger a new search.{remaining_msg}",
         reply_markup=InlineKeyboardMarkup(rows),
     )
     return OFFER_AUTOFIX
@@ -759,10 +766,20 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def _notify_complete(ctx: ContextTypes.DEFAULT_TYPE, fix, extra: str = "") -> None:
     text = (
         f"🎉 Auto-fix complete: *{fix.label}* downloaded{extra}.\n"
-        f"Original issue: {fix.issue_url}"
+        f"Original issue: {fix.issue_url}\n\n"
+        "Did this resolve the problem?"
     )
+    keyboard = [[
+        InlineKeyboardButton("✅ Yes, close it", callback_data=f"resolve:{fix.issue_id}:yes"),
+        InlineKeyboardButton("💬 No, add a comment", callback_data=f"resolve:{fix.issue_id}:no"),
+    ]]
     try:
-        await ctx.bot.send_message(chat_id=fix.chat_id, text=text, parse_mode="Markdown")
+        await ctx.bot.send_message(
+            chat_id=fix.chat_id,
+            text=text,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
     except Exception:
         logger.exception("notify_complete send_message failed for fix %d", fix.id)
 
@@ -771,12 +788,105 @@ async def _notify_timeout(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:
     text = (
         f"⏱️ Auto-fix timed out (6h) for *{fix.label}*.\n"
         f"No new file was imported. Check Sonarr/Radarr to see if a release was grabbed.\n"
-        f"Original issue: {fix.issue_url}"
+        f"Original issue: {fix.issue_url}\n\n"
+        "Want to add a comment for the admin to follow up?"
     )
+    keyboard = [[
+        InlineKeyboardButton("💬 Add a comment", callback_data=f"resolve:{fix.issue_id}:no"),
+        InlineKeyboardButton("🙅 No, leave it", callback_data=f"resolve:{fix.issue_id}:skip"),
+    ]]
     try:
-        await ctx.bot.send_message(chat_id=fix.chat_id, text=text, parse_mode="Markdown")
+        await ctx.bot.send_message(
+            chat_id=fix.chat_id,
+            text=text,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
     except Exception:
         logger.exception("notify_timeout send_message failed for fix %d", fix.id)
+
+
+# --- Resolve follow-up conversation -----------------------------------------
+
+def _resolve_conversation() -> ConversationHandler:
+    return ConversationHandler(
+        entry_points=[CallbackQueryHandler(resolve_start, pattern=r"^resolve:")],
+        states={
+            AWAIT_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, resolve_comment)],
+        },
+        fallbacks=[CommandHandler("cancel", resolve_cancel)],
+        per_user=True,
+        per_chat=True,
+        allow_reentry=True,
+        name="resolve",
+        persistent=False,
+    )
+
+
+async def resolve_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query
+    await q.answer()
+    try:
+        _, issue_id_s, choice = q.data.split(":")
+        issue_id = int(issue_id_s)
+    except (ValueError, AttributeError):
+        await q.edit_message_text("Couldn't parse selection.")
+        return ConversationHandler.END
+    if choice == "yes":
+        seerr: SeerrClient = ctx.bot_data["seerr"]
+        try:
+            await seerr.resolve_issue(issue_id)
+        except Exception as exc:
+            logger.exception("resolve_issue failed")
+            await q.edit_message_text(f"Couldn't close issue #{issue_id}: {exc}")
+            return ConversationHandler.END
+        await q.edit_message_text(f"✅ Issue #{issue_id} closed. Thanks!")
+        return ConversationHandler.END
+    if choice == "skip":
+        await q.edit_message_text("OK, leaving the issue open.")
+        return ConversationHandler.END
+    # "no" -> ask for comment
+    ctx.user_data["awaiting_comment_for"] = issue_id
+    await q.edit_message_text(
+        "Sorry it's still broken. What's still wrong? (Send a brief message; admin will see it on the issue.)"
+    )
+    return AWAIT_COMMENT
+
+
+async def resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    issue_id = ctx.user_data.get("awaiting_comment_for")
+    if not issue_id:
+        return ConversationHandler.END
+    comment = update.effective_message.text.strip()
+    if not comment:
+        await update.effective_message.reply_text("Empty message. Send a few words or /cancel.")
+        return AWAIT_COMMENT
+    store: UserStore = ctx.bot_data["store"]
+    seerr: SeerrClient = ctx.bot_data["seerr"]
+    mapping = store.get(update.effective_user.id)
+    tg_name = update.effective_user.full_name or update.effective_user.username or "Telegram user"
+    who = f"{tg_name}"
+    if mapping:
+        who += f" ↔ {mapping.seerr_display}"
+    full_comment = f"[follow-up from Telegram: {who}]\n\n{comment}"
+    try:
+        await seerr.add_issue_comment(issue_id, full_comment)
+    except Exception as exc:
+        logger.exception("add_issue_comment failed")
+        await update.effective_message.reply_text(f"Couldn't add comment: {exc}")
+        ctx.user_data.pop("awaiting_comment_for", None)
+        return ConversationHandler.END
+    await update.effective_message.reply_text(
+        f"💬 Added your comment to issue #{issue_id}. Admin will follow up."
+    )
+    ctx.user_data.pop("awaiting_comment_for", None)
+    return ConversationHandler.END
+
+
+async def resolve_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    ctx.user_data.pop("awaiting_comment_for", None)
+    await update.effective_message.reply_text("Cancelled.")
+    return ConversationHandler.END
 
 
 # --- Error handler -----------------------------------------------------------

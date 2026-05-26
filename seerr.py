@@ -131,6 +131,14 @@ class SeerrClient:
         tvdb_id = external.get("tvdbId")
         return seasons, tvdb_id
 
+    async def add_issue_comment(self, issue_id: int, message: str) -> None:
+        r = await self._client.post(f"/issue/{issue_id}/comment", json={"message": message})
+        r.raise_for_status()
+
+    async def resolve_issue(self, issue_id: int) -> None:
+        r = await self._client.post(f"/issue/{issue_id}/resolved")
+        r.raise_for_status()
+
     async def create_issue(
         self,
         *,

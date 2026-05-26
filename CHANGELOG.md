@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-26
+
+### Added
+- Follow-up conversation after auto-fix completes. Bot DMs the reporter "Did this resolve the problem?" with [✅ Yes, close it] / [💬 No, add a comment] buttons. Yes calls Seerr's resolve endpoint and closes the issue. No prompts for a comment which gets posted to the Seerr issue. No second auto-fix is offered on the "No" branch -- the admin handles it from there.
+- Same follow-up on timeout, with [💬 Add a comment] / [🙅 No, leave it] options.
+- `SeerrClient.add_issue_comment` and `SeerrClient.resolve_issue`.
+
+### Changed
+- Admin (`ADMIN_TELEGRAM_ID`) now bypasses the daily auto-fix rate limit. Non-admin users still capped at 3/day.
+
 ## [0.2.0] - 2026-05-26
 
 ### Added
