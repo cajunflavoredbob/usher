@@ -39,7 +39,7 @@ from telegram.ext import (
 
 import asyncio
 
-from seerr import SeerrClient, CreatedIssue
+from seerr import SeerrClient, CreatedIssue, IssueListItem
 from store import UserStore, TokenCrypto
 from radarr import RadarrClient
 from sonarr import SonarrClient
@@ -129,6 +129,7 @@ def _build_app() -> Application:
     app.add_handler(_link_conversation())
     app.add_handler(CommandHandler("unlink", cmd_unlink))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("tickets", cmd_tickets))
     app.add_handler(_issue_conversation())
     app.add_handler(_resolve_conversation())
     app.add_error_handler(on_error)
@@ -224,9 +225,10 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         )
     lines.append(
         "\n*Commands*\n"
-        "  /link <username> — link your Telegram to Seerr (DM only)\n"
+        "  /link — sign in with Plex (DM only)\n"
         "  /unlink — remove your link\n"
         "  /issue — report a problem with a movie or TV show\n"
+        "  /tickets — list your open tickets\n"
         + ("  /status — connection diagnostics (admin only)\n" if is_admin else "")
         + "  /help — show this"
     )
@@ -248,6 +250,97 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         f"*Connection status:*\n{_format_status(summary)}",
         parse_mode="Markdown",
     )
+
+
+def _format_age(created_at_iso: str) -> str:
+    from datetime import datetime, timezone
+    try:
+        created = datetime.fromisoformat(created_at_iso.replace("Z", "+00:00"))
+    except ValueError:
+        return "?"
+    delta = datetime.now(timezone.utc) - created
+    secs = int(delta.total_seconds())
+    if secs < 60:
+        return "just now"
+    if secs < 3600:
+        return f"{secs // 60}m ago"
+    if secs < 86400:
+        return f"{secs // 3600}h ago"
+    if secs < 7 * 86400:
+        return f"{secs // 86400}d ago"
+    return created.strftime("%Y-%m-%d")
+
+
+async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    admin_id = ctx.bot_data.get("admin_id")
+    is_admin = user_id == admin_id
+    seerr: SeerrClient = ctx.bot_data["seerr"]
+    store: UserStore = ctx.bot_data["store"]
+    mapping = store.get(user_id)
+
+    # Eligibility check for non-admin users
+    if not is_admin:
+        if not mapping:
+            await update.effective_message.reply_text(
+                "DM me /link first so I know which Seerr account is yours."
+            )
+            return
+        if not mapping.plex_token:
+            await update.effective_message.reply_text(
+                "Your link is legacy (no Plex token). DM /link to re-link with Plex; "
+                "after that, /tickets will show your open issues."
+            )
+            return
+
+    # Fetch issues
+    try:
+        issues = await seerr.list_issues(
+            filter="open",
+            take=25,
+            as_plex_token=None if is_admin else mapping.plex_token,
+        )
+    except Exception as exc:
+        logger.exception("list_issues failed")
+        await update.effective_message.reply_text(f"Couldn't fetch tickets: {exc}")
+        return
+
+    if not issues:
+        await update.effective_message.reply_text(
+            ("No open tickets across all users. 🎉" if is_admin else "No open tickets! 🎉")
+        )
+        return
+
+    # Resolve media titles in parallel
+    title_tasks = [seerr.get_media_title(i.media_type, i.tmdb_id) for i in issues]
+    title_results = await asyncio.gather(*title_tasks, return_exceptions=True)
+
+    header = f"📋 {'All open tickets' if is_admin else 'Your open tickets'} ({len(issues)}):"
+    lines = [header, ""]
+    for issue, tr in zip(issues, title_results):
+        emoji, _ = ISSUE_TYPES.get(issue.issue_type, ("❓", "Other"))
+        if isinstance(tr, Exception):
+            media_label = f"TMDb {issue.tmdb_id}"
+        else:
+            title, year = tr
+            media_label = title + (f" ({year})" if year else "")
+        if issue.media_type == "tv" and issue.problem_season:
+            if issue.problem_episode:
+                media_label += f" S{issue.problem_season}E{issue.problem_episode}"
+            else:
+                media_label += f" S{issue.problem_season}"
+        age = _format_age(issue.created_at)
+        line = f"#{issue.id} {emoji} {media_label} — {age}"
+        if is_admin and issue.created_by:
+            line += f" — {issue.created_by}"
+        lines.append(line)
+    lines.append("")
+    lines.append(f"Manage in Seerr: {seerr.base_url}/issues")
+    text = "\n".join(lines)
+    # Telegram message limit is 4096; truncate gracefully if needed
+    if len(text) > 4000:
+        text = text[:3990] + "\n…(truncated)"
+    await update.effective_message.reply_text(text)
 
 
 def _link_conversation() -> ConversationHandler:

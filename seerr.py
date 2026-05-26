@@ -42,6 +42,19 @@ class TvSeason:
     name: str
 
 
+@dataclass
+class IssueListItem:
+    id: int
+    issue_type: int            # 1=Video, 2=Audio, 3=Subtitle, 4=Other
+    status: int                # 1=open, 2=resolved
+    created_at: str            # ISO 8601
+    tmdb_id: int
+    media_type: str            # "movie" or "tv"
+    problem_season: Optional[int]
+    problem_episode: Optional[int]
+    created_by: str            # displayName
+
+
 class SeerrClient:
     """Thin wrapper around the Seerr v1 API."""
 
@@ -159,6 +172,55 @@ class SeerrClient:
         external = data.get("externalIds") or {}
         tvdb_id = external.get("tvdbId")
         return seasons, tvdb_id
+
+    async def list_issues(
+        self,
+        *,
+        filter: str = "open",
+        take: int = 25,
+        as_plex_token: Optional[str] = None,
+    ) -> list[IssueListItem]:
+        """List issues. If as_plex_token is provided, authenticates as that
+        user (gets their visible issues only). Else returns all (admin view)."""
+        if as_plex_token:
+            client = await self._as_user(as_plex_token)
+            try:
+                r = await client.get("/issue", params={"filter": filter, "take": take})
+                r.raise_for_status()
+                data = r.json()
+            finally:
+                await client.aclose()
+        else:
+            r = await self._client.get("/issue", params={"filter": filter, "take": take})
+            r.raise_for_status()
+            data = r.json()
+        out: list[IssueListItem] = []
+        for item in data.get("results", []):
+            media = item.get("media") or {}
+            created_by = item.get("createdBy") or {}
+            out.append(IssueListItem(
+                id=item["id"],
+                issue_type=item.get("issueType", 4),
+                status=item.get("status", 0),
+                created_at=item.get("createdAt", ""),
+                tmdb_id=media.get("tmdbId", 0),
+                media_type=media.get("mediaType", ""),
+                problem_season=item.get("problemSeason"),
+                problem_episode=item.get("problemEpisode"),
+                created_by=created_by.get("displayName") or created_by.get("plexUsername") or "?",
+            ))
+        return out
+
+    async def get_media_title(self, media_type: str, tmdb_id: int) -> tuple[str, str]:
+        """Returns (title, year). Year may be empty string."""
+        endpoint = "movie" if media_type == "movie" else "tv"
+        r = await self._client.get(f"/{endpoint}/{tmdb_id}")
+        r.raise_for_status()
+        d = r.json()
+        title = d.get("title") or d.get("name") or "Unknown"
+        release = d.get("releaseDate") or d.get("firstAirDate") or ""
+        year = release[:4] if release else ""
+        return title, year
 
     async def add_issue_comment(
         self,
