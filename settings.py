@@ -34,10 +34,14 @@ class AdminAccount:
         return bool(self.username and self.password_hash)
 
 
+DEFAULT_DAILY_AUTOFIX_LIMIT = 3
+
+
 @dataclass
 class Settings:
     telegram_bot_token: str = ""
     admin_telegram_id: int = 0
+    hermes_public_url: str = ""
     seerr_url: str = ""
     seerr_api_key: str = ""
     seerr_public_url: str = ""
@@ -46,6 +50,7 @@ class Settings:
     sonarr_url: str = ""
     sonarr_api_key: str = ""
     allowed_autofix_telegram_ids: list[int] = field(default_factory=list)
+    daily_autofix_limit: int = DEFAULT_DAILY_AUTOFIX_LIMIT
     webhook_secret: str = ""
     admin: AdminAccount = field(default_factory=AdminAccount)
 
@@ -63,9 +68,16 @@ class Settings:
             admin_tg_id = int(data.get("admin_telegram_id") or 0)
         except (TypeError, ValueError):
             admin_tg_id = 0
+        try:
+            daily_limit = int(data.get("daily_autofix_limit") or DEFAULT_DAILY_AUTOFIX_LIMIT)
+        except (TypeError, ValueError):
+            daily_limit = DEFAULT_DAILY_AUTOFIX_LIMIT
+        if daily_limit < 1:
+            daily_limit = DEFAULT_DAILY_AUTOFIX_LIMIT
         return cls(
             telegram_bot_token=data.get("telegram_bot_token", "") or "",
             admin_telegram_id=admin_tg_id,
+            hermes_public_url=data.get("hermes_public_url", "") or "",
             seerr_url=data.get("seerr_url", "") or "",
             seerr_api_key=data.get("seerr_api_key", "") or "",
             seerr_public_url=data.get("seerr_public_url", "") or "",
@@ -74,6 +86,7 @@ class Settings:
             sonarr_url=data.get("sonarr_url", "") or "",
             sonarr_api_key=data.get("sonarr_api_key", "") or "",
             allowed_autofix_telegram_ids=list(data.get("allowed_autofix_telegram_ids") or []),
+            daily_autofix_limit=daily_limit,
             webhook_secret=data.get("webhook_secret", "") or "",
             admin=AdminAccount(
                 username=admin_data.get("username", "") or "",

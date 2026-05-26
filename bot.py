@@ -72,7 +72,6 @@ ISSUE_TYPES: Final = {
 }
 
 AUTOFIX_ELIGIBLE_TYPES = {1, 2, 3}
-DAILY_AUTOFIX_LIMIT = 3
 
 
 # --- App setup ---------------------------------------------------------------
@@ -237,10 +236,19 @@ async def _post_init(app: Application) -> None:
     app.bot_data["http_runner"] = runner
 
     admin_id = app.bot_data["admin_id"]
+    settings_store: SettingsStore = app.bot_data["settings_store"]
+    base = (settings_store.settings.hermes_public_url or "").strip().rstrip("/")
+    if base:
+        # Tolerate users pasting in the full /admin URL
+        if base.endswith("/admin"):
+            base = base[: -len("/admin")]
+        admin_url = f"{base}/admin"
+    else:
+        admin_url = f"http://<host>:{app.bot_data['http_port']}/admin"
     msg = (
         "👋 Bot is online.\n\n"
         f"{_format_status(summary)}\n\n"
-        "Admin UI: http://<host>:" + str(app.bot_data["http_port"]) + "/admin\n"
+        f"Admin UI: {admin_url}\n"
         "Run `/link` to authorize with Plex (per-user issue attribution)."
     )
     try:
@@ -926,14 +934,16 @@ async def issue_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     # Admin bypasses the daily rate limit
     is_admin = tg_id == ctx.bot_data.get("admin_id")
     if not is_admin:
+        settings_store: SettingsStore = ctx.bot_data["settings_store"]
+        daily_limit = settings_store.settings.daily_autofix_limit
         used = store.count_autofix_24h(tg_id)
-        if used >= DAILY_AUTOFIX_LIMIT:
+        if used >= daily_limit:
             await update.effective_message.reply_text(
-                f"(You've used your {DAILY_AUTOFIX_LIMIT} auto-fixes today; "
+                f"(You've used your {daily_limit} auto-fixes today; "
                 f"submitting issue without auto-fix.)"
             )
             return await _submit_issue(update, ctx, autofix=False)
-        remaining_msg = f"\n(Auto-fixes remaining today: {DAILY_AUTOFIX_LIMIT - used})"
+        remaining_msg = f"\n(Auto-fixes remaining today: {daily_limit - used})"
     else:
         remaining_msg = ""
     rows = [[

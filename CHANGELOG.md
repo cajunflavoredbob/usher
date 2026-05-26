@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-05-25
+
+### Added
+- **Hermes Admin UI URL** setting on the Telegram tab. When set, the bot's startup DM links you back to the actual host (LAN IP, reverse-proxy URL, etc.) instead of the generic `<host>` placeholder. Tolerates URLs entered with or without a trailing `/admin`.
+- **Per-user daily auto-fix limit** is now configurable on the Auto-fix tab (was hardcoded to 3). Validates positive integer. Admin still bypasses the limit.
+- Auto-fix tab now has a short explanation of what auto-fix does, so the field set isn't context-free.
+- Webui shows the Hermes version (`v0.8.2`) in the top-right alongside a Log out button. Single source of truth in `_version.py`.
+
+### Changed
+- Removed the nav bar with "Settings" / "Log out" links. Top-right corner of the page is now: version + log out. Tab list immediately under.
+
 ## [0.8.1] - 2026-05-25
 
 ### Changed

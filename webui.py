@@ -33,11 +33,13 @@ from typing import Awaitable, Callable, Optional
 from aiohttp import web
 
 from settings import (
+    DEFAULT_DAILY_AUTOFIX_LIMIT,
     Settings,
     SettingsStore,
     hash_password,
     verify_password,
 )
+from _version import __version__ as HERMES_VERSION
 
 logger = logging.getLogger("hermes.webui")
 
@@ -126,11 +128,19 @@ button.danger:hover { background: #eba0ac; }
 .error { background: #f38ba8; color: #1e1e2e; padding: 10px 14px; border-radius: 4px; margin-bottom: 14px; }
 .success { background: #a6e3a1; color: #1e1e2e; padding: 10px 14px; border-radius: 4px; margin-bottom: 14px; }
 .note { color: #a6adc8; font-size: 13px; margin-top: 4px; }
-nav { margin-bottom: 20px; padding: 12px; background: #313244; border-radius: 8px; }
-nav a { color: #89b4fa; text-decoration: none; margin-right: 18px; font-weight: 600; }
-nav a:hover { text-decoration: underline; }
 a { color: #89b4fa; }
 code { background: #45475a; padding: 2px 6px; border-radius: 3px; font-size: 13px; }
+
+.topbar { display: flex; justify-content: flex-end; align-items: center;
+          gap: 14px; margin-bottom: 14px; }
+.topbar .version { color: #a6adc8; font-size: 13px;
+                   font-family: ui-monospace, Menlo, monospace; }
+.topbar .logout {
+  background: #45475a; color: #cdd6f4; text-decoration: none;
+  padding: 6px 14px; border-radius: 4px; font-size: 13px; font-weight: 600;
+}
+.topbar .logout:hover { background: #585b70; color: #f5e0dc; }
+.intro { color: #a6adc8; margin: 0 0 14px 0; font-size: 14px; }
 
 /* Tabs (CSS-only via radio inputs) */
 .tabs > input[type="radio"] { position: absolute; left: -9999px; }
@@ -206,12 +216,15 @@ def _settings_page(
     telegram_form = f"""
 <form method="POST" action="/admin/telegram">
   <h2>Telegram</h2>
-  <div class="note">Changes to these fields restart the container so the new identity takes effect.</div>
+  <div class="note">Changes to the bot token or admin user ID restart the container so the new identity takes effect.</div>
   <label>Bot Token <span class="note">(from @BotFather)</span></label>
   <input type="password" name="telegram_bot_token" value="{_esc(s.telegram_bot_token)}" required>
   <label>Admin Telegram User ID <span class="note">(DM @userinfobot)</span></label>
   <input type="text" name="admin_telegram_id" value="{_esc(admin_tg_val)}" inputmode="numeric" pattern="[0-9]+" required>
-  <button type="submit">Save &amp; Restart</button>
+  <label>Hermes Admin UI URL <span class="note">(optional)</span></label>
+  <input type="text" name="hermes_public_url" value="{_esc(s.hermes_public_url)}" placeholder="http://192.168.1.15:8765 or https://hermes.example.com">
+  <div class="note">Used in the bot's startup DM to point you back here. Leave blank to fall back to a generic placeholder.</div>
+  <button type="submit">Save</button>
 </form>
 """
 
@@ -231,14 +244,14 @@ def _settings_page(
     autofix_form = f"""
 <form method="POST" action="/admin/autofix">
   <h2>Auto-fix (Radarr / Sonarr)</h2>
-  <div class="note">Optional. Both Radarr and Sonarr are independent -- configure whichever you use.</div>
+  <p class="intro">When a user reports a Video, Audio, or Subtitle issue, Hermes can ask Radarr or Sonarr to delete the current file and trigger a new search. Configure the URLs and API keys below, then list the Telegram users allowed to use it. The admin always bypasses the per-day limit.</p>
 
-  <label>Radarr URL</label>
+  <label>Radarr URL <span class="note">(optional)</span></label>
   <input type="text" name="radarr_url" value="{_esc(s.radarr_url)}" placeholder="http://192.168.1.10:7878">
   <label>Radarr API Key</label>
   <input type="password" name="radarr_api_key" value="{_esc(s.radarr_api_key)}">
 
-  <label>Sonarr URL</label>
+  <label>Sonarr URL <span class="note">(optional)</span></label>
   <input type="text" name="sonarr_url" value="{_esc(s.sonarr_url)}" placeholder="http://192.168.1.10:8989">
   <label>Sonarr API Key</label>
   <input type="password" name="sonarr_api_key" value="{_esc(s.sonarr_api_key)}">
@@ -246,6 +259,10 @@ def _settings_page(
   <label>Allowed Telegram User IDs</label>
   <input type="text" name="allowed_autofix_telegram_ids" value="{_esc(ids_str)}" placeholder="123456,789012">
   <div class="note">Comma-separated. Leave empty for admin-only.</div>
+
+  <label>Per-user daily limit</label>
+  <input type="text" name="daily_autofix_limit" value="{_esc(s.daily_autofix_limit)}" inputmode="numeric" pattern="[0-9]+" required>
+  <div class="note">Number of auto-fix runs each non-admin user gets per 24 hours. Default {DEFAULT_DAILY_AUTOFIX_LIMIT}.</div>
 
   <button type="submit">Save</button>
 </form>
@@ -293,11 +310,10 @@ def _settings_page(
 """
 
     return _page("Admin", f"""
-<nav>
-  <a href="/admin">Settings</a>
-  <a href="/admin/logout">Log out</a>
-</nav>
-<h1>Hermes Settings</h1>
+<div class="topbar">
+  <span class="version">Hermes v{_esc(HERMES_VERSION)}</span>
+  <a href="/admin/logout" class="logout">Log out</a>
+</div>
 {_flash(message, error)}
 <div class="tabs">
   <input type="radio" name="tab" id="tab-telegram"{chk('telegram')}>
@@ -522,6 +538,8 @@ async def telegram_post(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
     form = await request.post()
     s = store.settings
+    _orig_token = s.telegram_bot_token
+    _orig_admin = s.admin_telegram_id
     token = (form.get("telegram_bot_token") or "").strip()
     admin_tg_raw = (form.get("admin_telegram_id") or "").strip()
     if not token:
@@ -544,9 +562,12 @@ async def telegram_post(request: web.Request) -> web.Response:
         )
     s.telegram_bot_token = token
     s.admin_telegram_id = admin_tg
+    s.hermes_public_url = (form.get("hermes_public_url") or "").strip()
+    restart_needed = (token != _orig_token) or (admin_tg != _orig_admin)
     return await _save_and_render(
         request, active_tab="telegram",
-        success_msg="Saved. Container restarting in ~2s to apply the new Telegram identity.",
+        success_msg=("Saved. Container restarting in ~2s to apply the new Telegram identity."
+                     if restart_needed else "Saved."),
     )
 
 
@@ -575,6 +596,19 @@ async def autofix_post(request: web.Request) -> web.Response:
         if chunk.isdigit():
             parsed_ids.append(int(chunk))
     s.allowed_autofix_telegram_ids = parsed_ids
+    limit_raw = (form.get("daily_autofix_limit") or "").strip()
+    try:
+        limit = int(limit_raw)
+        if limit < 1:
+            raise ValueError
+    except ValueError:
+        return web.Response(
+            text=_settings_page(s, error="Per-user daily limit must be a positive integer.",
+                                active_tab="autofix",
+                                webhook_url=_webhook_url_from_request(request)),
+            content_type="text/html", status=400,
+        )
+    s.daily_autofix_limit = limit
     return await _save_and_render(request, active_tab="autofix")
 
 
