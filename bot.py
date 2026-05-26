@@ -86,6 +86,7 @@ def _build_app() -> Application:
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     seerr_url = os.environ["SEERR_URL"]
     seerr_key = os.environ["SEERR_API_KEY"]
+    seerr_public_url = os.environ.get("SEERR_PUBLIC_URL", "").strip() or None
     admin_id = int(os.environ["ADMIN_TELEGRAM_ID"])
     db_path = os.environ.get("STORE_PATH", "/data/mappings.sqlite")
 
@@ -100,7 +101,7 @@ def _build_app() -> Application:
         allowlist = {admin_id}
         logger.info("ALLOWED_AUTOFIX_TELEGRAM_IDS unset; defaulting to admin only")
 
-    seerr = SeerrClient(seerr_url, seerr_key)
+    seerr = SeerrClient(seerr_url, seerr_key, public_url=seerr_public_url)
     crypto = TokenCrypto(key_path=os.environ.get("ENCRYPTION_KEY_PATH", "/data/encryption.key"))
     store = UserStore(db_path, crypto=crypto)
     radarr = RadarrClient(radarr_url, radarr_key) if (radarr_url and radarr_key) else None
@@ -335,7 +336,7 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             line += f" — {issue.created_by}"
         lines.append(line)
     lines.append("")
-    lines.append(f"Manage in Seerr: {seerr.base_url}/issues")
+    lines.append(f"Manage in Seerr: {seerr.public_url}/issues")
     text = "\n".join(lines)
     # Telegram message limit is 4096; truncate gracefully if needed
     if len(text) > 4000:

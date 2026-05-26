@@ -58,8 +58,18 @@ class IssueListItem:
 class SeerrClient:
     """Thin wrapper around the Seerr v1 API."""
 
-    def __init__(self, base_url: str, api_key: str, timeout: float = 10.0):
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        timeout: float = 10.0,
+        public_url: Optional[str] = None,
+    ):
         self.base_url = base_url.rstrip("/")
+        # public_url is used only for user-facing links (e.g. the "View:" URL
+        # sent in Telegram). API calls always use base_url. Falls back to
+        # base_url when not set so existing setups keep working.
+        self.public_url = (public_url.rstrip("/") if public_url else self.base_url)
         self._client = httpx.AsyncClient(
             base_url=f"{self.base_url}/api/v1",
             headers={"X-Api-Key": api_key, "Accept": "application/json"},
@@ -309,5 +319,5 @@ class SeerrClient:
             r.raise_for_status()
             data = r.json()
         issue_id = data.get("id")
-        url = f"{self.base_url}/issues/{issue_id}"
+        url = f"{self.public_url}/issues/{issue_id}"
         return CreatedIssue(id=issue_id, url=url)

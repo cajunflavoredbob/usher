@@ -55,6 +55,8 @@ See the [project page](https://github.com/cajunflavoredbob/hermes) for full docs
 
   <Config Name="Seerr API Key" Target="SEERR_API_KEY" Default="" Mode="" Description="Seerr → Settings → General → API Key." Type="Variable" Display="always" Required="true" Mask="true"/>
 
+  <Config Name="Seerr Public URL (optional)" Target="SEERR_PUBLIC_URL" Default="" Mode="" Description="Optional. Public/reverse-proxy URL of Seerr used only in user-facing links (e.g. https://seerr.example.com). Leave blank to use the Seerr URL above. API calls always use Seerr URL." Type="Variable" Display="always" Required="false" Mask="false"/>
+
   <Config Name="Radarr URL (optional)" Target="RADARR_URL" Default="" Mode="" Description="Optional. Set together with the Radarr API Key to enable movie auto-fix. Example: http://192.168.1.10:7878" Type="Variable" Display="always" Required="false" Mask="false"/>
 
   <Config Name="Radarr API Key (optional)" Target="RADARR_API_KEY" Default="" Mode="" Description="Optional. Radarr → Settings → General → API Key." Type="Variable" Display="always" Required="false" Mask="true"/>
