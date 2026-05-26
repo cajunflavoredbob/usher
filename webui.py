@@ -141,6 +141,12 @@ code { background: #45475a; padding: 2px 6px; border-radius: 3px; font-size: 13p
 }
 .topbar .logout:hover { background: #585b70; color: #f5e0dc; }
 .intro { color: #a6adc8; margin: 0 0 14px 0; font-size: 14px; }
+.saved-marker {
+  display: inline-block; margin-left: 12px; font-weight: 600; font-size: 13px;
+  vertical-align: middle;
+}
+.saved-marker.ok { color: #a6e3a1; }
+.saved-marker.err { color: #f38ba8; }
 
 /* Tabs (CSS-only via radio inputs) */
 .tabs > input[type="radio"] { position: absolute; left: -9999px; }
@@ -204,14 +210,28 @@ def _settings_page(
     error: str = "",
     active_tab: str = "telegram",
     webhook_url: str = "",
+    marker_target: str = "",
 ) -> str:
     if active_tab not in TAB_KEYS:
         active_tab = "telegram"
     ids_str = ",".join(str(i) for i in s.allowed_autofix_telegram_ids)
     admin_tg_val = str(s.admin_telegram_id) if s.admin_telegram_id else ""
 
+    # Inline marker next to the relevant form's Save button. marker_target
+    # defaults to the active tab so the obvious case Just Works.
+    target = marker_target or active_tab
+
     def chk(key: str) -> str:
         return ' checked' if active_tab == key else ''
+
+    def marker(target_name: str) -> str:
+        if target != target_name:
+            return ""
+        if error:
+            return f'<span class="saved-marker err">✗ {_esc(error)}</span>'
+        if message:
+            return f'<span class="saved-marker ok">✓ {_esc(message)}</span>'
+        return ""
 
     telegram_form = f"""
 <form method="POST" action="/admin/telegram">
@@ -224,7 +244,7 @@ def _settings_page(
   <label>Hermes Admin UI URL <span class="note">(optional)</span></label>
   <input type="text" name="hermes_public_url" value="{_esc(s.hermes_public_url)}" placeholder="http://192.168.1.15:8765 or https://hermes.example.com">
   <div class="note">Used in the bot's startup DM to point you back here. Leave blank to fall back to a generic placeholder.</div>
-  <button type="submit">Save</button>
+  <button type="submit">Save</button>{marker("telegram")}
 </form>
 """
 
@@ -237,7 +257,7 @@ def _settings_page(
   <input type="password" name="seerr_api_key" value="{_esc(s.seerr_api_key)}" required>
   <label>Seerr Public URL <span class="note">(optional, for reverse-proxy links sent to users)</span></label>
   <input type="text" name="seerr_public_url" value="{_esc(s.seerr_public_url)}" placeholder="https://seerr.example.com">
-  <button type="submit">Save</button>
+  <button type="submit">Save</button>{marker("seerr")}
 </form>
 """
 
@@ -264,7 +284,7 @@ def _settings_page(
   <input type="text" name="daily_autofix_limit" value="{_esc(s.daily_autofix_limit)}" inputmode="numeric" pattern="[0-9]+" required>
   <div class="note">Number of auto-fix runs each non-admin user gets per 24 hours. Default {DEFAULT_DAILY_AUTOFIX_LIMIT}.</div>
 
-  <button type="submit">Save</button>
+  <button type="submit">Save</button>{marker("autofix")}
 </form>
 """
 
@@ -279,11 +299,11 @@ def _settings_page(
   <input type="password" name="webhook_secret" value="{_esc(s.webhook_secret)}">
   <div class="note">If set, paste the same value into Seerr's Webhook <code>Authorization Header</code> field. Hermes rejects requests without a matching header.</div>
 
-  <button type="submit">Save</button>
+  <button type="submit">Save</button>{marker("webhook")}
 </form>
 """
 
-    account_section = """
+    account_section = f"""
 <form method="POST" action="/admin/password">
   <h2>Change Password</h2>
   <label>Current password</label>
@@ -292,7 +312,7 @@ def _settings_page(
   <input type="password" name="new" required minlength="8">
   <label>Confirm new password</label>
   <input type="password" name="confirm" required minlength="8">
-  <button type="submit">Change Password</button>
+  <button type="submit">Change Password</button>{marker("account")}
 </form>
 
 <form method="GET" action="/admin/backup">
@@ -305,7 +325,7 @@ def _settings_page(
   <h2>Restore from Backup</h2>
   <input type="file" name="backup" accept=".zip" required>
   <div class="note">Overwrites settings, mappings DB, and encryption key. The container will restart.</div>
-  <button type="submit" class="danger">Restore</button>
+  <button type="submit" class="danger">Restore</button>{marker("restore")}
 </form>
 """
 
@@ -314,7 +334,6 @@ def _settings_page(
   <span class="version">Hermes v{_esc(HERMES_VERSION)}</span>
   <a href="/admin/logout" class="logout">Log out</a>
 </div>
-{_flash(message, error)}
 <div class="tabs">
   <input type="radio" name="tab" id="tab-telegram"{chk('telegram')}>
   <input type="radio" name="tab" id="tab-seerr"{chk('seerr')}>
@@ -688,6 +707,7 @@ async def restore_upload(request: web.Request) -> web.Response:
     if field is None or field.name != "backup":
         return web.Response(text=_settings_page(store.settings, error="No backup file in upload.",
                                                         active_tab="account",
+                                                        marker_target="restore",
                                                         webhook_url=_webhook_url_from_request(request)),
                             content_type="text/html", status=400)
     data = await field.read()
@@ -704,6 +724,7 @@ async def restore_upload(request: web.Request) -> web.Response:
         return web.Response(
             text=_settings_page(store.settings, error=f"Invalid backup: {exc}",
                                 active_tab="account",
+                                marker_target="restore",
                                 webhook_url=_webhook_url_from_request(request)),
             content_type="text/html", status=400,
         )
@@ -720,6 +741,7 @@ async def restore_upload(request: web.Request) -> web.Response:
         return web.Response(
             text=_settings_page(store.settings, error=f"Restore failed: {exc}",
                                 active_tab="account",
+                                marker_target="restore",
                                 webhook_url=_webhook_url_from_request(request)),
             content_type="text/html", status=500,
         )
