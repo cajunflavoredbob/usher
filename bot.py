@@ -87,26 +87,15 @@ def _build_clients_from_settings(app: Application) -> None:
     s = settings_store.settings
     admin_id: int = app.bot_data["admin_id"]
 
-    # Close prior async httpx clients if any (best effort; loop may be running)
-    async def _close_prior() -> None:
-        for key in ("seerr", "radarr", "sonarr"):
-            client = app.bot_data.get(key)
-            if client is None:
-                continue
-            close = getattr(client, "close", None)
-            if close is None:
-                continue
-            try:
-                await close()
-            except Exception:
-                logger.exception("Error closing prior %s client", key)
-
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.create_task(_close_prior())
-    except RuntimeError:
-        pass
+    # Capture references to the OLD clients BEFORE swapping. If we scheduled
+    # a close-task that read bot_data lazily, it would see the NEW clients by
+    # the time it ran (race) and close those instead. Capture-then-close is
+    # the only safe order.
+    old_clients: list[tuple[str, object]] = []
+    for key in ("seerr", "radarr", "sonarr"):
+        c = app.bot_data.get(key)
+        if c is not None and hasattr(c, "close"):
+            old_clients.append((key, c))
 
     seerr = SeerrClient(
         s.seerr_url, s.seerr_api_key,
@@ -123,6 +112,22 @@ def _build_clients_from_settings(app: Application) -> None:
     app.bot_data["radarr"] = radarr
     app.bot_data["sonarr"] = sonarr
     app.bot_data["allowlist"] = allowlist
+
+    # Now close the captured old clients (no race -- bot_data already holds the new ones)
+    if old_clients:
+        async def _close_old() -> None:
+            for key, client in old_clients:
+                try:
+                    await client.close()  # type: ignore[attr-defined]
+                except Exception:
+                    logger.exception("Error closing prior %s client", key)
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_close_old())
+        except RuntimeError:
+            # No loop running (startup path) -- nothing to close anyway since
+            # old_clients was populated from bot_data which would be empty.
+            pass
 
     logger.info(
         "Clients (re)built: Seerr=%s Radarr=%s Sonarr=%s allowlist=%d",

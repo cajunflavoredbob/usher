@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-05-26
+
+### Fixed
+- **Hot reload was closing the new Seerr/Radarr/Sonarr clients instead of the old ones.** `_build_clients_from_settings` scheduled a close-task that read `bot_data["seerr"]` lazily; by the time the task ran, the new client was already in `bot_data`, so the new client got closed. Result: after a settings save, the next `/link` (or any per-user Seerr call) failed with `RuntimeError: Cannot send a request, as the client has been closed`. Now captures references to the old clients before swapping, then closes those specifically.
+
+### Changed
+- Save confirmation wording made consistent across all tabs. Default is now `Saved.` (was `Settings saved.` on Seerr/Auto-fix/Webhook tabs, while Telegram already said `Saved.`).
+
 ## [0.8.3] - 2026-05-25
 
 ### Changed

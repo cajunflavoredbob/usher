@@ -525,7 +525,7 @@ async def _save_and_render(
     request: web.Request,
     *,
     active_tab: str,
-    success_msg: str = "Settings saved.",
+    success_msg: str = "Saved.",
     error: str = "",
     skip_hot_reload: bool = False,
 ) -> web.Response:
@@ -747,7 +747,7 @@ async def restore_upload(request: web.Request) -> web.Response:
         )
 
     logger.info("Restore complete; exiting in 2s so the container restarts and picks up new state")
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     loop.call_later(2.0, lambda: os._exit(0))
 
     body = _page("Restore", """
