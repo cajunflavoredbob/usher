@@ -64,4 +64,6 @@ See the [project page](https://github.com/cajunflavoredbob/hermes) for full docs
   <Config Name="Sonarr API Key (optional)" Target="SONARR_API_KEY" Default="" Mode="" Description="Optional. Sonarr → Settings → General → API Key." Type="Variable" Display="always" Required="false" Mask="true"/>
 
   <Config Name="Auto-fix Allowlist (optional)" Target="ALLOWED_AUTOFIX_TELEGRAM_IDS" Default="" Mode="" Description="Comma-separated Telegram user IDs allowed to trigger auto-fix. Leave empty to allow only the admin." Type="Variable" Display="always" Required="false" Mask="false"/>
+
+  <Config Name="Encryption Key (optional)" Target="HERMES_ENCRYPTION_KEY" Default="" Mode="" Description="Fernet key used to encrypt stored Plex tokens at rest. If blank, Hermes generates one on first run and persists it to /data/encryption.key. Provide a key here only if you want to control it explicitly (e.g. to migrate from another install). Generate with: python -c &quot;from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())&quot;" Type="Variable" Display="always" Required="false" Mask="true"/>
 </Container>

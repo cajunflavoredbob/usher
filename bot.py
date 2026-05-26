@@ -37,10 +37,13 @@ from telegram.ext import (
     filters,
 )
 
+import asyncio
+
 from seerr import SeerrClient, CreatedIssue
-from store import UserStore
+from store import UserStore, TokenCrypto
 from radarr import RadarrClient
 from sonarr import SonarrClient
+from plex import PlexClient
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s | %(message)s",
@@ -52,6 +55,8 @@ logger = logging.getLogger("hermes")
 TITLE, PICK_MEDIA, PICK_SEASON, PICK_EPISODE, PICK_TYPE, DESCRIPTION, OFFER_AUTOFIX, CONFIRM_AUTOFIX = range(8)
 # Conversation states (post-completion follow-up)
 AWAIT_COMMENT = 100
+# Conversation states (Plex link flow)
+AWAIT_LINK_CONSENT = 200
 
 ISSUE_TYPES: Final = {
     1: ("🎥", "Video"),
@@ -96,9 +101,13 @@ def _build_app() -> Application:
         logger.info("ALLOWED_AUTOFIX_TELEGRAM_IDS unset; defaulting to admin only")
 
     seerr = SeerrClient(seerr_url, seerr_key)
-    store = UserStore(db_path)
+    crypto = TokenCrypto(key_path=os.environ.get("ENCRYPTION_KEY_PATH", "/data/encryption.key"))
+    store = UserStore(db_path, crypto=crypto)
     radarr = RadarrClient(radarr_url, radarr_key) if (radarr_url and radarr_key) else None
     sonarr = SonarrClient(sonarr_url, sonarr_key) if (sonarr_url and sonarr_key) else None
+    plex = PlexClient(
+        client_id_path=os.environ.get("PLEX_CLIENT_ID_PATH", "/data/client_id"),
+    )
 
     if not radarr:
         logger.info("Radarr not configured; auto-fix for movies disabled")
@@ -111,12 +120,13 @@ def _build_app() -> Application:
     app.bot_data["store"] = store
     app.bot_data["radarr"] = radarr
     app.bot_data["sonarr"] = sonarr
+    app.bot_data["plex"] = plex
     app.bot_data["allowlist"] = allowlist
     app.bot_data["admin_id"] = admin_id
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("link", cmd_link))
+    app.add_handler(_link_conversation())
     app.add_handler(CommandHandler("unlink", cmd_unlink))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(_issue_conversation())
@@ -240,29 +250,121 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def cmd_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+def _link_conversation() -> ConversationHandler:
+    return ConversationHandler(
+        entry_points=[CommandHandler("link", cmd_link)],
+        states={
+            AWAIT_LINK_CONSENT: [CallbackQueryHandler(cmd_link_consent, pattern=r"^link_consent:")],
+        },
+        fallbacks=[CommandHandler("cancel", link_cancel)],
+        per_user=True,
+        per_chat=True,
+        allow_reentry=True,
+        name="link",
+        persistent=False,
+    )
+
+
+async def cmd_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     msg = update.effective_message
     if msg.chat.type != ChatType.PRIVATE:
         await msg.reply_text("Please DM me to link your account.")
-        return
-    if not ctx.args:
-        await msg.reply_text("Usage: /link <seerr-or-plex-username>")
-        return
-    query = " ".join(ctx.args).strip()
-    seerr: SeerrClient = ctx.bot_data["seerr"]
-    store: UserStore = ctx.bot_data["store"]
-    user = await seerr.find_user(query)
-    if user is None:
-        await msg.reply_text(
-            f"No Seerr user matched '{html.escape(query)}'. "
-            "Try your Plex username or the name shown in Seerr."
-        )
-        return
-    store.link(update.effective_user.id, user.id, user.display_name)
+        return ConversationHandler.END
+    rows = [[
+        InlineKeyboardButton("✅ Yes, continue", callback_data="link_consent:yes"),
+        InlineKeyboardButton("🛑 Cancel", callback_data="link_consent:no"),
+    ]]
     await msg.reply_text(
-        f"✅ Linked to Seerr user *{user.display_name}* (id={user.id}).",
+        "Linking via Plex stores your Plex authentication token so the bot can "
+        "submit issues attributed to *you* in Seerr (not the admin).\n\n"
+        "Your Plex token grants full access to your Plex account. It is "
+        "encrypted at rest on the server, but you should only consent if you "
+        "trust this server operator.\n\n"
+        "You can revoke any time at https://app.plex.tv/desktop#!/settings/devices\n\n"
+        "Continue?",
+        reply_markup=InlineKeyboardMarkup(rows),
+        disable_web_page_preview=True,
         parse_mode="Markdown",
     )
+    return AWAIT_LINK_CONSENT
+
+
+async def cmd_link_consent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query
+    await q.answer()
+    choice = q.data.split(":")[1]
+    if choice == "no":
+        await q.edit_message_text("Cancelled. /link to try again later.")
+        return ConversationHandler.END
+    plex: PlexClient = ctx.bot_data["plex"]
+    seerr: SeerrClient = ctx.bot_data["seerr"]
+    store: UserStore = ctx.bot_data["store"]
+    try:
+        pin = await plex.request_pin()
+    except Exception as exc:
+        logger.exception("plex request_pin failed")
+        await q.edit_message_text(f"Couldn't start Plex auth: {exc}")
+        return ConversationHandler.END
+    await q.edit_message_text(
+        f"Open this link to authorize Hermes (waiting up to 5 minutes):\n\n{pin.auth_url}",
+        disable_web_page_preview=True,
+    )
+    # Poll Plex for completion
+    auth_token: Optional[str] = None
+    for _ in range(100):  # 100 × 3s = 5 min
+        await asyncio.sleep(3)
+        try:
+            auth_token = await plex.poll_pin(pin.id)
+            if auth_token:
+                break
+        except Exception:
+            logger.exception("poll_pin failed (will retry)")
+    if not auth_token:
+        await ctx.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="⏱️ Plex auth timed out. /link to try again.",
+        )
+        return ConversationHandler.END
+    # Validate against Seerr + get Seerr user info
+    try:
+        seerr_id, display, _ = await seerr.login_with_plex(auth_token)
+    except Exception as exc:
+        logger.exception("seerr login_with_plex failed")
+        await ctx.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"Plex auth succeeded but Seerr login failed: {exc}\n"
+                 "You may not have a matching Seerr account.",
+        )
+        return ConversationHandler.END
+    # Pull richer Plex user info for storage
+    try:
+        plex_user = await plex.get_user(auth_token)
+    except Exception:
+        logger.exception("plex get_user failed")
+        plex_user = None
+    store.link_with_plex(
+        telegram_id=update.effective_user.id,
+        seerr_id=seerr_id,
+        seerr_display=display,
+        plex_token=auth_token,
+        plex_uuid=plex_user.uuid if plex_user else "",
+        plex_username=plex_user.username if plex_user else display,
+    )
+    await ctx.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=(
+            f"✅ Linked as *{display}*. "
+            "Issues you submit will be attributed to you in Seerr.\n\n"
+            "DM `/issue` (or use it in any group I'm in) to report a problem."
+        ),
+        parse_mode="Markdown",
+    )
+    return ConversationHandler.END
+
+
+async def link_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.effective_message.reply_text("Cancelled. /link to try again later.")
+    return ConversationHandler.END
 
 
 async def cmd_unlink(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -602,7 +704,13 @@ async def _submit_issue(
         return ConversationHandler.END
 
     tg_name = update.effective_user.full_name or update.effective_user.username or "Telegram user"
-    full_message = f"[from Telegram: {tg_name} ↔ {mapping.seerr_display}]\n\n{description}"
+    # Prefix only included as belt-and-suspenders when we DON'T have a Plex
+    # token (true attribution unavailable). When we do, Seerr's UI shows the
+    # real user already.
+    if mapping.plex_token:
+        full_message = description
+    else:
+        full_message = f"[from Telegram: {tg_name} ↔ {mapping.seerr_display}]\n\n{description}"
     if autofix:
         full_message += "\n\n(Auto-fix triggered by reporter.)"
 
@@ -615,6 +723,7 @@ async def _submit_issue(
             media_type=media["type"],
             problem_season=season if media["type"] == "tv" else None,
             problem_episode=episode if media["type"] == "tv" else None,
+            as_plex_token=mapping.plex_token,
         )
     except Exception as exc:
         logger.exception("create_issue failed")
@@ -834,8 +943,11 @@ async def resolve_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
     if choice == "yes":
         seerr: SeerrClient = ctx.bot_data["seerr"]
+        store: UserStore = ctx.bot_data["store"]
+        mapping = store.get(update.effective_user.id)
+        token = mapping.plex_token if mapping else None
         try:
-            await seerr.resolve_issue(issue_id)
+            await seerr.resolve_issue(issue_id, as_plex_token=token)
         except Exception as exc:
             logger.exception("resolve_issue failed")
             await q.edit_message_text(f"Couldn't close issue #{issue_id}: {exc}")
@@ -864,13 +976,15 @@ async def resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     store: UserStore = ctx.bot_data["store"]
     seerr: SeerrClient = ctx.bot_data["seerr"]
     mapping = store.get(update.effective_user.id)
-    tg_name = update.effective_user.full_name or update.effective_user.username or "Telegram user"
-    who = f"{tg_name}"
-    if mapping:
-        who += f" ↔ {mapping.seerr_display}"
-    full_comment = f"[follow-up from Telegram: {who}]\n\n{comment}"
+    token = mapping.plex_token if mapping else None
+    if token:
+        full_comment = comment
+    else:
+        tg_name = update.effective_user.full_name or update.effective_user.username or "Telegram user"
+        who = tg_name + (f" ↔ {mapping.seerr_display}" if mapping else "")
+        full_comment = f"[follow-up from Telegram: {who}]\n\n{comment}"
     try:
-        await seerr.add_issue_comment(issue_id, full_comment)
+        await seerr.add_issue_comment(issue_id, full_comment, as_plex_token=token)
     except Exception as exc:
         logger.exception("add_issue_comment failed")
         await update.effective_message.reply_text(f"Couldn't add comment: {exc}")

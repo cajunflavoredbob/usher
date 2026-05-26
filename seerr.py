@@ -56,6 +56,35 @@ class SeerrClient:
     async def close(self) -> None:
         await self._client.aclose()
 
+    async def login_with_plex(self, plex_token: str) -> tuple[int, str, httpx.Cookies]:
+        """Authenticate to Seerr as a Plex user. Returns (seerr_user_id, display_name, cookies)."""
+        # /auth/plex needs the X-Plex-Client-Identifier header; reuse Hermes's
+        # client id by sending one. Seerr accepts any non-empty value here.
+        r = await self._client.post(
+            "/auth/plex",
+            json={"authToken": plex_token},
+        )
+        r.raise_for_status()
+        data = r.json()
+        return (
+            int(data["id"]),
+            data.get("displayName") or data.get("plexUsername") or data.get("username") or "?",
+            r.cookies,
+        )
+
+    async def _as_user(self, plex_token: str) -> httpx.AsyncClient:
+        """Return a fresh client authenticated as a Plex user (session cookie set).
+
+        Caller MUST aclose() the returned client.
+        """
+        _, _, cookies = await self.login_with_plex(plex_token)
+        return httpx.AsyncClient(
+            base_url=f"{self.base_url}/api/v1",
+            headers={"Accept": "application/json"},
+            cookies=cookies,
+            timeout=15.0,
+        )
+
     async def search(self, query: str, limit: int = 5) -> list[MediaResult]:
         """Search Seerr for movies + TV shows matching the query."""
         r = await self._client.get("/search", params={"query": query})
@@ -131,13 +160,40 @@ class SeerrClient:
         tvdb_id = external.get("tvdbId")
         return seasons, tvdb_id
 
-    async def add_issue_comment(self, issue_id: int, message: str) -> None:
-        r = await self._client.post(f"/issue/{issue_id}/comment", json={"message": message})
-        r.raise_for_status()
+    async def add_issue_comment(
+        self,
+        issue_id: int,
+        message: str,
+        *,
+        as_plex_token: Optional[str] = None,
+    ) -> None:
+        if as_plex_token:
+            client = await self._as_user(as_plex_token)
+            try:
+                r = await client.post(f"/issue/{issue_id}/comment", json={"message": message})
+                r.raise_for_status()
+            finally:
+                await client.aclose()
+        else:
+            r = await self._client.post(f"/issue/{issue_id}/comment", json={"message": message})
+            r.raise_for_status()
 
-    async def resolve_issue(self, issue_id: int) -> None:
-        r = await self._client.post(f"/issue/{issue_id}/resolved")
-        r.raise_for_status()
+    async def resolve_issue(
+        self,
+        issue_id: int,
+        *,
+        as_plex_token: Optional[str] = None,
+    ) -> None:
+        if as_plex_token:
+            client = await self._as_user(as_plex_token)
+            try:
+                r = await client.post(f"/issue/{issue_id}/resolved")
+                r.raise_for_status()
+            finally:
+                await client.aclose()
+        else:
+            r = await self._client.post(f"/issue/{issue_id}/resolved")
+            r.raise_for_status()
 
     async def create_issue(
         self,
@@ -148,6 +204,7 @@ class SeerrClient:
         media_type: str,
         problem_season: Optional[int] = None,
         problem_episode: Optional[int] = None,
+        as_plex_token: Optional[str] = None,
     ) -> CreatedIssue:
         """Create an issue. issue_type: 1=Video, 2=Audio, 3=Subtitle, 4=Other.
 
@@ -168,9 +225,18 @@ class SeerrClient:
             payload["problemSeason"] = problem_season
         if problem_episode is not None:
             payload["problemEpisode"] = problem_episode
-        r = await self._client.post("/issue", json=payload)
-        r.raise_for_status()
-        data = r.json()
+        if as_plex_token:
+            client = await self._as_user(as_plex_token)
+            try:
+                r = await client.post("/issue", json=payload)
+                r.raise_for_status()
+                data = r.json()
+            finally:
+                await client.aclose()
+        else:
+            r = await self._client.post("/issue", json=payload)
+            r.raise_for_status()
+            data = r.json()
         issue_id = data.get("id")
         url = f"{self.base_url}/issues/{issue_id}"
         return CreatedIssue(id=issue_id, url=url)

@@ -2,10 +2,16 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+from cryptography.fernet import Fernet, InvalidToken
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -13,6 +19,62 @@ class Mapping:
     telegram_id: int
     seerr_id: int
     seerr_display: str
+    plex_token: Optional[str]      # decrypted; None for legacy/un-migrated links
+    plex_uuid: Optional[str]
+    plex_username: Optional[str]
+
+
+class TokenCrypto:
+    """Fernet-based encryption for Plex tokens stored at rest."""
+
+    def __init__(self, key_path: str | Path = "/data/encryption.key"):
+        self.key_path = Path(key_path)
+        env_key = os.environ.get("HERMES_ENCRYPTION_KEY", "").strip()
+        if env_key:
+            self.key = env_key.encode()
+            logger.info("Using HERMES_ENCRYPTION_KEY from env")
+        else:
+            self.key = self._load_or_create_key()
+        try:
+            self.fernet = Fernet(self.key)
+        except Exception as exc:
+            raise SystemExit(
+                "Invalid encryption key. HERMES_ENCRYPTION_KEY must be a valid "
+                "urlsafe-base64-encoded 32-byte Fernet key. "
+                f"Generate one with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'. ({exc})"
+            )
+
+    def _load_or_create_key(self) -> bytes:
+        try:
+            existing = self.key_path.read_bytes().strip()
+            if existing:
+                return existing
+        except FileNotFoundError:
+            pass
+        key = Fernet.generate_key()
+        self.key_path.parent.mkdir(parents=True, exist_ok=True)
+        self.key_path.write_bytes(key)
+        try:
+            os.chmod(self.key_path, 0o600)
+        except OSError:
+            pass
+        logger.info("Generated new encryption key at %s", self.key_path)
+        return key
+
+    def encrypt(self, plaintext: str) -> str:
+        return self.fernet.encrypt(plaintext.encode()).decode()
+
+    def decrypt(self, ciphertext: str) -> str:
+        return self.fernet.decrypt(ciphertext.encode()).decode()
+
+    def safe_decrypt(self, ciphertext: Optional[str]) -> Optional[str]:
+        if not ciphertext:
+            return None
+        try:
+            return self.decrypt(ciphertext)
+        except InvalidToken:
+            logger.warning("Couldn't decrypt token (key changed?). Returning None.")
+            return None
 
 
 @dataclass
@@ -34,10 +96,12 @@ class PendingAutofix:
 
 
 class UserStore:
-    def __init__(self, db_path: str | Path):
+    def __init__(self, db_path: str | Path, crypto: Optional[TokenCrypto] = None):
         self.path = Path(db_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.crypto = crypto or TokenCrypto(key_path=self.path.parent / "encryption.key")
         self._init_schema()
+        self._migrate_schema()
 
     def _conn(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path)
@@ -101,18 +165,44 @@ class UserStore:
                 """
             )
 
-    def link(self, telegram_id: int, seerr_id: int, seerr_display: str) -> None:
+    def _migrate_schema(self) -> None:
+        """Idempotent column adds for backwards compat with v0.1.x dbs."""
+        with self._conn() as c:
+            cols = {r[1] for r in c.execute("PRAGMA table_info(user_mapping)").fetchall()}
+            for col, ddl in [
+                ("plex_token_enc", "ALTER TABLE user_mapping ADD COLUMN plex_token_enc TEXT"),
+                ("plex_uuid",      "ALTER TABLE user_mapping ADD COLUMN plex_uuid TEXT"),
+                ("plex_username",  "ALTER TABLE user_mapping ADD COLUMN plex_username TEXT"),
+            ]:
+                if col not in cols:
+                    c.execute(ddl)
+
+    def link_with_plex(
+        self,
+        *,
+        telegram_id: int,
+        seerr_id: int,
+        seerr_display: str,
+        plex_token: str,
+        plex_uuid: str,
+        plex_username: str,
+    ) -> None:
+        enc = self.crypto.encrypt(plex_token)
         with self._conn() as c:
             c.execute(
                 """
-                INSERT INTO user_mapping (telegram_id, seerr_id, seerr_display)
-                VALUES (?, ?, ?)
+                INSERT INTO user_mapping
+                    (telegram_id, seerr_id, seerr_display, plex_token_enc, plex_uuid, plex_username)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(telegram_id) DO UPDATE SET
                     seerr_id = excluded.seerr_id,
                     seerr_display = excluded.seerr_display,
+                    plex_token_enc = excluded.plex_token_enc,
+                    plex_uuid = excluded.plex_uuid,
+                    plex_username = excluded.plex_username,
                     linked_at = datetime('now')
                 """,
-                (telegram_id, seerr_id, seerr_display),
+                (telegram_id, seerr_id, seerr_display, enc, plex_uuid, plex_username),
             )
 
     def unlink(self, telegram_id: int) -> bool:
@@ -126,12 +216,23 @@ class UserStore:
     def get(self, telegram_id: int) -> Optional[Mapping]:
         with self._conn() as c:
             row = c.execute(
-                "SELECT telegram_id, seerr_id, seerr_display FROM user_mapping WHERE telegram_id = ?",
+                """
+                SELECT telegram_id, seerr_id, seerr_display,
+                       plex_token_enc, plex_uuid, plex_username
+                FROM user_mapping WHERE telegram_id = ?
+                """,
                 (telegram_id,),
             ).fetchone()
         if row is None:
             return None
-        return Mapping(telegram_id=row[0], seerr_id=row[1], seerr_display=row[2])
+        return Mapping(
+            telegram_id=row[0],
+            seerr_id=row[1],
+            seerr_display=row[2],
+            plex_token=self.crypto.safe_decrypt(row[3]),
+            plex_uuid=row[4],
+            plex_username=row[5],
+        )
 
     # --- Auto-fix rate limiting -----------------------------------------
 
