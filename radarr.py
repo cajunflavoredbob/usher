@@ -57,18 +57,27 @@ class RadarrClient:
         )
         r.raise_for_status()
 
-    async def auto_fix(self, tmdb_id: int) -> tuple[bool, str]:
-        """Delete current file (if any) and trigger search. Returns (ok, message)."""
+    async def auto_fix(self, tmdb_id: int) -> tuple[bool, str, Optional[int]]:
+        """Delete current file (if any) and trigger search.
+
+        Returns (ok, message, radarr_movie_id). The ID is included on success
+        so the caller can poll for completion.
+        """
         movie = await self.get_movie_by_tmdb(tmdb_id)
         if movie is None:
-            return False, "Movie isn't in Radarr (not monitored)."
+            return False, "Movie isn't in Radarr (not monitored).", None
         if movie.has_file and movie.movie_file_id:
             try:
                 await self.delete_movie_file(movie.movie_file_id)
             except Exception as exc:
-                return False, f"Couldn't delete file: {exc}"
+                return False, f"Couldn't delete file: {exc}", None
         try:
             await self.trigger_search(movie.id)
         except Exception as exc:
-            return False, f"Couldn't trigger search: {exc}"
-        return True, f"Deleted file (if any) and triggered re-search for '{movie.title}'."
+            return False, f"Couldn't trigger search: {exc}", None
+        return True, f"Deleted file (if any) and triggered re-search for '{movie.title}'.", movie.id
+
+    async def movie_has_file(self, movie_id: int) -> bool:
+        r = await self._client.get(f"/movie/{movie_id}")
+        r.raise_for_status()
+        return bool(r.json().get("hasFile"))

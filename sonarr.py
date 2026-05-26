@@ -85,46 +85,77 @@ class SonarrClient:
 
     async def auto_fix_episode(
         self, tvdb_id: int, season: int, episode: int
-    ) -> tuple[bool, str]:
+    ) -> tuple[bool, str, Optional[dict]]:
+        """Returns (ok, message, poll_info).
+        poll_info on success: {series_id, episode_id} for polling.
+        """
         series = await self.get_series_by_tvdb(tvdb_id)
         if series is None:
-            return False, "Series isn't in Sonarr."
+            return False, "Series isn't in Sonarr.", None
         episodes = await self.get_episodes(series.id, season)
         match = next((e for e in episodes if e.episode == episode), None)
         if match is None:
-            return False, f"S{season:02d}E{episode:02d} not found in Sonarr."
+            return False, f"S{season:02d}E{episode:02d} not found in Sonarr.", None
         if match.has_file and match.episode_file_id:
             try:
                 await self.delete_episode_file(match.episode_file_id)
             except Exception as exc:
-                return False, f"Couldn't delete file: {exc}"
+                return False, f"Couldn't delete file: {exc}", None
         try:
             await self.trigger_episode_search([match.id])
         except Exception as exc:
-            return False, f"Couldn't trigger search: {exc}"
-        return True, (
+            return False, f"Couldn't trigger search: {exc}", None
+        return (
+            True,
             f"Deleted '{series.title}' S{season:02d}E{episode:02d} file "
-            f"(if any) and triggered re-search."
+            f"(if any) and triggered re-search.",
+            {"series_id": series.id, "episode_id": match.id},
         )
 
     async def auto_fix_season(
         self, tvdb_id: int, season: int
-    ) -> tuple[bool, str]:
+    ) -> tuple[bool, str, Optional[dict]]:
+        """Returns (ok, message, poll_info).
+        poll_info on success: {series_id, season, expected_episode_ids}.
+        expected_episode_ids = episode IDs that had files before fix.
+        """
         series = await self.get_series_by_tvdb(tvdb_id)
         if series is None:
-            return False, "Series isn't in Sonarr."
+            return False, "Series isn't in Sonarr.", None
         episodes = await self.get_episodes(series.id, season)
-        to_delete = [e.episode_file_id for e in episodes if e.has_file and e.episode_file_id]
-        for fid in to_delete:
-            try:
-                await self.delete_episode_file(fid)
-            except Exception as exc:
-                logger.warning("failed to delete episode file %s: %s", fid, exc)
+        to_delete_ids: list[int] = []  # episode IDs that we deleted (to poll for return)
+        for e in episodes:
+            if e.has_file and e.episode_file_id:
+                try:
+                    await self.delete_episode_file(e.episode_file_id)
+                    to_delete_ids.append(e.id)
+                except Exception as exc:
+                    logger.warning("failed to delete episode file %s: %s", e.episode_file_id, exc)
         try:
             await self.trigger_season_search(series.id, season)
         except Exception as exc:
-            return False, f"Couldn't trigger search: {exc}"
-        return True, (
-            f"Deleted {len(to_delete)} file(s) in '{series.title}' Season {season} "
-            f"and triggered a season-wide search."
+            return False, f"Couldn't trigger search: {exc}", None
+        return (
+            True,
+            f"Deleted {len(to_delete_ids)} file(s) in '{series.title}' Season {season} "
+            f"and triggered a season-wide search.",
+            {
+                "series_id": series.id,
+                "season": season,
+                "expected_episode_ids": to_delete_ids,
+            },
         )
+
+    async def episode_has_file(self, episode_id: int) -> bool:
+        r = await self._client.get(f"/episode/{episode_id}")
+        r.raise_for_status()
+        return bool(r.json().get("hasFile"))
+
+    async def season_files_present(
+        self, series_id: int, season: int, expected_ids: list[int]
+    ) -> tuple[int, int]:
+        """Returns (present_count, total_expected). Used for whole-season poll."""
+        episodes = await self.get_episodes(series_id, season)
+        by_id = {e.id: e for e in episodes}
+        present = sum(1 for eid in expected_ids if by_id.get(eid) and by_id[eid].has_file)
+        return present, len(expected_ids)

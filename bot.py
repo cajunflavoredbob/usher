@@ -119,6 +119,16 @@ def _build_app() -> Application:
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(_issue_conversation())
     app.add_error_handler(on_error)
+
+    # Periodic poller for pending auto-fixes
+    if radarr or sonarr:
+        app.job_queue.run_repeating(
+            poll_pending_autofixes,
+            interval=60,
+            first=30,
+            name="autofix_poller",
+        )
+
     return app
 
 
@@ -616,7 +626,7 @@ async def _submit_issue(
 
     # 2. If auto-fix requested, run it
     if autofix:
-        ok, detail = await _run_autofix(media, season, episode, radarr, sonarr)
+        ok, detail, poll_info = await _run_autofix(media, season, episode, radarr, sonarr)
         if ok:
             store.log_autofix(
                 update.effective_user.id,
@@ -625,7 +635,30 @@ async def _submit_issue(
                 season=season,
                 episode=episode,
             )
-            lines.append(f"🔧 Auto-fix: {detail}")
+            # Enqueue notification-tracking record
+            try:
+                kwargs = {
+                    "chat_id": update.effective_chat.id,
+                    "user_id": update.effective_user.id,
+                    "media_type": media["type"],
+                    "label": label,
+                    "issue_id": created.id,
+                    "issue_url": created.url,
+                }
+                if media["type"] == "movie" and poll_info:
+                    kwargs["radarr_movie_id"] = poll_info.get("movie_id")
+                elif media["type"] == "tv" and poll_info:
+                    kwargs["sonarr_series_id"] = poll_info.get("series_id")
+                    kwargs["sonarr_episode_id"] = poll_info.get("episode_id")
+                    kwargs["sonarr_season"] = poll_info.get("season")
+                    kwargs["expected_episode_ids"] = poll_info.get("expected_episode_ids") or []
+                store.add_pending_autofix(**kwargs)
+                lines.append(f"🔧 Auto-fix: {detail}")
+                lines.append("🔔 I'll DM you when the new file finishes downloading (or after 6h timeout).")
+            except Exception:
+                logger.exception("failed to enqueue pending autofix")
+                lines.append(f"🔧 Auto-fix: {detail}")
+                lines.append("(Couldn't enqueue completion notification.)")
         else:
             lines.append(f"⚠️ Auto-fix didn't run: {detail}")
 
@@ -641,25 +674,30 @@ async def _run_autofix(
     episode: Optional[int],
     radarr: Optional[RadarrClient],
     sonarr: Optional[SonarrClient],
-) -> tuple[bool, str]:
+) -> tuple[bool, str, Optional[dict]]:
+    """Returns (ok, message, poll_info). poll_info on success has keys
+    needed to track completion: movie_id for movies; series_id +
+    (episode_id or season + expected_episode_ids) for TV.
+    """
     try:
         if media["type"] == "movie":
             if not radarr:
-                return False, "Radarr not configured."
-            return await radarr.auto_fix(media["tmdb_id"])
+                return False, "Radarr not configured.", None
+            ok, msg, movie_id = await radarr.auto_fix(media["tmdb_id"])
+            return ok, msg, ({"movie_id": movie_id} if ok else None)
         if media["type"] == "tv":
             if not sonarr:
-                return False, "Sonarr not configured."
+                return False, "Sonarr not configured.", None
             tvdb_id = media.get("tvdb_id")
             if not tvdb_id:
-                return False, "Couldn't find TVDb ID for this show."
+                return False, "Couldn't find TVDb ID for this show.", None
             if episode:
                 return await sonarr.auto_fix_episode(tvdb_id, season, episode)
             return await sonarr.auto_fix_season(tvdb_id, season)
     except Exception as exc:
         logger.exception("auto_fix failed")
-        return False, str(exc)
-    return False, "Unknown media type."
+        return False, str(exc), None
+    return False, "Unknown media type.", None
 
 
 async def issue_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
@@ -670,6 +708,75 @@ async def issue_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await update.effective_message.reply_text("Cancelled. /issue to start over.")
     ctx.user_data.clear()
     return ConversationHandler.END
+
+
+# --- Pending autofix poller --------------------------------------------------
+
+async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Check on each pending auto-fix; notify when complete or timed out."""
+    store: UserStore = ctx.bot_data["store"]
+    radarr: Optional[RadarrClient] = ctx.bot_data.get("radarr")
+    sonarr: Optional[SonarrClient] = ctx.bot_data.get("sonarr")
+    pending = store.list_pending_autofixes()
+    if not pending:
+        return
+    logger.debug("Polling %d pending auto-fixes", len(pending))
+    from datetime import datetime, timezone
+
+    for fix in pending:
+        # Check timeout first
+        try:
+            timeout_at = datetime.fromisoformat(fix.timeout_at.replace(" ", "T")).replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) >= timeout_at:
+                await _notify_timeout(ctx, fix)
+                store.mark_autofix_status(fix.id, "timeout")
+                continue
+        except Exception:
+            logger.exception("timeout parse failed for fix %d", fix.id)
+
+        # Poll for completion
+        try:
+            done = False
+            extra = ""
+            if fix.media_type == "movie" and radarr and fix.radarr_movie_id:
+                done = await radarr.movie_has_file(fix.radarr_movie_id)
+            elif fix.media_type == "tv" and sonarr:
+                if fix.sonarr_episode_id:
+                    done = await sonarr.episode_has_file(fix.sonarr_episode_id)
+                elif fix.sonarr_series_id and fix.sonarr_season and fix.expected_episode_ids:
+                    present, total = await sonarr.season_files_present(
+                        fix.sonarr_series_id, fix.sonarr_season, fix.expected_episode_ids
+                    )
+                    done = present >= total and total > 0
+                    extra = f" ({present}/{total} episodes)"
+            if done:
+                await _notify_complete(ctx, fix, extra)
+                store.mark_autofix_status(fix.id, "complete")
+        except Exception:
+            logger.exception("poll failed for fix %d", fix.id)
+
+
+async def _notify_complete(ctx: ContextTypes.DEFAULT_TYPE, fix, extra: str = "") -> None:
+    text = (
+        f"🎉 Auto-fix complete: *{fix.label}* downloaded{extra}.\n"
+        f"Original issue: {fix.issue_url}"
+    )
+    try:
+        await ctx.bot.send_message(chat_id=fix.chat_id, text=text, parse_mode="Markdown")
+    except Exception:
+        logger.exception("notify_complete send_message failed for fix %d", fix.id)
+
+
+async def _notify_timeout(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:
+    text = (
+        f"⏱️ Auto-fix timed out (6h) for *{fix.label}*.\n"
+        f"No new file was imported. Check Sonarr/Radarr to see if a release was grabbed.\n"
+        f"Original issue: {fix.issue_url}"
+    )
+    try:
+        await ctx.bot.send_message(chat_id=fix.chat_id, text=text, parse_mode="Markdown")
+    except Exception:
+        logger.exception("notify_timeout send_message failed for fix %d", fix.id)
 
 
 # --- Error handler -----------------------------------------------------------
