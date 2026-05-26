@@ -275,16 +275,10 @@ async def cmd_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         InlineKeyboardButton("🛑 Cancel", callback_data="link_consent:no"),
     ]]
     await msg.reply_text(
-        "Linking via Plex stores your Plex authentication token so the bot can "
-        "submit issues attributed to *you* in Seerr (not the admin).\n\n"
-        "Your Plex token grants full access to your Plex account. It is "
-        "encrypted at rest on the server, but you should only consent if you "
-        "trust this server operator.\n\n"
-        "You can revoke any time at https://app.plex.tv/desktop#!/settings/devices\n\n"
+        "Sign in with Plex so issues you submit are tagged as you.\n\n"
+        "You can use /unlink anytime to remove access.\n\n"
         "Continue?",
         reply_markup=InlineKeyboardMarkup(rows),
-        disable_web_page_preview=True,
-        parse_mode="Markdown",
     )
     return AWAIT_LINK_CONSENT
 
@@ -371,7 +365,11 @@ async def cmd_unlink(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     store: UserStore = ctx.bot_data["store"]
     removed = store.unlink(update.effective_user.id)
     if removed:
-        await update.effective_message.reply_text("🔓 Unlinked.")
+        await update.effective_message.reply_text(
+            "🔓 Unlinked. I've removed your Plex token from my storage.\n\n"
+            "For extra safety, you can also remove 'Hermes' from your Plex "
+            "authorized devices at app.plex.tv → Settings → Authorized Devices."
+        )
     else:
         await update.effective_message.reply_text("You weren't linked.")
 
