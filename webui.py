@@ -154,6 +154,7 @@ def _flash(message: str = "", error: str = "") -> str:
 
 def _settings_page(s: Settings, *, message: str = "", error: str = "") -> str:
     ids_str = ",".join(str(i) for i in s.allowed_autofix_telegram_ids)
+    admin_tg_val = str(s.admin_telegram_id) if s.admin_telegram_id else ""
     return _page("Admin", f"""
 <nav>
   <a href="/admin">Settings</a>
@@ -163,6 +164,12 @@ def _settings_page(s: Settings, *, message: str = "", error: str = "") -> str:
 <h1>Hermes Settings</h1>
 {_flash(message, error)}
 <form method="POST" action="/admin">
+  <h2>Telegram <span class="note">(changes restart the container)</span></h2>
+  <label>Bot Token</label>
+  <input type="password" name="telegram_bot_token" value="{_esc(s.telegram_bot_token)}">
+  <label>Admin Telegram User ID</label>
+  <input type="text" name="admin_telegram_id" value="{_esc(admin_tg_val)}" inputmode="numeric" pattern="[0-9]+">
+
   <h2>Seerr</h2>
   <label>Seerr URL</label>
   <input type="text" name="seerr_url" value="{_esc(s.seerr_url)}" placeholder="http://192.168.1.10:5056">
@@ -222,17 +229,34 @@ async def setup_get(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
     if store.settings.admin.is_set():
         return web.HTTPFound("/admin/login")
-    body = _page("Setup", """
-<h1>Create Admin Account</h1>
-<p>First-time setup. Choose a username and password for the Hermes admin UI.</p>
+    s = store.settings
+    admin_tg_val = str(s.admin_telegram_id) if s.admin_telegram_id else ""
+    body = _page("Setup", f"""
+<h1>Hermes First-Time Setup</h1>
+<p>Configure the minimum settings needed to bring the bot online. You can change everything later from the admin UI.</p>
 <form method="POST" action="/admin/setup">
+  <h2>Admin Account</h2>
   <label>Username</label>
   <input type="text" name="username" required autofocus>
   <label>Password <span class="note">(min 8 characters)</span></label>
   <input type="password" name="password" required minlength="8">
   <label>Confirm password</label>
   <input type="password" name="confirm" required minlength="8">
-  <button type="submit">Create Account</button>
+
+  <h2>Telegram</h2>
+  <label>Telegram Bot Token <span class="note">(from @BotFather)</span></label>
+  <input type="password" name="telegram_bot_token" value="{_esc(s.telegram_bot_token)}" required>
+  <label>Admin Telegram User ID <span class="note">(DM @userinfobot to get yours)</span></label>
+  <input type="text" name="admin_telegram_id" value="{_esc(admin_tg_val)}" inputmode="numeric" pattern="[0-9]+" required>
+
+  <h2>Seerr</h2>
+  <label>Seerr URL</label>
+  <input type="text" name="seerr_url" value="{_esc(s.seerr_url)}" placeholder="http://192.168.1.10:5056" required>
+  <label>Seerr API Key</label>
+  <input type="password" name="seerr_api_key" value="{_esc(s.seerr_api_key)}" required>
+
+  <button type="submit">Save &amp; Start Hermes</button>
+  <div class="note">After saving, the container will restart to bring the bot online.</div>
 </form>
 """)
     return web.Response(text=body, content_type="text/html")
@@ -246,15 +270,58 @@ async def setup_post(request: web.Request) -> web.Response:
     username = (form.get("username") or "").strip()
     password = form.get("password") or ""
     confirm = form.get("confirm") or ""
-    if not username or len(password) < 8 or password != confirm:
-        body = _page("Setup", _flash(error="Invalid input. Username required, password >= 8 chars, must match confirm.") +
-                     '<p><a href="/admin/setup">Try again</a></p>')
+    bot_token = (form.get("telegram_bot_token") or "").strip()
+    admin_tg_raw = (form.get("admin_telegram_id") or "").strip()
+    seerr_url = (form.get("seerr_url") or "").strip()
+    seerr_api_key = (form.get("seerr_api_key") or "").strip()
+
+    errors: list[str] = []
+    if not username:
+        errors.append("Username required.")
+    if len(password) < 8 or password != confirm:
+        errors.append("Password must be at least 8 chars and match confirm.")
+    if not bot_token:
+        errors.append("Telegram bot token required.")
+    try:
+        admin_tg = int(admin_tg_raw)
+        if admin_tg <= 0:
+            raise ValueError
+    except ValueError:
+        errors.append("Admin Telegram User ID must be a positive integer.")
+        admin_tg = 0
+    if not seerr_url:
+        errors.append("Seerr URL required.")
+    if not seerr_api_key:
+        errors.append("Seerr API Key required.")
+
+    if errors:
+        body = _page("Setup", _flash(error=" ".join(errors)) + '<p><a href="/admin/setup">Try again</a></p>')
         return web.Response(text=body, content_type="text/html", status=400)
-    store.settings.admin.username = username
-    store.settings.admin.password_hash = hash_password(password)
+
+    s = store.settings
+    s.admin.username = username
+    s.admin.password_hash = hash_password(password)
+    s.telegram_bot_token = bot_token
+    s.admin_telegram_id = admin_tg
+    s.seerr_url = seerr_url
+    s.seerr_api_key = seerr_api_key
     store.save()
-    logger.info("Admin account '%s' created", username)
-    return web.HTTPFound("/admin/login")
+    logger.info("Setup complete; admin '%s' created, bot token + seerr configured", username)
+
+    # Tell the surrounding app (setup-only mode) that we're done -- it will exit
+    # so the container restarts into configured mode.
+    reload_cb: Optional[ReloadCallback] = request.app.get("on_settings_changed")
+    if reload_cb:
+        try:
+            await reload_cb()
+        except Exception:
+            logger.exception("on_settings_changed failed during setup")
+
+    body = _page("Setup", """
+<h1>Setup Complete</h1>
+<p>Hermes is restarting to bring the bot online. Refresh in about 10 seconds and log in.</p>
+""")
+    return web.Response(text=body, content_type="text/html")
 
 
 async def login_get(request: web.Request) -> web.Response:
@@ -307,6 +374,15 @@ async def admin_post(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
     form = await request.post()
     s = store.settings
+    s.telegram_bot_token = (form.get("telegram_bot_token") or "").strip()
+    admin_tg_raw = (form.get("admin_telegram_id") or "").strip()
+    try:
+        s.admin_telegram_id = int(admin_tg_raw) if admin_tg_raw else 0
+    except ValueError:
+        return web.Response(
+            text=_settings_page(store.settings, error="Admin Telegram User ID must be a positive integer."),
+            content_type="text/html", status=400,
+        )
     s.seerr_url = (form.get("seerr_url") or "").strip()
     s.seerr_api_key = (form.get("seerr_api_key") or "").strip()
     s.seerr_public_url = (form.get("seerr_public_url") or "").strip()

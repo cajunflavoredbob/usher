@@ -134,24 +134,12 @@ def _build_clients_from_settings(app: Application) -> None:
     )
 
 
-def _build_app() -> Application:
-    token = os.environ["TELEGRAM_BOT_TOKEN"]
-    admin_id = int(os.environ["ADMIN_TELEGRAM_ID"])
-    data_dir = Path(os.environ.get("DATA_DIR", "/data"))
-    db_path = os.environ.get("STORE_PATH", str(data_dir / "mappings.sqlite"))
-    settings_path = data_dir / "settings.json"
-
-    # Single HTTP server for webhook + webui
-    http_port = int(os.environ.get("WEBHOOK_PORT", "8765"))
-    http_bind = os.environ.get("WEBHOOK_BIND", "0.0.0.0").strip() or "0.0.0.0"
-
-    settings_store = SettingsStore(settings_path)
-    session_secret = load_or_create_session_secret(data_dir / "session_secret")
-    crypto = TokenCrypto(key_path=os.environ.get("ENCRYPTION_KEY_PATH", str(data_dir / "encryption.key")))
-    user_store = UserStore(db_path, crypto=crypto)
-    plex = PlexClient(
-        client_id_path=os.environ.get("PLEX_CLIENT_ID_PATH", str(data_dir / "client_id")),
-    )
+def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store: UserStore,
+               plex: PlexClient, data_dir: Path, settings_path: Path, db_path: str,
+               http_port: int, http_bind: str) -> Application:
+    s = settings_store.settings
+    token = s.telegram_bot_token
+    admin_id = s.admin_telegram_id
 
     app = (
         Application.builder()
@@ -210,7 +198,19 @@ async def _post_init(app: Application) -> None:
         settings_store: SettingsStore = app.bot_data["settings_store"]
         return settings_store.settings.webhook_secret or ""
 
+    # Capture the bootstrap values so we can detect post-save changes that
+    # require a container restart (bot token, admin id).
+    settings_store: SettingsStore = app.bot_data["settings_store"]
+    boot_token = settings_store.settings.telegram_bot_token
+    boot_admin_id = settings_store.settings.admin_telegram_id
+
     async def _on_settings_changed() -> None:
+        s = settings_store.settings
+        if s.telegram_bot_token != boot_token or s.admin_telegram_id != boot_admin_id:
+            logger.info("Bot token or admin id changed; exiting in 2s to restart")
+            loop = asyncio.get_running_loop()
+            loop.call_later(2.0, lambda: os._exit(0))
+            return
         logger.info("Settings changed; rebuilding clients")
         _build_clients_from_settings(app)
 
@@ -1316,17 +1316,102 @@ async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 # --- Main --------------------------------------------------------------------
 
-def main() -> None:
-    for var in ("TELEGRAM_BOT_TOKEN", "ADMIN_TELEGRAM_ID"):
-        if not os.environ.get(var):
-            print(f"Missing required env var: {var}", file=sys.stderr)
-            sys.exit(1)
+def _migrate_legacy_env_into_settings(settings_store: SettingsStore) -> bool:
+    """One-time migration: if bot token / admin id aren't in settings yet but ARE
+    in the environment, copy them in. Returns True if anything was written.
+    """
+    s = settings_store.settings
+    changed = False
+    env_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    if not s.telegram_bot_token and env_token:
+        s.telegram_bot_token = env_token
+        changed = True
+    if not s.admin_telegram_id:
+        try:
+            env_admin = int(os.environ.get("ADMIN_TELEGRAM_ID", "0") or "0")
+        except ValueError:
+            env_admin = 0
+        if env_admin:
+            s.admin_telegram_id = env_admin
+            changed = True
+    if changed:
+        settings_store.save()
+        logger.info("Migrated TELEGRAM_BOT_TOKEN/ADMIN_TELEGRAM_ID from env into settings.json")
+    return changed
+
+
+async def _run_setup_only(settings_store: SettingsStore, session_secret: bytes,
+                          data_dir: Path, settings_path: Path, db_path: str,
+                          http_port: int, http_bind: str) -> None:
+    """Run a webui-only server until the user completes setup (then exit so the
+    container restarts and main() picks up the configured-mode path).
+    """
+    logger.warning(
+        "Bot is NOT configured (telegram_bot_token / admin_telegram_id missing). "
+        "Running in SETUP-ONLY mode. Open http://<host>:%d/admin to finish setup.",
+        http_port,
+    )
+    web_app = web.Application(client_max_size=32 * 1024 * 1024)
+
+    async def _on_settings_changed() -> None:
+        # If setup just completed (bot is now configured), exit so the container
+        # restarts into configured mode.
+        if settings_store.settings.is_bot_configured():
+            logger.info("Setup complete; exiting in 2s so container restarts into full mode")
+            loop = asyncio.get_running_loop()
+            loop.call_later(2.0, lambda: os._exit(0))
+
+    attach_webui(
+        web_app,
+        settings_store=settings_store,
+        session_secret=session_secret,
+        data_dir=data_dir,
+        settings_path=settings_path,
+        db_path=Path(db_path),
+        on_settings_changed=_on_settings_changed,
+    )
+    runner = await start_http_server(web_app, host=http_bind, port=http_port)
     try:
-        int(os.environ["ADMIN_TELEGRAM_ID"])
-    except ValueError:
-        print("ADMIN_TELEGRAM_ID must be an integer Telegram user ID.", file=sys.stderr)
-        sys.exit(1)
-    app = _build_app()
+        await asyncio.Event().wait()
+    finally:
+        await runner.cleanup()
+
+
+def main() -> None:
+    data_dir = Path(os.environ.get("DATA_DIR", "/data"))
+    db_path = os.environ.get("STORE_PATH", str(data_dir / "mappings.sqlite"))
+    settings_path = data_dir / "settings.json"
+    http_port = int(os.environ.get("WEBHOOK_PORT", "8765"))
+    http_bind = os.environ.get("WEBHOOK_BIND", "0.0.0.0").strip() or "0.0.0.0"
+
+    settings_store = SettingsStore(settings_path)
+    _migrate_legacy_env_into_settings(settings_store)
+    session_secret = load_or_create_session_secret(data_dir / "session_secret")
+    crypto = TokenCrypto(key_path=os.environ.get("ENCRYPTION_KEY_PATH", str(data_dir / "encryption.key")))
+    user_store = UserStore(db_path, crypto=crypto)
+    plex = PlexClient(
+        client_id_path=os.environ.get("PLEX_CLIENT_ID_PATH", str(data_dir / "client_id")),
+    )
+
+    if not settings_store.settings.is_bot_configured():
+        asyncio.run(_run_setup_only(
+            settings_store, session_secret,
+            data_dir, settings_path, db_path,
+            http_port, http_bind,
+        ))
+        return
+
+    app = _build_app(
+        settings_store=settings_store,
+        session_secret=session_secret,
+        user_store=user_store,
+        plex=plex,
+        data_dir=data_dir,
+        settings_path=settings_path,
+        db_path=db_path,
+        http_port=http_port,
+        http_bind=http_bind,
+    )
     logger.info("Starting bot (polling)")
     app.run_polling(drop_pending_updates=True)
 

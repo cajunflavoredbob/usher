@@ -36,6 +36,8 @@ class AdminAccount:
 
 @dataclass
 class Settings:
+    telegram_bot_token: str = ""
+    admin_telegram_id: int = 0
     seerr_url: str = ""
     seerr_api_key: str = ""
     seerr_public_url: str = ""
@@ -50,10 +52,20 @@ class Settings:
     def to_dict(self) -> dict:
         return asdict(self)
 
+    def is_bot_configured(self) -> bool:
+        """True iff the irreducible-minimum fields to run the Telegram bot are set."""
+        return bool(self.telegram_bot_token and self.admin_telegram_id)
+
     @classmethod
     def from_dict(cls, data: dict) -> "Settings":
         admin_data = data.get("admin") or {}
+        try:
+            admin_tg_id = int(data.get("admin_telegram_id") or 0)
+        except (TypeError, ValueError):
+            admin_tg_id = 0
         return cls(
+            telegram_bot_token=data.get("telegram_bot_token", "") or "",
+            admin_telegram_id=admin_tg_id,
             seerr_url=data.get("seerr_url", "") or "",
             seerr_api_key=data.get("seerr_api_key", "") or "",
             seerr_public_url=data.get("seerr_public_url", "") or "",
@@ -101,7 +113,14 @@ class SettingsStore:
                     out.append(int(chunk))
             return out
 
+        try:
+            admin_tg_id = int(os.environ.get("ADMIN_TELEGRAM_ID", "0") or "0")
+        except ValueError:
+            admin_tg_id = 0
+
         return Settings(
+            telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
+            admin_telegram_id=admin_tg_id,
             seerr_url=os.environ.get("SEERR_URL", "").strip(),
             seerr_api_key=os.environ.get("SEERR_API_KEY", "").strip(),
             seerr_public_url=os.environ.get("SEERR_PUBLIC_URL", "").strip(),

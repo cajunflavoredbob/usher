@@ -9,49 +9,44 @@
   <Privileged>false</Privileged>
   <Support>https://github.com/cajunflavoredbob/hermes/issues</Support>
   <Project>https://github.com/cajunflavoredbob/hermes</Project>
-  <Overview>A Telegram bot that lets your users report media issues to Seerr (the unified Overseerr/Jellyseerr successor), with optional self-service auto-fix that tells Radarr or Sonarr to delete the file and re-search. Includes a slim admin web UI for settings, backup/restore, and password management.</Overview>
+  <Overview>A Telegram bot that lets your users report media issues to Seerr (the unified Overseerr/Jellyseerr successor), with optional self-service auto-fix that tells Radarr or Sonarr to delete the file and re-search. All configuration happens in a built-in admin web UI -- no environment variables required.</Overview>
   <Category>MediaApp:Other</Category>
   <WebUI>http://[IP]:[PORT:8765]/admin</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/cajunflavoredbob/hermes/main/unraid-template.xml</TemplateURL>
   <Icon>https://raw.githubusercontent.com/cajunflavoredbob/hermes/main/icon.png</Icon>
   <Date>2026-05-25</Date>
-  <Changes>### v0.7.0&#xD;
+  <Changes>### v0.8.0&#xD;
+- All settings moved to the admin web UI. No environment variables required to install -- start the container, open the web UI, finish setup.&#xD;
+&#xD;
+### v0.7.0&#xD;
 - Slim admin web UI at /admin (settings, backup/restore, password change)&#xD;
-- Most settings moved from env vars to the web UI; env vars become initial seed only&#xD;
 &#xD;
 ### v0.6.0&#xD;
-- Comment-reply notifications via Seerr webhook&#xD;
-&#xD;
-### v0.5.x&#xD;
-- /tickets command, Plex OAuth for per-user attribution, reverse-proxy URL support</Changes>
+- Comment-reply notifications via Seerr webhook</Changes>
   <Requires/>
   <DonateText/>
   <DonateLink/>
   <Description>A Telegram bot that lets your users report media issues to [Seerr](https://seerr.dev/), with optional self-service auto-fix.&#xD;
 &#xD;
-**Quick setup**&#xD;
-1. Create a Telegram bot via @BotFather; save the token&#xD;
-2. Get your numeric Telegram user ID by DMing @userinfobot&#xD;
-3. Fill in **Telegram Bot Token** and **Admin Telegram User ID** below, then start the container&#xD;
-4. Open the web UI at `http://&lt;unraid-ip&gt;:8765/admin` and create the admin account&#xD;
-5. Fill in Seerr (and optionally Radarr/Sonarr) URLs and API keys in the web UI&#xD;
+**Setup**&#xD;
+1. Install the container (no environment variables needed)&#xD;
+2. Click the **WebUI** button on the container card (or open `http://&lt;unraid-ip&gt;:8765/admin`)&#xD;
+3. The first-run page collects: admin username + password, Telegram bot token (from @BotFather), your Telegram user ID (DM @userinfobot to get yours), and Seerr URL + API key&#xD;
+4. Save -- the container restarts and the bot comes online&#xD;
+5. Log in and configure Radarr/Sonarr, auto-fix allowlist, webhook secret, etc.&#xD;
 6. In Telegram, DM `/setprivacy` to @BotFather, select your bot, choose **Disable** (lets the bot see commands in group chats)&#xD;
 7. DM the bot `/link` to authorize with Plex&#xD;
 &#xD;
 **Web UI features**&#xD;
-- Edit Seerr / Radarr / Sonarr URLs &amp; API keys with hot reload (no container restart)&#xD;
-- Edit auto-fix allowlist and webhook secret&#xD;
+- Edit any setting with hot reload (Telegram bot token + admin ID changes restart the container automatically)&#xD;
 - Download an encrypted backup ZIP (settings + mappings DB + encryption key)&#xD;
 - Restore from backup (container restarts automatically)&#xD;
 - Change admin password&#xD;
 &#xD;
-**Optional env vars (initial seed only)**&#xD;
-The Seerr/Radarr/Sonarr fields below are optional. If filled in, they seed the web UI on first run. After that, the web UI is the source of truth and these env vars are ignored. New users can leave them all blank and configure everything in the web UI.&#xD;
-&#xD;
 **Enable comment-reply notifications (optional)**&#xD;
 1. In Seerr, go to Settings → Notifications → Webhook&#xD;
 2. Webhook URL: `http://&lt;unraid-ip&gt;:8765/webhook/seerr`&#xD;
-3. Authorization Header: paste the Webhook Secret you set in the Hermes web UI (leave blank if no secret)&#xD;
+3. Authorization Header: paste the Webhook Secret from the Hermes web UI (leave blank if no secret)&#xD;
 4. Enable the **Issue Comment** notification type&#xD;
 5. Click "Test" to confirm Hermes receives it&#xD;
 &#xD;
@@ -61,27 +56,5 @@ See the [project page](https://github.com/cajunflavoredbob/hermes) for full docs
 
   <Config Name="Web UI / Webhook Port" Target="8765" Default="8765" Mode="tcp" Description="Port for both the admin web UI (/admin) and Seerr webhook receiver (/webhook/seerr)." Type="Port" Display="always" Required="true" Mask="false">8765</Config>
 
-  <Config Name="Telegram Bot Token" Target="TELEGRAM_BOT_TOKEN" Default="" Mode="" Description="Bot token from @BotFather. Format: 12345:ABC..." Type="Variable" Display="always" Required="true" Mask="true"/>
-
-  <Config Name="Admin Telegram User ID" Target="ADMIN_TELEGRAM_ID" Default="" Mode="" Description="Your numeric Telegram user ID. Get it by DMing @userinfobot on Telegram." Type="Variable" Display="always" Required="true" Mask="false"/>
-
-  <Config Name="Seerr URL (optional seed)" Target="SEERR_URL" Default="" Mode="" Description="Optional initial seed. Base URL of your Seerr instance (use IP, not localhost). Configure permanently in the web UI." Type="Variable" Display="always" Required="false" Mask="false"/>
-
-  <Config Name="Seerr API Key (optional seed)" Target="SEERR_API_KEY" Default="" Mode="" Description="Optional initial seed. Seerr → Settings → General → API Key. Configure permanently in the web UI." Type="Variable" Display="always" Required="false" Mask="true"/>
-
-  <Config Name="Seerr Public URL (optional seed)" Target="SEERR_PUBLIC_URL" Default="" Mode="" Description="Optional initial seed. Reverse-proxy URL for user-facing links (e.g. https://seerr.example.com). Configure permanently in the web UI." Type="Variable" Display="always" Required="false" Mask="false"/>
-
-  <Config Name="Radarr URL (optional seed)" Target="RADARR_URL" Default="" Mode="" Description="Optional initial seed. Set with the Radarr API Key to enable movie auto-fix. Configure permanently in the web UI." Type="Variable" Display="always" Required="false" Mask="false"/>
-
-  <Config Name="Radarr API Key (optional seed)" Target="RADARR_API_KEY" Default="" Mode="" Description="Optional initial seed. Radarr → Settings → General → API Key. Configure permanently in the web UI." Type="Variable" Display="always" Required="false" Mask="true"/>
-
-  <Config Name="Sonarr URL (optional seed)" Target="SONARR_URL" Default="" Mode="" Description="Optional initial seed. Set with the Sonarr API Key to enable TV auto-fix. Configure permanently in the web UI." Type="Variable" Display="always" Required="false" Mask="false"/>
-
-  <Config Name="Sonarr API Key (optional seed)" Target="SONARR_API_KEY" Default="" Mode="" Description="Optional initial seed. Sonarr → Settings → General → API Key. Configure permanently in the web UI." Type="Variable" Display="always" Required="false" Mask="true"/>
-
-  <Config Name="Auto-fix Allowlist (optional seed)" Target="ALLOWED_AUTOFIX_TELEGRAM_IDS" Default="" Mode="" Description="Optional initial seed. Comma-separated Telegram user IDs allowed to trigger auto-fix. Empty = admin only. Configure permanently in the web UI." Type="Variable" Display="always" Required="false" Mask="false"/>
-
-  <Config Name="Webhook Secret (optional seed)" Target="HERMES_WEBHOOK_SECRET" Default="" Mode="" Description="Optional initial seed. Shared secret required in the Authorization header on incoming Seerr webhook requests. Configure permanently in the web UI." Type="Variable" Display="always" Required="false" Mask="true"/>
-
-  <Config Name="Encryption Key (advanced)" Target="HERMES_ENCRYPTION_KEY" Default="" Mode="" Description="Fernet key used to encrypt stored Plex tokens at rest. If blank, Hermes generates one on first run and persists it to /data/encryption.key. Provide a key here only if you want to control it explicitly (e.g. to migrate from another install). Generate with: python -c &quot;from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())&quot;" Type="Variable" Display="always" Required="false" Mask="true"/>
+  <Config Name="Encryption Key (advanced)" Target="HERMES_ENCRYPTION_KEY" Default="" Mode="" Description="Fernet key used to encrypt stored Plex tokens at rest. Leave blank for normal use -- Hermes generates one on first run and persists it to /data/encryption.key. Set this only if you need to control the key explicitly (e.g. migrating from another install). Generate with: python -c &quot;from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())&quot;" Type="Variable" Display="advanced" Required="false" Mask="true"/>
 </Container>
