@@ -14,9 +14,11 @@ logger = logging.getLogger(__name__)
 class MediaResult:
     """One search hit from Seerr."""
     media_type: str       # "movie" or "tv"
-    tmdb_id: int          # TMDb ID (what Seerr uses as `mediaId` for issues)
+    tmdb_id: int          # TMDb ID (used for details lookup + Radarr/Sonarr auto-fix)
     title: str
     year: str             # may be empty string
+    seerr_media_id: Optional[int]  # Seerr's internal media.id (used as `mediaId` for issue creation).
+                                   # None means this media isn't yet in Seerr's library.
 
 
 @dataclass
@@ -67,11 +69,13 @@ class SeerrClient:
             title = item.get("title") or item.get("name") or "?"
             release = item.get("releaseDate") or item.get("firstAirDate") or ""
             year = release[:4] if release else ""
+            media_info = item.get("mediaInfo") or {}
             out.append(MediaResult(
                 media_type=mt,
                 tmdb_id=item.get("id"),
                 title=title,
                 year=year,
+                seerr_media_id=media_info.get("id"),
             ))
             if len(out) >= limit:
                 break
@@ -132,7 +136,7 @@ class SeerrClient:
         *,
         issue_type: int,
         message: str,
-        tmdb_id: int,
+        seerr_media_id: int,
         media_type: str,
         problem_season: Optional[int] = None,
         problem_episode: Optional[int] = None,
@@ -141,11 +145,15 @@ class SeerrClient:
 
         Seerr attributes the issue to the API key's owner; we can't override.
         Caller should prefix `message` with reporter identity for visibility.
+
+        NOTE: `mediaId` is Seerr's INTERNAL media.id, NOT a TMDb ID. Pass the
+        `seerr_media_id` field from a MediaResult. If the media isn't in
+        Seerr's library yet (no MediaInfo), the caller must handle that first.
         """
         payload = {
             "issueType": issue_type,
             "message": message,
-            "mediaId": tmdb_id,
+            "mediaId": seerr_media_id,
             "mediaType": media_type,
         }
         if problem_season is not None:

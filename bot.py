@@ -339,11 +339,18 @@ async def issue_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
         await q.edit_message_text("Couldn't parse selection. /issue to start over.")
         return ConversationHandler.END
     selected = ctx.user_data.get("search_results", {}).get((media_type, tmdb_id))
+    if selected is None or selected.seerr_media_id is None:
+        await q.edit_message_text(
+            "That title isn't in Seerr's library yet (no Plex match / no prior request). "
+            "Request it via Seerr first, then come back. /issue to start over."
+        )
+        return ConversationHandler.END
     ctx.user_data["media"] = {
         "type": media_type,
         "tmdb_id": tmdb_id,
-        "title": selected.title if selected else "selected media",
-        "year": selected.year if selected else "",
+        "seerr_media_id": selected.seerr_media_id,
+        "title": selected.title,
+        "year": selected.year,
     }
     if media_type == "tv":
         return await _show_season_picker(update, ctx)
@@ -587,7 +594,7 @@ async def _submit_issue(
         created: CreatedIssue = await seerr.create_issue(
             issue_type=issue_type,
             message=full_message,
-            tmdb_id=media["tmdb_id"],
+            seerr_media_id=media["seerr_media_id"],
             media_type=media["type"],
             problem_season=season if media["type"] == "tv" else None,
             problem_episode=episode if media["type"] == "tv" else None,
