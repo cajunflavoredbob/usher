@@ -150,6 +150,7 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app = (
         Application.builder()
         .token(token)
+        .concurrent_updates(True)
         .post_init(_post_init)
         .post_shutdown(_post_shutdown)
         .build()
@@ -832,12 +833,16 @@ async def cmd_link_consent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
         await q.edit_message_text(f"Couldn't start Plex auth: {exc}")
         return ConversationHandler.END
     await q.edit_message_text(
-        f"Open this link to authorize Hermes (waiting up to 5 minutes):\n\n{pin.auth_url}",
+        "Authorize Hermes in Plex (waiting up to ~28 minutes):\n\n"
+        f"Tap this link:\n{pin.auth_url}\n\n"
+        f"OR if the link doesn't show an Allow screen (common on mobile when the Plex app is installed),\n"
+        f"go to https://plex.tv/link and enter the code:\n\n*{pin.code.upper()}*",
+        parse_mode="Markdown",
         disable_web_page_preview=True,
     )
-    # Poll Plex for completion
+    # Poll Plex for completion. 560 × 3s = 28 min, just under the PIN's 30-min lifetime.
     auth_token: Optional[str] = None
-    for _ in range(100):  # 100 × 3s = 5 min
+    for _ in range(560):
         await asyncio.sleep(3)
         try:
             auth_token = await plex.poll_pin(pin.id)

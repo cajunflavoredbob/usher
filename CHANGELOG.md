@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-05-26
+
+### Fixed
+- **`/link` blocked all other commands while it was waiting on Plex.** `cmd_link_consent` runs the PIN polling loop (`await asyncio.sleep(3)` per iteration), and PTB's default `concurrent_updates=False` meant every other incoming update queued behind it. So if anyone was mid-`/link`, commands like `/tickets` from anyone (including the admin) sat in queue until the link flow finished or timed out. Set `concurrent_updates(True)` on the Application builder — updates now process in parallel. SQLite serializes its own access, httpx AsyncClient is concurrency-safe, and bot_data is read-mostly, so the change is safe across all existing code paths.
+
+### Changed
+- **Extended Plex PIN poll window from 5 minutes to ~28 minutes** to match the PIN's 30-minute lifetime. The previous 5-minute cap meant users who got distracted mid-flow lost their PIN even though Plex would still honor it.
+- **Added `plex.tv/link` fallback to the `/link` message.** Some mobile setups (notably iPad/iOS with the Plex app installed) deep-link `app.plex.tv/auth` into the Plex app, which signs in but never shows the Allow Access consent screen. Users now also get the PIN code and the `plex.tv/link` manual entry URL as a guaranteed fallback path.
+- **Admin web UI: `✓ Saved` marker fades out after ~4s.** The green confirmation next to a save button now animates to transparent (1s fade starting 3s after appearing) so the form looks clean again. Error markers still stay visible.
+
 ## [0.9.0] - 2026-05-26
 
 ### Added

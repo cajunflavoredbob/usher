@@ -145,8 +145,14 @@ code { background: #45475a; padding: 2px 6px; border-radius: 3px; font-size: 13p
   display: inline-block; margin-left: 12px; font-weight: 600; font-size: 13px;
   vertical-align: middle;
 }
-.saved-marker.ok { color: #a6e3a1; }
+.saved-marker.ok {
+  color: #a6e3a1;
+  animation: fade-out 1s ease-in-out 3s forwards;
+}
 .saved-marker.err { color: #f38ba8; }
+@keyframes fade-out {
+  to { opacity: 0; visibility: hidden; }
+}
 
 /* Tabs (CSS-only via radio inputs) */
 .tabs > input[type="radio"] { position: absolute; left: -9999px; }
