@@ -68,11 +68,14 @@ class PlexClient:
         logger.info("Generated new Plex client identifier")
         return cid
 
-    async def request_pin(self) -> PlexPin:
-        # strong=false returns a 4-char human-friendly code that works at
-        # plex.tv/link (the manual entry fallback). The shorter window
-        # (~15 min vs 30 min for strong PINs) is the trade-off.
-        r = await self._http.post(f"{PLEX_API_BASE}/pins", params={"strong": "false"})
+    async def request_pin(self, strong: bool = True) -> PlexPin:
+        # strong=True returns a long opaque code suitable for the auth URL
+        # deeplink (~30 min lifetime). strong=False returns a 4-char
+        # human-friendly code that works at plex.tv/link (~15 min lifetime).
+        r = await self._http.post(
+            f"{PLEX_API_BASE}/pins",
+            params={"strong": "true" if strong else "false"},
+        )
         r.raise_for_status()
         d = r.json()
         pin_id = d["id"]

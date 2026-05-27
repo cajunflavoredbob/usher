@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-05-26
+
+### Changed
+- **Reworked `/link` into a guided multi-step flow with platform-aware paths and a fail-state fallback.** After consent, the bot asks the user whether they're on Desktop or iOS/Android.
+  - **Desktop:** strong-PIN auth URL surfaced as a `[🌐 Open Plex authorization]` button. One tap, opens in their normal browser, sign in + Allow.
+  - **iOS/Android:** strong-PIN auth URL exposed as a `[📋 Copy auth link]` button (uses Bot API 8.0's `CopyTextButton`). User pastes it into a real browser to avoid Telegram's in-app webview, which closes Plex's sign-in too early on iOS.
+  - **`[❌ Having trouble?]` / `[❌ Didn't work?]`** button on either path drops to a weak-PIN fallback: a 4-character code in a prominent code block + `[📋 Copy plex.tv/link]` button. User types the code manually into plex.tv/link.
+- The polling loop now respects a cancellation flag in `user_data`, so the "Didn't work?" callback can interrupt an in-progress strong-PIN poll and start fresh with a weak PIN without leaking the prior poll or its message state.
+- Strong-PIN poll window is back to ~28 min (matches the strong PIN's 30-min lifetime); weak-PIN fallback stays at ~14 min.
+- Improved Seerr-rejection message ("Plex authorized you, but Seerr rejected the sign-in") to point users at the actual fix (admin needs to invite them).
+- Success and timeout messages trimmed for brevity.
+
+### Dependency
+- **Bumped `python-telegram-bot[ext]` from `21.6` to `22.7`** (latest stable v22) to unlock Bot API 8.0's `CopyTextButton`. Otherwise drop-in for our handler patterns.
+
 ## [0.9.2] - 2026-05-26
 
 ### Fixed

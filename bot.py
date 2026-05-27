@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Final, Optional
 
 from telegram import (
+    CopyTextButton,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Update,
@@ -63,6 +64,7 @@ TITLE, PICK_MEDIA, PICK_SEASON, PICK_EPISODE, PICK_TYPE, DESCRIPTION, OFFER_AUTO
 AWAIT_COMMENT = 100
 # Conversation states (Plex link flow)
 AWAIT_LINK_CONSENT = 200
+AWAIT_PLATFORM_CHOICE = 201
 # Conversation states (ticket management)
 AWAIT_TICKET_REPLY = 400
 
@@ -183,6 +185,9 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CallbackQueryHandler(tk_close_menu, pattern=r"^tkc:\d+$"))
     app.add_handler(CallbackQueryHandler(tk_close_direct, pattern=r"^tkcd:\d+$"))
     app.add_handler(_ticket_conversation())
+    # Link "Didn't work?" / "Having trouble?" callback. Fires outside the
+    # link ConversationHandler so it can interrupt an in-progress poll.
+    app.add_handler(CallbackQueryHandler(cmd_link_didnt_work, pattern=r"^tklhelp$"))
     app.add_error_handler(on_error)
 
     # Periodic poller for pending auto-fixes (runs only when needed -- the job
@@ -786,6 +791,7 @@ def _link_conversation() -> ConversationHandler:
         entry_points=[CommandHandler("link", cmd_link)],
         states={
             AWAIT_LINK_CONSENT: [CallbackQueryHandler(cmd_link_consent, pattern=r"^link_consent:")],
+            AWAIT_PLATFORM_CHOICE: [CallbackQueryHandler(cmd_link_platform, pattern=r"^tklplat:")],
         },
         fallbacks=[CommandHandler("cancel", link_cancel)],
         per_user=True,
@@ -823,74 +829,179 @@ async def cmd_link_consent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
     if choice == "no":
         await q.edit_message_text("Cancelled. /link to try again later.")
         return ConversationHandler.END
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("💻 Desktop", callback_data="tklplat:desktop"),
+        InlineKeyboardButton("📱 iOS / Android", callback_data="tklplat:mobile"),
+    ]])
+    await q.edit_message_text(
+        "Where are you using Telegram?",
+        reply_markup=kb,
+    )
+    return AWAIT_PLATFORM_CHOICE
+
+
+async def _poll_with_cancel(plex: PlexClient, pin_id: int, max_iters: int,
+                            ctx: ContextTypes.DEFAULT_TYPE) -> Optional[str]:
+    """Poll Plex until a token is returned, the loop is cancelled, or max_iters
+    is exhausted. Returns the token on success, None otherwise."""
+    for _ in range(max_iters):
+        if ctx.user_data.get("link_cancel"):
+            return None
+        await asyncio.sleep(3)
+        try:
+            token = await plex.poll_pin(pin_id)
+            if token:
+                if ctx.user_data.get("link_cancel"):
+                    return None
+                return token
+        except Exception:
+            logger.exception("poll_pin failed (will retry)")
+    return None
+
+
+async def _finalize_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
+                         auth_token: str) -> None:
+    """Shared post-auth path: Seerr login + persist mapping + success/failure reply."""
     plex: PlexClient = ctx.bot_data["plex"]
     seerr: SeerrClient = ctx.bot_data["seerr"]
     store: UserStore = ctx.bot_data["store"]
-    try:
-        pin = await plex.request_pin()
-    except Exception as exc:
-        logger.exception("plex request_pin failed")
-        await q.edit_message_text(f"Couldn't start Plex auth: {exc}")
-        return ConversationHandler.END
-    await q.edit_message_text(
-        "Authorize Hermes in Plex (waiting up to ~14 minutes):\n\n"
-        f"Tap this link:\n{pin.auth_url}\n\n"
-        "OR if the link doesn't show an Allow screen (common on mobile when the Plex app is installed),\n"
-        f"go to https://plex.tv/link and enter the code:\n\n*{pin.code.upper()}*",
-        parse_mode="Markdown",
-        disable_web_page_preview=True,
-    )
-    # Poll Plex for completion. 280 × 3s = 14 min, just under the short PIN's 15-min lifetime.
-    auth_token: Optional[str] = None
-    for _ in range(280):
-        await asyncio.sleep(3)
-        try:
-            auth_token = await plex.poll_pin(pin.id)
-            if auth_token:
-                break
-        except Exception:
-            logger.exception("poll_pin failed (will retry)")
-    if not auth_token:
-        await ctx.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="⏱️ Plex auth timed out. /link to try again.",
-        )
-        return ConversationHandler.END
-    # Validate against Seerr + get Seerr user info
+    chat_id = update.effective_chat.id
+    tg_id = update.effective_user.id
+
     try:
         seerr_id, display, _ = await seerr.login_with_plex(auth_token)
     except Exception as exc:
         logger.exception("seerr login_with_plex failed")
         await ctx.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=f"Plex auth succeeded but Seerr login failed: {exc}\n"
-                 "You may not have a matching Seerr account.",
+            chat_id=chat_id,
+            text=(
+                "✓ Plex authorized you, but Seerr rejected the sign-in.\n"
+                f"Reason: {exc}\n\n"
+                "Your Plex account probably isn't shared in Seerr yet. "
+                "Ask the admin to invite you."
+            ),
         )
-        return ConversationHandler.END
-    # Pull richer Plex user info for storage
+        return
+
     try:
         plex_user = await plex.get_user(auth_token)
     except Exception:
         logger.exception("plex get_user failed")
         plex_user = None
+
     store.link_with_plex(
-        telegram_id=update.effective_user.id,
+        telegram_id=tg_id,
         seerr_id=seerr_id,
         seerr_display=display,
         plex_token=auth_token,
         plex_uuid=plex_user.uuid if plex_user else "",
         plex_username=plex_user.username if plex_user else display,
     )
+
     await ctx.bot.send_message(
-        chat_id=update.effective_chat.id,
+        chat_id=chat_id,
         text=(
-            f"✅ Linked as *{display}*. "
-            "Issues you submit will be attributed to you in Seerr.\n\n"
-            "DM `/issue` (or use it in any group I'm in) to report a problem."
+            f"✅ Linked as *{display}*.\n\n"
+            "You can now /issue and /tickets."
         ),
         parse_mode="Markdown",
     )
+
+
+async def cmd_link_platform(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles the platform-choice tap: issues a strong PIN and starts polling."""
+    q = update.callback_query
+    await q.answer()
+    platform = q.data.split(":")[1]  # "desktop" or "mobile"
+    plex: PlexClient = ctx.bot_data["plex"]
+    try:
+        pin = await plex.request_pin(strong=True)
+    except Exception as exc:
+        logger.exception("plex request_pin failed")
+        await q.edit_message_text(f"Couldn't start Plex auth: {exc}")
+        return ConversationHandler.END
+
+    ctx.user_data["link_cancel"] = False
+
+    if platform == "desktop":
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🌐 Open Plex authorization", url=pin.auth_url)],
+            [InlineKeyboardButton("❌ Having trouble?", callback_data="tklhelp")],
+        ])
+        text = "Authorize Hermes in Plex:\n\nSign in and tap Allow."
+    else:  # mobile
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📋 Copy auth link",
+                                  copy_text=CopyTextButton(text=pin.auth_url))],
+            [InlineKeyboardButton("❌ Didn't work?", callback_data="tklhelp")],
+        ])
+        text = "Tap to copy the auth link, then paste it into a browser."
+
+    await q.edit_message_text(text, reply_markup=kb)
+
+    # Strong PIN window: ~28 min (560 × 3s, under the 30-min lifetime).
+    auth_token = await _poll_with_cancel(plex, pin.id, max_iters=560, ctx=ctx)
+    if auth_token is None:
+        if ctx.user_data.get("link_cancel"):
+            # cmd_link_didnt_work has taken ownership; exit silently
+            return ConversationHandler.END
+        await q.edit_message_text("⏱️ Plex auth timed out. /link to try again.")
+        return ConversationHandler.END
+
+    await _finalize_link(update, ctx, auth_token)
+    try:
+        await q.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
     return ConversationHandler.END
+
+
+async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles 'Having trouble?' / 'Didn't work?' button. Fires OUTSIDE the
+    conversation so it can interrupt an in-progress poll. Issues a weak PIN
+    and starts a fresh poll loop."""
+    q = update.callback_query
+    await q.answer()
+
+    # Cancel the strong-PIN poll if one is running
+    ctx.user_data["link_cancel"] = True
+
+    plex: PlexClient = ctx.bot_data["plex"]
+    try:
+        pin = await plex.request_pin(strong=False)
+    except Exception as exc:
+        logger.exception("plex request_pin failed (fallback)")
+        await q.edit_message_text(f"Couldn't get a fresh code: {exc}")
+        return
+
+    # Reset the flag for the new polling cycle
+    ctx.user_data["link_cancel"] = False
+
+    code = pin.code.upper()
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("📋 Copy plex.tv/link",
+                             copy_text=CopyTextButton(text="https://plex.tv/link")),
+    ]])
+    await q.edit_message_text(
+        "Enter this code at plex.tv/link:\n\n"
+        f"```\n{code}\n```",
+        reply_markup=kb,
+        parse_mode="Markdown",
+    )
+
+    # Weak PIN window: ~14 min (280 × 3s, under the 15-min lifetime).
+    auth_token = await _poll_with_cancel(plex, pin.id, max_iters=280, ctx=ctx)
+    if auth_token is None:
+        if ctx.user_data.get("link_cancel"):
+            return  # another invocation of didnt_work cancelled us
+        await q.edit_message_text("⏱️ Plex auth timed out. /link to try again.")
+        return
+
+    await _finalize_link(update, ctx, auth_token)
+    try:
+        await q.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
 
 async def link_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
