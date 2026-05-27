@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-05-26
+
+### Changed
+- Auth code rendering uses Negative Squared Latin Capital Letters (🅐-🅩) for letters instead of Mathematical Bold (𝐀-𝐙). The squared letters render at full emoji size on Telegram and match the keycap digit emojis, so the whole code is visually consistent and actually large.
+
 ## [0.9.4] - 2026-05-26
 
 ### Fixed

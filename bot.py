@@ -864,21 +864,21 @@ async def _poll_with_cancel(plex: PlexClient, pin_id: int, max_iters: int,
 
 
 def _emoji_code(code: str) -> str:
-    """Render a short auth code as one big visible character per position.
-    Digits become keycap emojis; letters become Mathematical Bold letters
-    (which look big but won't accidentally form country flags the way
-    regional indicator pairs can).
+    """Render a short auth code as one large emoji-sized character per
+    position. Digits become keycap emojis; letters become Negative Squared
+    Latin Capital Letters (the 🅐-🅩 range, which renders at full emoji
+    size on Telegram across iOS / Android / Desktop / Web).
     """
     parts: list[str] = []
     for c in code.upper():
         if c.isdigit():
             parts.append(f"{c}️⃣")  # digit + variation selector + keycap
         elif "A" <= c <= "Z":
-            # Mathematical Bold Capital A starts at U+1D400
-            parts.append(chr(0x1D400 + (ord(c) - ord("A"))))
+            # Negative Squared Latin Capital Letter A starts at U+1F150
+            parts.append(chr(0x1F150 + (ord(c) - ord("A"))))
         else:
             parts.append(c)
-    return "   ".join(parts)
+    return " ".join(parts)
 
 
 async def _finalize_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
