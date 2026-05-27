@@ -183,9 +183,12 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     # so the non-conversation taps -- open / close-menu / close-direct -- work
     # even when no conversation is active)
     app.add_handler(CallbackQueryHandler(tk_open, pattern=r"^tkopen:\d+$"))
+    app.add_handler(CallbackQueryHandler(tk_reply_menu, pattern=r"^tkrmenu:\d+$"))
     app.add_handler(CallbackQueryHandler(tk_close_menu, pattern=r"^tkc:\d+$"))
     app.add_handler(CallbackQueryHandler(tk_close_direct, pattern=r"^tkcd:\d+$"))
     app.add_handler(CallbackQueryHandler(tk_fix, pattern=r"^tkf:\d+$"))
+    app.add_handler(CallbackQueryHandler(tk_fix_redownload, pattern=r"^tkfd:\d+$"))
+    app.add_handler(CallbackQueryHandler(tk_fix_mark_failed, pattern=r"^tkfm:\d+$"))
     app.add_handler(_ticket_conversation())
     # Link "Didn't work?" / "Having trouble?" callback. Fires outside the
     # link ConversationHandler so it can interrupt an in-progress poll.
@@ -215,6 +218,12 @@ async def _post_init(app: Application) -> None:
     async def _on_comment(payload: dict) -> None:
         await handle_seerr_comment(app, payload)
 
+    async def _on_resolved(payload: dict) -> None:
+        await handle_seerr_resolved(app, payload)
+
+    async def _on_reported(payload: dict) -> None:
+        await handle_seerr_reported(app, payload)
+
     def _secret_provider() -> str:
         settings_store: SettingsStore = app.bot_data["settings_store"]
         return settings_store.settings.webhook_secret or ""
@@ -238,6 +247,8 @@ async def _post_init(app: Application) -> None:
     attach_webhook(
         web_app,
         on_comment=_on_comment,
+        on_resolved=_on_resolved,
+        on_reported=_on_reported,
         secret_provider=_secret_provider,
     )
     attach_webui(
@@ -367,8 +378,10 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
     if safe_title:
         lines.append(safe_title)
     lines.append("")
-    lines.append(f"<i>from {safe_commenter}:</i>")
-    lines.append(f"\"{safe_comment}\"")
+    lines.append(f"<b>From:</b> {safe_commenter}")
+    lines.append("")
+    lines.append(f"<b>Comment:</b>")
+    lines.append(f"<i>\"{safe_comment}\"</i>")
 
     # Offer an inline Reply button when the ticket is still open
     issue_status = (issue.get("issue_status") or "").upper()
@@ -395,6 +408,185 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
             "Failed to DM telegram_id=%d about issue #%d comment",
             mapping.telegram_id, issue_id,
         )
+
+
+async def handle_seerr_resolved(app: Application, payload: dict) -> None:
+    """Process an ISSUE_RESOLVED webhook from Seerr and DM the reporter."""
+    issue = payload.get("issue") or {}
+    media = payload.get("media") or {}
+
+    try:
+        issue_id = int(issue.get("issue_id"))
+    except (TypeError, ValueError):
+        logger.warning("Webhook resolved: missing/invalid issue_id; dropping")
+        return
+
+    reporter_username = (issue.get("reportedBy_username") or "").strip()
+    if not reporter_username:
+        logger.info("Webhook resolved on issue #%d: no reporter username; dropping", issue_id)
+        return
+
+    store: UserStore = app.bot_data["store"]
+    mapping = store.find_by_plex_username(reporter_username)
+    if mapping is None:
+        logger.info(
+            "Webhook resolved on issue #%d: reporter '%s' not linked in Hermes; dropping",
+            issue_id, reporter_username,
+        )
+        return
+
+    # Best-effort media context for a richer message
+    title_line = ""
+    seerr: Optional[SeerrClient] = app.bot_data.get("seerr")
+    media_type = media.get("media_type") or ""
+    tmdb_raw = media.get("tmdbId")
+    try:
+        tmdb_id = int(tmdb_raw) if tmdb_raw not in (None, "") else 0
+    except (TypeError, ValueError):
+        tmdb_id = 0
+    if seerr and media_type in ("movie", "tv") and tmdb_id:
+        try:
+            title, year = await seerr.get_media_title(media_type, tmdb_id)
+            emoji = "🎬" if media_type == "movie" else "📺"
+            title_line = f"{emoji} {title}"
+            if year:
+                title_line += f" ({year})"
+            if issue.get("problemSeason") is not None:
+                try:
+                    s = int(issue["problemSeason"])
+                    e_raw = issue.get("problemEpisode")
+                    e = int(e_raw) if e_raw not in (None, "") else None
+                    title_line += " — " + (f"S{s:02d}E{e:02d}" if e else f"S{s:02d}")
+                except (TypeError, ValueError):
+                    pass
+        except Exception:
+            logger.exception("Failed to fetch media title for resolved #%d", issue_id)
+
+    lines = [f"✅ Your issue #{issue_id} was resolved."]
+    if title_line:
+        lines.append(html.escape(title_line))
+
+    try:
+        await app.bot.send_message(
+            chat_id=mapping.telegram_id,
+            text="\n".join(lines),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+        logger.info("Notified telegram_id=%d of resolved issue #%d",
+                    mapping.telegram_id, issue_id)
+    except Exception:
+        logger.exception(
+            "Failed to DM telegram_id=%d about resolved issue #%d",
+            mapping.telegram_id, issue_id,
+        )
+
+
+# Maps Seerr's issueType enum string to a (emoji, label) pair.
+_ISSUE_TYPE_LABELS = {
+    "VIDEO": ("🎥", "Video"),
+    "AUDIO": ("🔊", "Audio"),
+    "SUBTITLES": ("📝", "Subtitle"),
+    "SUBTITLE": ("📝", "Subtitle"),
+    "OTHER": ("❓", "Other"),
+}
+
+
+async def handle_seerr_reported(app: Application, payload: dict) -> None:
+    """Process an ISSUE_REPORTED webhook and DM the admin (if admin didn't
+    file it themselves)."""
+    issue = payload.get("issue") or {}
+    media = payload.get("media") or {}
+    description = (payload.get("message") or "").strip()
+
+    try:
+        issue_id = int(issue.get("issue_id"))
+    except (TypeError, ValueError):
+        logger.warning("Webhook reported: missing/invalid issue_id; dropping")
+        return
+
+    reporter_username = (issue.get("reportedBy_username") or "").strip()
+    if not reporter_username:
+        logger.info("Webhook reported on issue #%d: no reporter username; dropping", issue_id)
+        return
+
+    admin_id = app.bot_data.get("admin_id")
+    if not admin_id:
+        return
+
+    # Skip if admin filed it themselves -- they already saw the /issue confirmation
+    store: UserStore = app.bot_data["store"]
+    admin_mapping = store.get(admin_id)
+    if (admin_mapping and admin_mapping.plex_username
+            and admin_mapping.plex_username.lower() == reporter_username.lower()):
+        logger.info("ISSUE_REPORTED #%d filed by admin themselves; not DMing", issue_id)
+        return
+
+    # Build media title line
+    seerr: Optional[SeerrClient] = app.bot_data.get("seerr")
+    media_type = media.get("media_type") or ""
+    try:
+        tmdb_id = int(media.get("tmdbId") or 0)
+    except (TypeError, ValueError):
+        tmdb_id = 0
+    title_line = ""
+    if seerr and media_type in ("movie", "tv") and tmdb_id:
+        try:
+            title, year = await seerr.get_media_title(media_type, tmdb_id)
+            emoji = "🎬" if media_type == "movie" else "📺"
+            title_line = f"{emoji} {title}"
+            if year:
+                title_line += f" ({year})"
+        except Exception:
+            logger.exception("Failed to fetch media title for reported #%d", issue_id)
+
+    season_raw = issue.get("problemSeason")
+    episode_raw = issue.get("problemEpisode")
+    if title_line and season_raw is not None:
+        try:
+            s = int(season_raw)
+            e = int(episode_raw) if episode_raw not in (None, "") else None
+            title_line += f" — S{s:02d}E{e:02d}" if e else f" — S{s:02d}"
+        except (TypeError, ValueError):
+            pass
+
+    issue_type_str = (issue.get("issue_type") or "OTHER").upper()
+    type_emoji, type_label = _ISSUE_TYPE_LABELS.get(issue_type_str, ("❓", "Other"))
+
+    safe_reporter = html.escape(reporter_username)
+    safe_desc = html.escape(description) if description else "(no description)"
+    safe_title = html.escape(title_line) if title_line else "(unknown media)"
+
+    lines = [
+        f"🆕 New issue <b>#{issue_id}</b>",
+        "",
+        safe_title,
+        "",
+        f"<b>Issue type:</b> {type_emoji} {type_label}",
+        f"<b>Reported by:</b> {safe_reporter}",
+        f"<b>Status:</b> Open",
+        "",
+        f"<b>Description:</b>",
+        f"<i>\"{safe_desc}\"</i>",
+    ]
+
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("💬 Reply", callback_data=f"tkrmenu:{issue_id}"),
+        InlineKeyboardButton("🔧 Fix", callback_data=f"tkf:{issue_id}"),
+        InlineKeyboardButton("✅ Close", callback_data=f"tkc:{issue_id}"),
+    ]])
+
+    try:
+        await app.bot.send_message(
+            chat_id=admin_id,
+            text="\n".join(lines),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=kb,
+        )
+        logger.info("Notified admin of new issue #%d from '%s'", issue_id, reporter_username)
+    except Exception:
+        logger.exception("Failed to DM admin about new issue #%d", issue_id)
 
 
 async def _check_connections(app: Application) -> dict[str, str]:
@@ -567,9 +759,9 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             media_label = title + (f" ({year})" if year else "")
         if issue.media_type == "tv" and issue.problem_season:
             if issue.problem_episode:
-                media_label += f" S{issue.problem_season}E{issue.problem_episode}"
+                media_label += f" S{int(issue.problem_season):02d}E{int(issue.problem_episode):02d}"
             else:
-                media_label += f" S{issue.problem_season}"
+                media_label += f" S{int(issue.problem_season):02d}"
         age = _format_age(issue.created_at)
         line = f"#{issue.id} {emoji} {media_label} — {age}"
         if is_admin and issue.created_by:
@@ -618,11 +810,31 @@ def _token_for(ctx: ContextTypes.DEFAULT_TYPE, tg_id: int) -> tuple[bool, Option
 
 
 def _ticket_detail_kb(issue_id: int, is_admin: bool) -> InlineKeyboardMarkup:
-    row = [InlineKeyboardButton("💬 Reply", callback_data=f"tkr:{issue_id}")]
+    # Admin's top-level Reply opens a submenu (Reply / Close).
+    # User's top-level Reply goes straight to reply input.
+    reply_cb = f"tkrmenu:{issue_id}" if is_admin else f"tkr:{issue_id}"
+    row = [InlineKeyboardButton("💬 Reply", callback_data=reply_cb)]
     if is_admin:
         row.append(InlineKeyboardButton("🔧 Fix", callback_data=f"tkf:{issue_id}"))
         row.append(InlineKeyboardButton("✅ Close", callback_data=f"tkc:{issue_id}"))
     return InlineKeyboardMarkup([row])
+
+
+async def tk_reply_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin tapped top-level [Reply]. Opens [Reply] [Close] sub-menu."""
+    q = update.callback_query
+    await q.answer()
+    try:
+        issue_id = int(q.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        return
+    if update.effective_user.id != ctx.bot_data.get("admin_id"):
+        return
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("💬 Reply", callback_data=f"tkr:{issue_id}"),
+        InlineKeyboardButton("✅ Close", callback_data=f"tkcd:{issue_id}"),
+    ]])
+    await q.edit_message_text(f"Reply to ticket #{issue_id}?", reply_markup=kb)
 
 
 async def tk_open(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -662,10 +874,35 @@ async def tk_close_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Admin tapped [Fix]. Run the auto-fix delete+research flow on the
-    media tied to this ticket, and enqueue a pending-autofix record so
-    Hermes DMs when the new file lands.
-    """
+    """Admin tapped [Fix]. Opens the [Redownload] [Mark Failed] [Close] submenu."""
+    q = update.callback_query
+    await q.answer()
+    try:
+        issue_id = int(q.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        return
+    if update.effective_user.id != ctx.bot_data.get("admin_id"):
+        return
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔄 Redownload", callback_data=f"tkfd:{issue_id}"),
+        InlineKeyboardButton("🚫 Mark Failed", callback_data=f"tkfm:{issue_id}"),
+        InlineKeyboardButton("✅ Close", callback_data=f"tkcd:{issue_id}"),
+    ]])
+    await q.edit_message_text(f"🔧 Fix #{issue_id} — how?", reply_markup=kb)
+
+
+async def tk_fix_redownload(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Delete current file + trigger search."""
+    await _apply_fix(update, ctx, strategy="redownload")
+
+
+async def tk_fix_mark_failed(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Mark the most recent grab as failed → Radarr/Sonarr blocklists + re-searches."""
+    await _apply_fix(update, ctx, strategy="mark_failed")
+
+
+async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy: str) -> None:
+    """Shared admin-fix path. strategy is 'redownload' or 'mark_failed'."""
     q = update.callback_query
     await q.answer()
     try:
@@ -690,9 +927,15 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     tmdb_id = issue.tmdb_id
     season = issue.problem_season
     episode = issue.problem_episode
+    action_name = "Redownload" if strategy == "redownload" else "Mark Failed"
 
-    # Build the media dict shape _run_autofix expects. For TV we need
-    # tvdb_id; pull it from Seerr's /tv endpoint.
+    if media_type == "tv" and not episode:
+        await q.edit_message_text(
+            f"{action_name} only works on individual episodes or movies — not whole "
+            f"seasons or shows. For #{issue_id}, fix it in Sonarr directly."
+        )
+        return
+
     media: dict = {"type": media_type, "tmdb_id": tmdb_id}
     label_title = ""
     label_year = ""
@@ -707,17 +950,22 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception:
             logger.exception("get_tv_seasons failed for #%d", issue_id)
 
-    ok, detail, poll_info = await _run_autofix(media, season, episode, radarr, sonarr)
+    if strategy == "redownload":
+        ok, detail, poll_info = await _run_autofix(media, season, episode, radarr, sonarr)
+    else:  # mark_failed
+        ok, detail, poll_info = await _run_mark_failed(media, season, episode, radarr, sonarr)
+
     label = label_title + (f" ({label_year})" if label_year else "")
     if media_type == "tv" and season:
-        label += f" — S{season}E{episode}" if episode else f" — S{season} (whole season)"
+        label += (
+            f" — S{int(season):02d}E{int(episode):02d}"
+            if episode else f" — S{int(season):02d}"
+        )
 
     if not ok:
-        await q.edit_message_text(f"⚠️ Fix for #{issue_id} didn't run: {detail}")
+        await q.edit_message_text(f"⚠️ {action_name} for #{issue_id} didn't run: {detail}")
         return
 
-    # Enqueue completion-notification tracking so the admin gets a DM when the
-    # new file finishes downloading.
     try:
         kwargs: dict = {
             "chat_id": q.message.chat_id,
@@ -737,14 +985,14 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         store.add_pending_autofix(**kwargs)
         store.log_autofix(update.effective_user.id, media_type, tmdb_id, season=season, episode=episode)
         await q.edit_message_text(
-            f"🔧 Fix started for #{issue_id}.\n{label}\n\n"
+            f"🔧 {action_name} started for #{issue_id}.\n{label}\n\n"
             f"{detail}\n\n"
             "🔔 I'll DM when the new file finishes downloading."
         )
     except Exception:
         logger.exception("failed to enqueue pending autofix for #%d", issue_id)
         await q.edit_message_text(
-            f"🔧 Fix started for #{issue_id} ({detail}), but couldn't enqueue completion notification."
+            f"🔧 {action_name} started for #{issue_id} ({detail}), but couldn't enqueue completion notification."
         )
 
 
@@ -1357,10 +1605,16 @@ async def issue_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     allowlist: set[int] = ctx.bot_data.get("allowlist") or set()
     store: UserStore = ctx.bot_data["store"]
     tg_id = update.effective_user.id
+    media = ctx.user_data.get("media", {})
+    episode = ctx.user_data.get("episode")
+    # Whole-season / whole-show TV picks are not auto-fixable; only individual
+    # episodes or movies are.
+    is_whole_season = media.get("type") == "tv" and not episode
     eligible = (
         issue_type in AUTOFIX_ELIGIBLE_TYPES
         and tg_id in allowlist
         and _has_arr_for_media(ctx)
+        and not is_whole_season
     )
     if not eligible:
         return await _submit_issue(update, ctx, autofix=False)
@@ -1476,7 +1730,10 @@ async def _submit_issue(
     emoji, name = ISSUE_TYPES[issue_type]
     label = media["title"] + (f" ({media['year']})" if media.get("year") else "")
     if media["type"] == "tv":
-        label += f" — S{season}E{episode}" if episode else f" — S{season} (whole season)"
+        label += (
+            f" — S{int(season):02d}E{int(episode):02d}"
+            if episode else f" — S{int(season):02d} (whole season)"
+        )
 
     lines = [
         f"✅ Reported as issue #{created.id}",
@@ -1547,14 +1804,46 @@ async def _run_autofix(
         if media["type"] == "tv":
             if not sonarr:
                 return False, "Sonarr not configured.", None
+            if not episode:
+                # Whole-season / whole-show auto-fix is not supported -- too
+                # destructive. Episode-only.
+                return False, "Auto-fix only works on individual episodes, not whole seasons.", None
             tvdb_id = media.get("tvdb_id")
             if not tvdb_id:
                 return False, "Couldn't find TVDb ID for this show.", None
-            if episode:
-                return await sonarr.auto_fix_episode(tvdb_id, season, episode)
-            return await sonarr.auto_fix_season(tvdb_id, season)
+            return await sonarr.auto_fix_episode(tvdb_id, season, episode)
     except Exception as exc:
         logger.exception("auto_fix failed")
+        return False, str(exc), None
+    return False, "Unknown media type.", None
+
+
+async def _run_mark_failed(
+    media: dict,
+    season: Optional[int],
+    episode: Optional[int],
+    radarr: Optional[RadarrClient],
+    sonarr: Optional[SonarrClient],
+) -> tuple[bool, str, Optional[dict]]:
+    """Same shape as _run_autofix. Marks the current release as failed; Radarr
+    or Sonarr handles blocklist + new search automatically."""
+    try:
+        if media["type"] == "movie":
+            if not radarr:
+                return False, "Radarr not configured.", None
+            ok, msg, movie_id = await radarr.mark_failed(media["tmdb_id"])
+            return ok, msg, ({"movie_id": movie_id} if ok else None)
+        if media["type"] == "tv":
+            if not sonarr:
+                return False, "Sonarr not configured.", None
+            if not episode:
+                return False, "Mark Failed only works on individual episodes.", None
+            tvdb_id = media.get("tvdb_id")
+            if not tvdb_id:
+                return False, "Couldn't find TVDb ID for this show.", None
+            return await sonarr.mark_failed_episode(tvdb_id, season, episode)
+    except Exception as exc:
+        logger.exception("mark_failed failed")
         return False, str(exc), None
     return False, "Unknown media type.", None
 

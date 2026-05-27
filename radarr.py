@@ -81,3 +81,41 @@ class RadarrClient:
         r = await self._client.get(f"/movie/{movie_id}")
         r.raise_for_status()
         return bool(r.json().get("hasFile"))
+
+    async def mark_failed(self, tmdb_id: int) -> tuple[bool, str, Optional[int]]:
+        """Find the most recent grab record for this movie and mark it failed.
+        Radarr will blocklist the release and trigger a new search.
+        Returns (ok, message, radarr_movie_id).
+        """
+        movie = await self.get_movie_by_tmdb(tmdb_id)
+        if movie is None:
+            return False, "Movie isn't in Radarr (not monitored).", None
+        try:
+            r = await self._client.get(
+                "/history",
+                params={
+                    "movieId": movie.id,
+                    "page": 1,
+                    "pageSize": 20,
+                    "sortKey": "date",
+                    "sortDirection": "descending",
+                },
+            )
+            r.raise_for_status()
+        except Exception as exc:
+            return False, f"Couldn't fetch history: {exc}", None
+        records = r.json().get("records") or []
+        grab = next((rec for rec in records if rec.get("eventType") == "grabbed"), None)
+        if grab is None:
+            return False, "No download history to mark failed (no recent grab).", None
+        history_id = grab.get("id")
+        try:
+            r = await self._client.post(f"/history/failed/{history_id}")
+            r.raise_for_status()
+        except Exception as exc:
+            return False, f"Couldn't mark failed: {exc}", None
+        return (
+            True,
+            f"Marked current release of '{movie.title}' as failed. Radarr will blocklist it and search again.",
+            movie.id,
+        )

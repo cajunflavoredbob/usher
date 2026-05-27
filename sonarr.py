@@ -146,6 +146,50 @@ class SonarrClient:
             },
         )
 
+    async def mark_failed_episode(
+        self, tvdb_id: int, season: int, episode: int
+    ) -> tuple[bool, str, Optional[dict]]:
+        """Find the most recent grab for this episode and mark it failed.
+        Sonarr will blocklist the release and trigger a new search.
+        Returns (ok, message, poll_info).
+        """
+        series = await self.get_series_by_tvdb(tvdb_id)
+        if series is None:
+            return False, "Series isn't in Sonarr.", None
+        episodes = await self.get_episodes(series.id, season)
+        match = next((e for e in episodes if e.episode == episode), None)
+        if match is None:
+            return False, f"S{season:02d}E{episode:02d} not found in Sonarr.", None
+        try:
+            r = await self._client.get(
+                "/history",
+                params={
+                    "episodeId": match.id,
+                    "page": 1,
+                    "pageSize": 20,
+                    "sortKey": "date",
+                    "sortDirection": "descending",
+                },
+            )
+            r.raise_for_status()
+        except Exception as exc:
+            return False, f"Couldn't fetch history: {exc}", None
+        records = r.json().get("records") or []
+        grab = next((rec for rec in records if rec.get("eventType") == "grabbed"), None)
+        if grab is None:
+            return False, "No download history to mark failed (no recent grab).", None
+        history_id = grab.get("id")
+        try:
+            r = await self._client.post(f"/history/failed/{history_id}")
+            r.raise_for_status()
+        except Exception as exc:
+            return False, f"Couldn't mark failed: {exc}", None
+        return (
+            True,
+            f"Marked current release of '{series.title}' S{season:02d}E{episode:02d} as failed. Sonarr will blocklist it and search again.",
+            {"series_id": series.id, "episode_id": match.id},
+        )
+
     async def episode_has_file(self, episode_id: int) -> bool:
         r = await self._client.get(f"/episode/{episode_id}")
         r.raise_for_status()

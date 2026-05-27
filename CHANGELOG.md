@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-26
+
+### Added
+- **Admin DM on new issue.** When a user files a ticket, the admin gets a rich DM with media context, issue type, reporter, status, description, and inline action buttons. Skipped when the admin is the reporter (they already got the `/issue` confirmation).
+- **`ISSUE_REPORTED` webhook handler** in the receiver (alongside the existing `ISSUE_COMMENT` and `ISSUE_RESOLVED` dispatches). Requires "Issue Reported" enabled in Seerr → Notifications → Webhook.
+- **`SonarrClient.mark_failed_episode` / `RadarrClient.mark_failed`** — call the `*/history/failed/{historyId}` endpoint on the most recent grab record. Radarr/Sonarr handle the blocklist + new-search side effects automatically.
+- **`_run_mark_failed`** -- sibling of `_run_autofix`, routes movie vs episode to the right client method.
+
+### Changed
+- **Admin ticket detail now has 2-level menus** (matches the Close menu pattern that already existed):
+  - Top-level: `[💬 Reply] [🔧 Fix] [✅ Close]`
+  - **Reply sub-menu** (admin): `[💬 Reply]` (reply input) / `[✅ Close]` (close without comment, quick out)
+  - **Fix sub-menu** (admin): `[🔄 Redownload]` (delete + search, the old auto-fix behavior) / `[🚫 Mark Failed]` (NEW — Radarr/Sonarr blocklist + re-search) / `[✅ Close]` (quick out)
+  - **Close sub-menu** (admin, unchanged): `[💬 With comment]` / `[✓ Without comment]`
+  - Users still get a single-tap `[💬 Reply]` that goes straight to input (no sub-menu).
+- **Comment notification format** now uses an explicit `From:` line and `Comment:` label with blank-line spacing between sections.
+- **Episode formatting is zero-padded everywhere** (`S01E02` instead of `S1E2`) -- /tickets list, /issue confirmation, comment DM, resolved DM, new-issue admin DM, fix-started message.
+
+### Already in tree from v0.9.7 work (rolled up):
+- Whole-season / whole-show auto-fix is refused (episode or movie only).
+- `ISSUE_RESOLVED` webhook DMs the reporter when their ticket is closed.
+
+### Notes
+- Non-admin auto-fix from the `/issue` flow remains delete + search only; users do not get a `[Mark Failed]` option.
+- `sonarr.auto_fix_season` is still defined but unreferenced.
+
 ## [0.9.6] - 2026-05-26
 
 ### Added

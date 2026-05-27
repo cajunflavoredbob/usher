@@ -17,6 +17,8 @@ from aiohttp import web
 logger = logging.getLogger("hermes.webhook")
 
 CommentHandler = Callable[[dict], Awaitable[None]]
+ResolvedHandler = Callable[[dict], Awaitable[None]]
+ReportedHandler = Callable[[dict], Awaitable[None]]
 SecretProvider = Callable[[], str]
 
 
@@ -24,6 +26,8 @@ def attach_webhook(
     app: web.Application,
     *,
     on_comment: CommentHandler,
+    on_resolved: ResolvedHandler,
+    on_reported: ReportedHandler,
     secret_provider: SecretProvider,
 ) -> None:
     """Register POST /webhook/seerr and GET /healthz on the given app.
@@ -55,6 +59,20 @@ def attach_webhook(
                 await on_comment(payload)
             except Exception:
                 logger.exception("on_comment handler failed")
+                return web.Response(status=500, text="handler failed")
+            return web.Response(status=200, text="ok")
+        if nt == "ISSUE_RESOLVED":
+            try:
+                await on_resolved(payload)
+            except Exception:
+                logger.exception("on_resolved handler failed")
+                return web.Response(status=500, text="handler failed")
+            return web.Response(status=200, text="ok")
+        if nt == "ISSUE_REPORTED":
+            try:
+                await on_reported(payload)
+            except Exception:
+                logger.exception("on_reported handler failed")
                 return web.Response(status=500, text="handler failed")
             return web.Response(status=200, text="ok")
         logger.debug("Webhook received notification_type=%s (unhandled)", nt)
