@@ -1438,22 +1438,7 @@ async def issue_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     return TITLE
 
 
-def _format_search_button(label: str, max_len: int = 90) -> str:
-    """Allow longer button text by inserting a newline near the middle of
-    long labels. Telegram clients render \\n as a line break, doubling
-    effective width. Falls back to truncation past max_len.
-    """
-    label = label.strip()
-    if len(label) > max_len:
-        label = label[: max_len - 1].rstrip() + "…"
-    if len(label) <= 32:
-        return label
-    mid = len(label) // 2
-    spaces = [i for i, c in enumerate(label) if c == " "]
-    if not spaces:
-        return label
-    best = min(spaces, key=lambda i: abs(i - mid))
-    return label[:best] + "\n" + label[best + 1:]
+_KEYCAP_DIGITS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
 
 
 def _derive_parent_name(query: str) -> Optional[str]:
@@ -1489,30 +1474,63 @@ async def _show_search_results(
         await reply_method(f'No matches for "{query}". Try a different title, or /cancel.')
         return TITLE
 
-    rows = []
-    for r in results:
-        emoji = "🎬" if r.media_type == "movie" else "📺"
-        label = f"{emoji} {r.title}" + (f" ({r.year})" if r.year else "")
-        rows.append([InlineKeyboardButton(
-            _format_search_button(label),
-            callback_data=f"media:{r.media_type}:{r.tmdb_id}",
-        )])
+    # Build the message: numbered list with full titles, since Telegram can't
+    # show long titles in inline buttons reliably (no line-wrap on most clients).
+    lines = ["Pick which one:", ""]
+    for i, r in enumerate(results, start=1):
+        type_emoji = "🎬" if r.media_type == "movie" else "📺"
+        line = f"{i}. {type_emoji} {r.title}"
+        if r.year:
+            line += f" ({r.year})"
+        lines.append(line)
+
+    # Build the keyboard: keycap-emoji buttons (1️⃣ 2️⃣ …), 3 per row max.
+    # Three per row keeps each button wide enough to tap comfortably while
+    # also keeping the keyboard compact (5 results → 3+2 grid).
+    rows: list[list[InlineKeyboardButton]] = []
+    btn_row: list[InlineKeyboardButton] = []
+    for i, r in enumerate(results):
+        keycap = _KEYCAP_DIGITS[i] if i < len(_KEYCAP_DIGITS) else str(i + 1)
+        btn_row.append(InlineKeyboardButton(
+            keycap, callback_data=f"media:{r.media_type}:{r.tmdb_id}",
+        ))
+        if len(btn_row) == 3:
+            rows.append(btn_row)
+            btn_row = []
+    last_partial_row = btn_row  # may be empty or have 1-2 buttons
 
     # Parent-show re-search hint when nothing matched the library and the
-    # query has an obvious separator
+    # query has an obvious separator. Kept on its own full-width row since
+    # its label is much longer than a keycap.
     parent = None
     if all(r.seerr_media_id is None for r in results):
         parent = _derive_parent_name(query)
         if parent:
             ctx.user_data["research_parent"] = parent
-            rows.append([InlineKeyboardButton(
-                f'🔍 Search "{parent}" instead',
-                callback_data="research_parent",
-            )])
 
-    rows.append([InlineKeyboardButton("Cancel", callback_data="cancel")])
+    cancel_btn = InlineKeyboardButton("Cancel", callback_data="cancel")
+    if parent:
+        # Flush the last partial row, then parent on its own row, then Cancel.
+        if last_partial_row:
+            rows.append(last_partial_row)
+        rows.append([InlineKeyboardButton(
+            f'🔍 Search "{parent}" instead',
+            callback_data="research_parent",
+        )])
+        rows.append([cancel_btn])
+    else:
+        # No parent button -- append Cancel to the last partial row if there's
+        # room, else give it its own row.
+        if last_partial_row and len(last_partial_row) < 3:
+            last_partial_row.append(cancel_btn)
+            rows.append(last_partial_row)
+        else:
+            if last_partial_row:
+                rows.append(last_partial_row)
+            rows.append([cancel_btn])
+
     ctx.user_data["search_results"] = {(r.media_type, r.tmdb_id): r for r in results}
-    await reply_method("Pick which one:", reply_markup=InlineKeyboardMarkup(rows))
+    await reply_method("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
     return PICK_MEDIA
 
 

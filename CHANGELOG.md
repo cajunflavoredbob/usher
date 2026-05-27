@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-05-27
+
+### Changed
+- **Search-result buttons switched from title-as-label to keycap emoji buttons** (1️⃣ 2️⃣ 3️⃣ …) laid out 3 per row max. For 5 results this lands as `[1 2 3]` on the top row and `[4 5 Cancel]` on the bottom row (Cancel piggybacks on the last partial row when there's space). Full titles are now in the message body where Telegram can word-wrap them, so no more truncation regardless of title length. The `\n`-in-label trick from v0.10.1 didn't render as line breaks on iOS/Android Telegram clients (only Desktop seemed to honor it), so this is a cleaner path. Removed the now-dead `_format_search_button` helper.
+
 ## [0.10.1] - 2026-05-27
 
 ### Added
