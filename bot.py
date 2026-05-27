@@ -185,6 +185,7 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CallbackQueryHandler(tk_open, pattern=r"^tkopen:\d+$"))
     app.add_handler(CallbackQueryHandler(tk_close_menu, pattern=r"^tkc:\d+$"))
     app.add_handler(CallbackQueryHandler(tk_close_direct, pattern=r"^tkcd:\d+$"))
+    app.add_handler(CallbackQueryHandler(tk_fix, pattern=r"^tkf:\d+$"))
     app.add_handler(_ticket_conversation())
     # Link "Didn't work?" / "Having trouble?" callback. Fires outside the
     # link ConversationHandler so it can interrupt an in-progress poll.
@@ -619,6 +620,7 @@ def _token_for(ctx: ContextTypes.DEFAULT_TYPE, tg_id: int) -> tuple[bool, Option
 def _ticket_detail_kb(issue_id: int, is_admin: bool) -> InlineKeyboardMarkup:
     row = [InlineKeyboardButton("💬 Reply", callback_data=f"tkr:{issue_id}")]
     if is_admin:
+        row.append(InlineKeyboardButton("🔧 Fix", callback_data=f"tkf:{issue_id}"))
         row.append(InlineKeyboardButton("✅ Close", callback_data=f"tkc:{issue_id}"))
     return InlineKeyboardMarkup([row])
 
@@ -657,6 +659,93 @@ async def tk_close_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         InlineKeyboardButton("✓ Without comment", callback_data=f"tkcd:{issue_id}"),
     ]])
     await q.edit_message_text(f"Close ticket #{issue_id}?", reply_markup=kb)
+
+
+async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin tapped [Fix]. Run the auto-fix delete+research flow on the
+    media tied to this ticket, and enqueue a pending-autofix record so
+    Hermes DMs when the new file lands.
+    """
+    q = update.callback_query
+    await q.answer()
+    try:
+        issue_id = int(q.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        return
+    if update.effective_user.id != ctx.bot_data.get("admin_id"):
+        return
+    seerr: SeerrClient = ctx.bot_data["seerr"]
+    radarr: Optional[RadarrClient] = ctx.bot_data.get("radarr")
+    sonarr: Optional[SonarrClient] = ctx.bot_data.get("sonarr")
+    store: UserStore = ctx.bot_data["store"]
+
+    try:
+        issue = await seerr.get_issue(issue_id)
+    except Exception as exc:
+        logger.exception("get_issue failed for #%d", issue_id)
+        await q.edit_message_text(f"Couldn't fetch ticket #{issue_id}: {exc}")
+        return
+
+    media_type = issue.media_type
+    tmdb_id = issue.tmdb_id
+    season = issue.problem_season
+    episode = issue.problem_episode
+
+    # Build the media dict shape _run_autofix expects. For TV we need
+    # tvdb_id; pull it from Seerr's /tv endpoint.
+    media: dict = {"type": media_type, "tmdb_id": tmdb_id}
+    label_title = ""
+    label_year = ""
+    try:
+        label_title, label_year = await seerr.get_media_title(media_type, tmdb_id)
+    except Exception:
+        logger.exception("get_media_title failed for #%d", issue_id)
+    if media_type == "tv":
+        try:
+            _seasons, tvdb_id = await seerr.get_tv_seasons(tmdb_id)
+            media["tvdb_id"] = tvdb_id
+        except Exception:
+            logger.exception("get_tv_seasons failed for #%d", issue_id)
+
+    ok, detail, poll_info = await _run_autofix(media, season, episode, radarr, sonarr)
+    label = label_title + (f" ({label_year})" if label_year else "")
+    if media_type == "tv" and season:
+        label += f" — S{season}E{episode}" if episode else f" — S{season} (whole season)"
+
+    if not ok:
+        await q.edit_message_text(f"⚠️ Fix for #{issue_id} didn't run: {detail}")
+        return
+
+    # Enqueue completion-notification tracking so the admin gets a DM when the
+    # new file finishes downloading.
+    try:
+        kwargs: dict = {
+            "chat_id": q.message.chat_id,
+            "user_id": update.effective_user.id,
+            "media_type": media_type,
+            "label": label or f"#{issue_id}",
+            "issue_id": issue_id,
+            "issue_url": "",
+        }
+        if media_type == "movie" and poll_info:
+            kwargs["radarr_movie_id"] = poll_info.get("movie_id")
+        elif media_type == "tv" and poll_info:
+            kwargs["sonarr_series_id"] = poll_info.get("series_id")
+            kwargs["sonarr_episode_id"] = poll_info.get("episode_id")
+            kwargs["sonarr_season"] = poll_info.get("season")
+            kwargs["expected_episode_ids"] = poll_info.get("expected_episode_ids") or []
+        store.add_pending_autofix(**kwargs)
+        store.log_autofix(update.effective_user.id, media_type, tmdb_id, season=season, episode=episode)
+        await q.edit_message_text(
+            f"🔧 Fix started for #{issue_id}.\n{label}\n\n"
+            f"{detail}\n\n"
+            "🔔 I'll DM when the new file finishes downloading."
+        )
+    except Exception:
+        logger.exception("failed to enqueue pending autofix for #%d", issue_id)
+        await q.edit_message_text(
+            f"🔧 Fix started for #{issue_id} ({detail}), but couldn't enqueue completion notification."
+        )
 
 
 async def tk_close_direct(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -863,24 +952,6 @@ async def _poll_with_cancel(plex: PlexClient, pin_id: int, max_iters: int,
     return None
 
 
-def _emoji_code(code: str) -> str:
-    """Render a short auth code as one large emoji-sized character per
-    position. Digits become keycap emojis; letters become Negative Squared
-    Latin Capital Letters (the 🅐-🅩 range, which renders at full emoji
-    size on Telegram across iOS / Android / Desktop / Web).
-    """
-    parts: list[str] = []
-    for c in code.upper():
-        if c.isdigit():
-            parts.append(f"{c}️⃣")  # digit + variation selector + keycap
-        elif "A" <= c <= "Z":
-            # Negative Squared Latin Capital Letter A starts at U+1F150
-            parts.append(chr(0x1F150 + (ord(c) - ord("A"))))
-        else:
-            parts.append(c)
-    return " ".join(parts)
-
-
 async def _finalize_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                          auth_token: str) -> None:
     """Shared post-auth path: Seerr login + persist mapping + success/failure reply."""
@@ -999,16 +1070,20 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     loop_id = secrets.token_hex(8)
     ctx.user_data["link_active_loop"] = loop_id
 
-    big_code = _emoji_code(pin.code)
+    code = pin.code.upper()
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("📋 Copy plex.tv/link",
                              copy_text=CopyTextButton(text="https://plex.tv/link")),
     ]])
     # Tell the user to tap the copy button. Don't mention plex.tv/link in the
-    # body text -- Telegram would auto-link it AND show a preview card.
+    # body text -- Telegram would auto-link it AND show a preview card. The
+    # trailing line gives breathing room above the inline button.
     await q.edit_message_text(
-        f"Enter this code in the page from the button below:\n\n{big_code}",
+        f"Enter this code in the page from the button below:\n\n"
+        f"*{code}*\n\n"
+        f"Code expires in 15 minutes.",
         reply_markup=kb,
+        parse_mode="Markdown",
         disable_web_page_preview=True,
     )
 

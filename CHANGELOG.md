@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.6] - 2026-05-26
+
+### Added
+- **Admin `[🔧 Fix]` button on the ticket detail.** Admin ticket actions are now `[💬 Reply] [🔧 Fix] [✅ Close]`. Fix triggers the auto-fix delete-and-research flow on the media the ticket is about (movie via Radarr, TV episode/season via Sonarr), and enqueues a pending-autofix record so the admin gets a DM when the new file finishes downloading.
+- `SeerrClient.get_issue(id)` for fetching a single ticket's details (needed to know what media + S/E to fix).
+
+### Changed
+- Auth code now renders as plain bold text (e.g. **ABCD**) instead of the emoji-sized squared letters. Added a blank line under the code plus a "Code expires in 15 minutes." line as filler so the code has breathing room above the inline button (Telegram strips trailing blank lines otherwise).
+- Removed the now-unused `_emoji_code` helper.
+
 ## [0.9.5] - 2026-05-26
 
 ### Changed

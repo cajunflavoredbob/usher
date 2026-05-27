@@ -230,6 +230,39 @@ class SeerrClient:
             ))
         return out
 
+    async def get_issue(
+        self,
+        issue_id: int,
+        *,
+        as_plex_token: Optional[str] = None,
+    ) -> IssueListItem:
+        """Fetch a single issue by id. Same shape as list_issues entries."""
+        if as_plex_token:
+            client = await self._as_user(as_plex_token)
+            try:
+                r = await client.get(f"/issue/{issue_id}")
+                r.raise_for_status()
+                d = r.json()
+            finally:
+                await client.aclose()
+        else:
+            r = await self._client.get(f"/issue/{issue_id}")
+            r.raise_for_status()
+            d = r.json()
+        media = d.get("media") or {}
+        created_by = d.get("createdBy") or {}
+        return IssueListItem(
+            id=d["id"],
+            issue_type=d.get("issueType", 4),
+            status=d.get("status", 0),
+            created_at=d.get("createdAt", ""),
+            tmdb_id=media.get("tmdbId", 0),
+            media_type=media.get("mediaType", ""),
+            problem_season=d.get("problemSeason"),
+            problem_episode=d.get("problemEpisode"),
+            created_by=created_by.get("displayName") or created_by.get("plexUsername") or "?",
+        )
+
     async def get_media_title(self, media_type: str, tmdb_id: int) -> tuple[str, str]:
         """Returns (title, year). Year may be empty string."""
         endpoint = "movie" if media_type == "movie" else "tv"
