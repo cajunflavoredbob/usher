@@ -174,19 +174,22 @@ class SeerrClient:
             skip += page_size
 
     async def get_tv_seasons(self, tmdb_id: int) -> tuple[list[TvSeason], Optional[int]]:
-        """Return (seasons, tvdb_id) for a TV show. Excludes season 0 (specials)."""
+        """Return (seasons, tvdb_id) for a TV show. Includes season 0
+        (rendered as 'Specials') because anime movies / OVAs / tie-in
+        specials often live there and users need to report issues on them."""
         r = await self._client.get(f"/tv/{tmdb_id}")
         r.raise_for_status()
         data = r.json()
         seasons: list[TvSeason] = []
         for s in data.get("seasons", []):
             n = s.get("seasonNumber")
-            if n is None or n == 0:
-                continue  # skip Specials by default
+            if n is None:
+                continue
+            default_name = "Specials" if n == 0 else f"Season {n}"
             seasons.append(TvSeason(
                 season_number=n,
                 episode_count=s.get("episodeCount", 0),
-                name=s.get("name") or f"Season {n}",
+                name=s.get("name") or default_name,
             ))
         external = data.get("externalIds") or {}
         tvdb_id = external.get("tvdbId")

@@ -68,14 +68,18 @@ def attach_webhook(
                 logger.exception("on_resolved handler failed")
                 return web.Response(status=500, text="handler failed")
             return web.Response(status=200, text="ok")
-        if nt == "ISSUE_REPORTED":
+        # Seerr's enum names the event ISSUE_CREATED in the payload (despite
+        # the UI labeling it "Issue Reported"). Accept both spellings just in
+        # case a fork or future version uses ISSUE_REPORTED.
+        if nt in ("ISSUE_CREATED", "ISSUE_REPORTED"):
             try:
                 await on_reported(payload)
             except Exception:
                 logger.exception("on_reported handler failed")
                 return web.Response(status=500, text="handler failed")
             return web.Response(status=200, text="ok")
-        logger.debug("Webhook received notification_type=%s (unhandled)", nt)
+        # Surface unknown events at INFO so we have visibility into payload variants.
+        logger.info("Webhook received notification_type=%s (unhandled)", nt)
         return web.Response(status=200, text="ok")
 
     async def health(_request: web.Request) -> web.Response:

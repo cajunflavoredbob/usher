@@ -52,6 +52,7 @@ from plex import PlexClient
 from webhook import attach_webhook, start_http_server
 from webui import attach_webui
 from settings import SettingsStore, load_or_create_session_secret
+from _version import __version__ as HERMES_VERSION
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s | %(message)s",
@@ -279,7 +280,7 @@ async def _post_init(app: Application) -> None:
     else:
         admin_url = f"http://<host>:{app.bot_data['http_port']}/admin"
     msg = (
-        "👋 Bot is online.\n\n"
+        f"👋 Hermes v{HERMES_VERSION} is online.\n\n"
         f"{_format_status(summary)}\n\n"
         f"Admin UI: {admin_url}\n"
         "Run `/link` to authorize with Plex (per-user issue attribution)."
@@ -430,10 +431,9 @@ async def handle_seerr_resolved(app: Application, payload: dict) -> None:
     mapping = store.find_by_plex_username(reporter_username)
     if mapping is None:
         logger.info(
-            "Webhook resolved on issue #%d: reporter '%s' not linked in Hermes; dropping",
+            "Webhook resolved on issue #%d: reporter '%s' not linked in Hermes",
             issue_id, reporter_username,
         )
-        return
 
     # Best-effort media context for a richer message
     title_line = ""
@@ -462,25 +462,50 @@ async def handle_seerr_resolved(app: Application, payload: dict) -> None:
         except Exception:
             logger.exception("Failed to fetch media title for resolved #%d", issue_id)
 
-    lines = [f"✅ Your issue #{issue_id} was resolved."]
-    if title_line:
-        lines.append(html.escape(title_line))
+    safe_title = html.escape(title_line) if title_line else ""
+    safe_reporter = html.escape(reporter_username)
+    admin_id = app.bot_data.get("admin_id")
 
-    try:
-        await app.bot.send_message(
-            chat_id=mapping.telegram_id,
-            text="\n".join(lines),
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-        )
-        logger.info("Notified telegram_id=%d of resolved issue #%d",
-                    mapping.telegram_id, issue_id)
-    except Exception:
-        logger.exception(
-            "Failed to DM telegram_id=%d about resolved issue #%d",
-            mapping.telegram_id, issue_id,
-        )
+    # DM the reporter (if they're linked)
+    if mapping is not None:
+        reporter_lines = [f"✅ Your issue #{issue_id} was resolved."]
+        if safe_title:
+            reporter_lines.append(safe_title)
+        try:
+            await app.bot.send_message(
+                chat_id=mapping.telegram_id,
+                text="\n".join(reporter_lines),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+            logger.info("Notified telegram_id=%d of resolved issue #%d",
+                        mapping.telegram_id, issue_id)
+        except Exception:
+            logger.exception(
+                "Failed to DM telegram_id=%d about resolved issue #%d",
+                mapping.telegram_id, issue_id,
+            )
 
+    # Also DM the admin (unless admin IS the reporter)
+    if admin_id and (mapping is None or mapping.telegram_id != admin_id):
+        admin_lines = [f"✅ Issue #{issue_id} resolved"]
+        if safe_title:
+            admin_lines.append(safe_title)
+        admin_lines.append(f"<b>Reported by:</b> {safe_reporter}")
+        try:
+            await app.bot.send_message(
+                chat_id=admin_id,
+                text="\n".join(admin_lines),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+            logger.info("Notified admin of resolved issue #%d (reported by '%s')",
+                        issue_id, reporter_username)
+        except Exception:
+            logger.exception(
+                "Failed to DM admin about resolved issue #%d",
+                issue_id,
+            )
 
 # Maps Seerr's issueType enum string to a (emoji, label) pair.
 _ISSUE_TYPE_LABELS = {
@@ -1375,7 +1400,10 @@ def _issue_conversation() -> ConversationHandler:
         entry_points=[CommandHandler("issue", issue_start)],
         states={
             TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, issue_title)],
-            PICK_MEDIA: [CallbackQueryHandler(issue_pick_media, pattern=r"^media:")],
+            PICK_MEDIA: [
+                CallbackQueryHandler(issue_pick_media, pattern=r"^media:"),
+                CallbackQueryHandler(issue_research_parent, pattern=r"^research_parent$"),
+            ],
             PICK_SEASON: [CallbackQueryHandler(issue_pick_season, pattern=r"^season:")],
             PICK_EPISODE: [CallbackQueryHandler(issue_pick_episode, pattern=r"^ep:")],
             PICK_TYPE: [CallbackQueryHandler(issue_pick_type, pattern=r"^type:")],
@@ -1410,32 +1438,98 @@ async def issue_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     return TITLE
 
 
-async def issue_title(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.effective_message.text.strip()
+def _format_search_button(label: str, max_len: int = 90) -> str:
+    """Allow longer button text by inserting a newline near the middle of
+    long labels. Telegram clients render \\n as a line break, doubling
+    effective width. Falls back to truncation past max_len.
+    """
+    label = label.strip()
+    if len(label) > max_len:
+        label = label[: max_len - 1].rstrip() + "…"
+    if len(label) <= 32:
+        return label
+    mid = len(label) // 2
+    spaces = [i for i, c in enumerate(label) if c == " "]
+    if not spaces:
+        return label
+    best = min(spaces, key=lambda i: abs(i - mid))
+    return label[:best] + "\n" + label[best + 1:]
+
+
+def _derive_parent_name(query: str) -> Optional[str]:
+    """If query contains a title separator (' - ', ' — ', ' | ', ': '),
+    return the part before the first one. Used to suggest a parent-show
+    search when a movie title query returned no library matches."""
+    for sep in [" - ", " — ", " | ", ": "]:
+        if sep in query:
+            parent = query.split(sep, 1)[0].strip()
+            if len(parent) >= 3 and parent.lower() != query.strip().lower():
+                return parent
+    return None
+
+
+async def _show_search_results(
+    reply_method,
+    ctx: ContextTypes.DEFAULT_TYPE,
+    query: str,
+) -> int:
+    """Run a Seerr search for `query`, render the results as a list of
+    title-buttons, and append a parent-show re-search button if no result
+    is in Seerr's library. `reply_method` is an awaitable accepting
+    (text, reply_markup=...) -- usually `message.reply_text` for new
+    messages or `query.edit_message_text` for edits."""
     seerr: SeerrClient = ctx.bot_data["seerr"]
     try:
         results = await seerr.search(query, limit=5)
     except Exception as exc:
         logger.exception("search failed")
-        await update.effective_message.reply_text(f"Search failed: {exc}")
+        await reply_method(f"Search failed: {exc}")
         return ConversationHandler.END
     if not results:
-        await update.effective_message.reply_text(
-            "No matches. Try a different title, or /cancel."
-        )
+        await reply_method(f'No matches for "{query}". Try a different title, or /cancel.')
         return TITLE
+
     rows = []
     for r in results:
         emoji = "🎬" if r.media_type == "movie" else "📺"
         label = f"{emoji} {r.title}" + (f" ({r.year})" if r.year else "")
-        rows.append([InlineKeyboardButton(label[:60], callback_data=f"media:{r.media_type}:{r.tmdb_id}")])
+        rows.append([InlineKeyboardButton(
+            _format_search_button(label),
+            callback_data=f"media:{r.media_type}:{r.tmdb_id}",
+        )])
+
+    # Parent-show re-search hint when nothing matched the library and the
+    # query has an obvious separator
+    parent = None
+    if all(r.seerr_media_id is None for r in results):
+        parent = _derive_parent_name(query)
+        if parent:
+            ctx.user_data["research_parent"] = parent
+            rows.append([InlineKeyboardButton(
+                f'🔍 Search "{parent}" instead',
+                callback_data="research_parent",
+            )])
+
     rows.append([InlineKeyboardButton("Cancel", callback_data="cancel")])
     ctx.user_data["search_results"] = {(r.media_type, r.tmdb_id): r for r in results}
-    await update.effective_message.reply_text(
-        "Pick which one:",
-        reply_markup=InlineKeyboardMarkup(rows),
-    )
+    await reply_method("Pick which one:", reply_markup=InlineKeyboardMarkup(rows))
     return PICK_MEDIA
+
+
+async def issue_title(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.effective_message.text.strip()
+    return await _show_search_results(update.effective_message.reply_text, ctx, query)
+
+
+async def issue_research_parent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Re-run the search with the parent show name derived from the prior query."""
+    q = update.callback_query
+    await q.answer()
+    parent = ctx.user_data.get("research_parent")
+    if not parent:
+        await q.edit_message_text("Lost search context. /issue to start over.")
+        return ConversationHandler.END
+    return await _show_search_results(q.edit_message_text, ctx, parent)
 
 
 async def issue_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1449,11 +1543,24 @@ async def issue_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
         return ConversationHandler.END
     selected = ctx.user_data.get("search_results", {}).get((media_type, tmdb_id))
     if selected is None or selected.seerr_media_id is None:
+        parent = ctx.user_data.get("research_parent")
+        text = "That title isn't in Seerr's library yet (no Plex match / no prior request)."
+        rows: list[list[InlineKeyboardButton]] = []
+        if parent:
+            text += (
+                "\n\nIf this might be a special or movie of an existing show, "
+                "try searching for the show:"
+            )
+            rows.append([InlineKeyboardButton(
+                f'🔍 Search "{parent}" instead',
+                callback_data="research_parent",
+            )])
+        text += "\n\nOr /issue to start over."
         await q.edit_message_text(
-            "That title isn't in Seerr's library yet (no Plex match / no prior request). "
-            "Request it via Seerr first, then come back. /issue to start over."
+            text,
+            reply_markup=InlineKeyboardMarkup(rows) if rows else None,
         )
-        return ConversationHandler.END
+        return PICK_MEDIA if parent else ConversationHandler.END
     ctx.user_data["media"] = {
         "type": media_type,
         "tmdb_id": tmdb_id,
