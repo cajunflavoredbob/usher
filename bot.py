@@ -833,16 +833,16 @@ async def cmd_link_consent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
         await q.edit_message_text(f"Couldn't start Plex auth: {exc}")
         return ConversationHandler.END
     await q.edit_message_text(
-        "Authorize Hermes in Plex (waiting up to ~28 minutes):\n\n"
+        "Authorize Hermes in Plex (waiting up to ~14 minutes):\n\n"
         f"Tap this link:\n{pin.auth_url}\n\n"
-        f"OR if the link doesn't show an Allow screen (common on mobile when the Plex app is installed),\n"
+        "OR if the link doesn't show an Allow screen (common on mobile when the Plex app is installed),\n"
         f"go to https://plex.tv/link and enter the code:\n\n*{pin.code.upper()}*",
         parse_mode="Markdown",
         disable_web_page_preview=True,
     )
-    # Poll Plex for completion. 560 × 3s = 28 min, just under the PIN's 30-min lifetime.
+    # Poll Plex for completion. 280 × 3s = 14 min, just under the short PIN's 15-min lifetime.
     auth_token: Optional[str] = None
-    for _ in range(560):
+    for _ in range(280):
         await asyncio.sleep(3)
         try:
             auth_token = await plex.poll_pin(pin.id)

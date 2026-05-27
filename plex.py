@@ -69,7 +69,10 @@ class PlexClient:
         return cid
 
     async def request_pin(self) -> PlexPin:
-        r = await self._http.post(f"{PLEX_API_BASE}/pins", params={"strong": "true"})
+        # strong=false returns a 4-char human-friendly code that works at
+        # plex.tv/link (the manual entry fallback). The shorter window
+        # (~15 min vs 30 min for strong PINs) is the trade-off.
+        r = await self._http.post(f"{PLEX_API_BASE}/pins", params={"strong": "false"})
         r.raise_for_status()
         d = r.json()
         pin_id = d["id"]

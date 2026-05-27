@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-05-26
+
+### Fixed
+- **`plex.tv/link` fallback now actually works.** v0.9.1 displayed the PIN code from a `strong=true` Plex request, which returns a 25-char hash that `plex.tv/link` rejects. Switched to `strong=false` so we get the 4-char human-friendly code that `plex.tv/link` expects. The deeplink auth URL still works the same way.
+
+### Changed
+- PIN poll window shortened from ~28 minutes to ~14 minutes to match the shorter 15-minute lifetime of `strong=false` PINs.
+
 ## [0.9.1] - 2026-05-26
 
 ### Fixed
