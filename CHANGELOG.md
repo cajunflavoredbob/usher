@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-05-26
+
+### Fixed
+- **Polling loop race when user tapped "Didn't work?" mid-poll.** The cancel-flag pattern in v0.9.3 had a set-true-then-reset-false sequence around the `await request_pin(...)` call. The old poll's sleep could outlast the flag's True state, miss it, then see the reset-to-False, and keep running. Two concurrent polls hit Plex's rate limit (429 Too Many Requests) and probably caused the spurious 400 some testers saw on `request_pin`. Replaced the boolean flag with a per-loop random `loop_id`; new loops claim the slot, old loops bail when their ID no longer matches. No reset, no race.
+- **Plex `request_pin` now logs the response body on HTTP errors** so future "400 Bad Request" reports include Plex's actual error message in the log.
+
+### Changed
+- **Weak-PIN fallback message redesigned:**
+  - Code rendered as big bold characters (Mathematical Bold for letters, keycap emojis for digits) — visible from across the room.
+  - `disable_web_page_preview=True` so no Plex preview card.
+  - Removed "plex.tv/link" from the message body to kill Telegram's auto-linking; the URL only appears in the `[📋 Copy plex.tv/link]` button label. Users tap the button, paste in a browser, then type the short code from memory.
+
 ## [0.9.3] - 2026-05-26
 
 ### Changed

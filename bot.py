@@ -18,6 +18,7 @@ from __future__ import annotations
 import html
 import logging
 import os
+import secrets
 import sys
 from pathlib import Path
 from typing import Final, Optional
@@ -841,22 +842,43 @@ async def cmd_link_consent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
 
 
 async def _poll_with_cancel(plex: PlexClient, pin_id: int, max_iters: int,
-                            ctx: ContextTypes.DEFAULT_TYPE) -> Optional[str]:
-    """Poll Plex until a token is returned, the loop is cancelled, or max_iters
-    is exhausted. Returns the token on success, None otherwise."""
+                            ctx: ContextTypes.DEFAULT_TYPE, loop_id: str) -> Optional[str]:
+    """Poll Plex until a token is returned, this loop is superseded by a newer
+    one (link_active_loop changes), or max_iters is exhausted. The loop_id
+    pattern is race-free: a new loop overwrites link_active_loop, and any
+    older loops bail on their next check. No reset is needed.
+    """
     for _ in range(max_iters):
-        if ctx.user_data.get("link_cancel"):
+        if ctx.user_data.get("link_active_loop") != loop_id:
             return None
         await asyncio.sleep(3)
         try:
             token = await plex.poll_pin(pin_id)
             if token:
-                if ctx.user_data.get("link_cancel"):
+                if ctx.user_data.get("link_active_loop") != loop_id:
                     return None
                 return token
         except Exception:
             logger.exception("poll_pin failed (will retry)")
     return None
+
+
+def _emoji_code(code: str) -> str:
+    """Render a short auth code as one big visible character per position.
+    Digits become keycap emojis; letters become Mathematical Bold letters
+    (which look big but won't accidentally form country flags the way
+    regional indicator pairs can).
+    """
+    parts: list[str] = []
+    for c in code.upper():
+        if c.isdigit():
+            parts.append(f"{c}️⃣")  # digit + variation selector + keycap
+        elif "A" <= c <= "Z":
+            # Mathematical Bold Capital A starts at U+1D400
+            parts.append(chr(0x1D400 + (ord(c) - ord("A"))))
+        else:
+            parts.append(c)
+    return "   ".join(parts)
 
 
 async def _finalize_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
@@ -921,7 +943,8 @@ async def cmd_link_platform(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
         await q.edit_message_text(f"Couldn't start Plex auth: {exc}")
         return ConversationHandler.END
 
-    ctx.user_data["link_cancel"] = False
+    loop_id = secrets.token_hex(8)
+    ctx.user_data["link_active_loop"] = loop_id
 
     if platform == "desktop":
         kb = InlineKeyboardMarkup([
@@ -940,10 +963,10 @@ async def cmd_link_platform(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     await q.edit_message_text(text, reply_markup=kb)
 
     # Strong PIN window: ~28 min (560 × 3s, under the 30-min lifetime).
-    auth_token = await _poll_with_cancel(plex, pin.id, max_iters=560, ctx=ctx)
+    auth_token = await _poll_with_cancel(plex, pin.id, max_iters=560, ctx=ctx, loop_id=loop_id)
     if auth_token is None:
-        if ctx.user_data.get("link_cancel"):
-            # cmd_link_didnt_work has taken ownership; exit silently
+        if ctx.user_data.get("link_active_loop") != loop_id:
+            # A newer loop (didnt_work fallback) has taken ownership; exit silently
             return ConversationHandler.END
         await q.edit_message_text("⏱️ Plex auth timed out. /link to try again.")
         return ConversationHandler.END
@@ -963,9 +986,6 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     q = update.callback_query
     await q.answer()
 
-    # Cancel the strong-PIN poll if one is running
-    ctx.user_data["link_cancel"] = True
-
     plex: PlexClient = ctx.bot_data["plex"]
     try:
         pin = await plex.request_pin(strong=False)
@@ -974,26 +994,29 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         await q.edit_message_text(f"Couldn't get a fresh code: {exc}")
         return
 
-    # Reset the flag for the new polling cycle
-    ctx.user_data["link_cancel"] = False
+    # Claim a new loop ID -- any prior poll will see this and exit on its
+    # next check. No race because there's no reset-after-set sequence.
+    loop_id = secrets.token_hex(8)
+    ctx.user_data["link_active_loop"] = loop_id
 
-    code = pin.code.upper()
+    big_code = _emoji_code(pin.code)
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("📋 Copy plex.tv/link",
                              copy_text=CopyTextButton(text="https://plex.tv/link")),
     ]])
+    # Tell the user to tap the copy button. Don't mention plex.tv/link in the
+    # body text -- Telegram would auto-link it AND show a preview card.
     await q.edit_message_text(
-        "Enter this code at plex.tv/link:\n\n"
-        f"```\n{code}\n```",
+        f"Enter this code in the page from the button below:\n\n{big_code}",
         reply_markup=kb,
-        parse_mode="Markdown",
+        disable_web_page_preview=True,
     )
 
     # Weak PIN window: ~14 min (280 × 3s, under the 15-min lifetime).
-    auth_token = await _poll_with_cancel(plex, pin.id, max_iters=280, ctx=ctx)
+    auth_token = await _poll_with_cancel(plex, pin.id, max_iters=280, ctx=ctx, loop_id=loop_id)
     if auth_token is None:
-        if ctx.user_data.get("link_cancel"):
-            return  # another invocation of didnt_work cancelled us
+        if ctx.user_data.get("link_active_loop") != loop_id:
+            return  # superseded by another loop
         await q.edit_message_text("⏱️ Plex auth timed out. /link to try again.")
         return
 

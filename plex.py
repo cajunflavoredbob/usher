@@ -76,7 +76,13 @@ class PlexClient:
             f"{PLEX_API_BASE}/pins",
             params={"strong": "true" if strong else "false"},
         )
-        r.raise_for_status()
+        if r.status_code >= 400:
+            # Log the response body so we can see Plex's actual error message
+            logger.error(
+                "Plex /pins POST failed: HTTP %d body=%r",
+                r.status_code, r.text[:500],
+            )
+            r.raise_for_status()
         d = r.json()
         pin_id = d["id"]
         code = d["code"]
