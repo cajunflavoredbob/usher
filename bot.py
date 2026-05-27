@@ -280,7 +280,7 @@ async def _post_init(app: Application) -> None:
     else:
         admin_url = f"http://<host>:{app.bot_data['http_port']}/admin"
     msg = (
-        f"👋 Hermes v{HERMES_VERSION} is online.\n\n"
+        "👋 Bot is online.\n\n"
         f"{_format_status(summary)}\n\n"
         f"Admin UI: {admin_url}\n"
         "Run `/link` to authorize with Plex (per-user issue attribution)."
@@ -616,7 +616,7 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
 
 async def _check_connections(app: Application) -> dict[str, str]:
     """Probe configured services. Returns dict of service -> status string."""
-    out: dict[str, str] = {}
+    out: dict[str, str] = {"Hermes": f"✅ {HERMES_VERSION}"}
     seerr: Optional[SeerrClient] = app.bot_data.get("seerr")
     if seerr is None:
         out["Seerr"] = "— not configured"

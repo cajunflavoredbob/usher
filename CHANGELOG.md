@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-05-27
+
+### Changed
+- Hermes version now reported in the "Bot is online" status block as a regular bullet alongside Seerr/Radarr/Sonarr (e.g. `• Hermes: ✅ 0.10.3`) instead of being prefixed to the header line. Consistent style with the other services.
+
 ## [0.10.2] - 2026-05-27
 
 ### Changed
