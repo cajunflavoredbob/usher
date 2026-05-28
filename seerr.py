@@ -53,6 +53,10 @@ class IssueListItem:
     problem_season: Optional[int]
     problem_episode: Optional[int]
     created_by: str            # displayName
+    description: str = ""      # Original issue text; populated by get_issue (Seerr stores it
+                               # as the first entry in the issue's comments array). May be
+                               # empty for IssueListItems returned by list_issues, which
+                               # doesn't include comments.
 
 
 class SeerrClient:
@@ -254,6 +258,13 @@ class SeerrClient:
             d = r.json()
         media = d.get("media") or {}
         created_by = d.get("createdBy") or {}
+        # The original report text is stored as the first comment in the
+        # issue's comments array (Seerr posts the description there at creation).
+        description = ""
+        comments = d.get("comments") or []
+        if comments:
+            first = comments[0] or {}
+            description = (first.get("message") or "").strip()
         return IssueListItem(
             id=d["id"],
             issue_type=d.get("issueType", 4),
@@ -264,6 +275,7 @@ class SeerrClient:
             problem_season=d.get("problemSeason"),
             problem_episode=d.get("problemEpisode"),
             created_by=created_by.get("displayName") or created_by.get("plexUsername") or "?",
+            description=description,
         )
 
     async def get_media_title(self, media_type: str, tmdb_id: int) -> tuple[str, str]:

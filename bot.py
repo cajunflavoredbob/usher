@@ -968,11 +968,13 @@ async def _build_ticket_detail(
     type_name = "Issue"
     reporter = ""
     age = ""
+    description = ""
     try:
         issue = await seerr.get_issue(issue_id, as_plex_token=None if is_admin else token)
         type_emoji, type_name = ISSUE_TYPES.get(issue.issue_type, ("❓", "Other"))
         reporter = issue.created_by or ""
         age = _format_age(issue.created_at) if issue.created_at else ""
+        description = (issue.description or "").strip()
         if issue.media_type in ("movie", "tv") and issue.tmdb_id:
             try:
                 title, year = await seerr.get_media_title(issue.media_type, issue.tmdb_id)
@@ -995,6 +997,10 @@ async def _build_ticket_detail(
         lines.append(f"<b>Reported by:</b> {html.escape(reporter)}")
     if age:
         lines.append(f"<b>Age:</b> {age}")
+    if description:
+        lines.append("")
+        lines.append("<b>Description:</b>")
+        lines.append(f"<i>\"{html.escape(description)}\"</i>")
     return "\n".join(lines), _ticket_detail_kb(issue_id, is_admin)
 
 
@@ -1030,8 +1036,8 @@ async def tk_close_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     kb = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("💬 With comment", callback_data=f"tkcc:{issue_id}"),
-            InlineKeyboardButton("✓ Without comment", callback_data=f"tkcd:{issue_id}"),
+            InlineKeyboardButton("💬 Comment", callback_data=f"tkcc:{issue_id}"),
+            InlineKeyboardButton("✓ No comment", callback_data=f"tkcd:{issue_id}"),
         ],
         [InlineKeyboardButton("⬅️ Cancel", callback_data=f"tkback:{issue_id}")],
     ])

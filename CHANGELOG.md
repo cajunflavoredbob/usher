@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.5] - 2026-05-28
+
+### Added
+- **Ticket detail now includes the original report text.** `IssueListItem` gains a `description` field; `SeerrClient.get_issue` populates it from the first entry in the issue's `comments` array (Seerr stores the original description there at creation time). The `/tickets` drilldown now appends:
+  ```
+  Description:
+  "subs suck"
+  ```
+  under the metadata block.
+
+### Changed
+- Close sub-menu button labels trimmed: `[💬 With comment]` → `[💬 Comment]`, `[✓ Without comment]` → `[✓ No comment]`. Cancel unchanged.
+
 ## [0.10.4] - 2026-05-28
 
 ### Fixed
