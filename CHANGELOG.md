@@ -7,7 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.10.3] - 2026-05-27
+## [0.10.4] - 2026-05-28
+
+### Fixed
+- **Reply was silently no-op'ing on the second attempt** after a previous reply conversation was abandoned without sending text or `/cancel`. `_ticket_conversation` was missing `allow_reentry=True`, so the entry-point callback was a no-op while a stale conversation was still considered "active." Added the flag — re-tapping Reply now re-enters cleanly.
+
+### Added
+- **Global "stale button" gate with 6-hour expiry.** A `TypeHandler` registered at group `-1` runs before any callback handler. It tracks the most recent button-bearing bot message per user (`bot_data["btn_msgs"][user_id]`) and dismisses callbacks from older messages or messages older than 6 hours with an explanatory toast + strips the buttons. Prevents stale buttons in chat history from misfiring. Six-hour TTL matches the auto-fix completion timeout.
+- **`[⬅️ Cancel]` button on the Close and Fix sub-menus.** Tapping returns to the ticket detail view (edits the message back via the new `tk_back` handler) so admin can back out without committing to either action.
+- Removed the `[✅ Close]` shortcut from the Fix sub-menu — Close belongs only under the dedicated Close path, per "Close should be the only one with close options."
+
+### Changed
+- **Admin top-level `[💬 Reply]` now goes straight to the reply input** (no `[Reply] [Close]` sub-menu). Only `[Close]` and `[🔧 Fix]` keep their sub-menus (since each has multiple action variants). Affects both the `/tickets` detail and the new-issue admin DM. The `tk_reply_menu` handler is retained for backward compatibility with any old buttons still floating in chat history, but no new buttons route to it.
+- **Ticket detail message now shows full context.** Tapping `[#N]` from `/tickets` previously opened a bare `Ticket #N — choose an action` line. Now `tk_open` fetches the issue via `SeerrClient.get_issue()` and renders:
+  ```
+  Ticket #28
+  📺 Mating Season (2026) — S01E08
+  Issue: 🎥 Video
+  Reported by: FooManChewy
+  Age: 7h ago
+  ```
+  Same buttons attached. Refactored into a `_build_ticket_detail` helper shared with `tk_back`.
+
+### Notes
+- Button tracking applies to `/tickets`-flow messages (list, detail, sub-menus) and webhook DMs (new-issue admin, comment-reply). `/issue` and `/link` flows aren't yet tracked — those are bounded conversations that self-clean on completion or timeout, so staleness is less of a concern. Easy to extend later.
 
 ### Changed
 - Hermes version now reported in the "Bot is online" status block as a regular bullet alongside Seerr/Radarr/Sonarr (e.g. `• Hermes: ✅ 0.10.3`) instead of being prefixed to the header line. Consistent style with the other services.

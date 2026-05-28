@@ -32,11 +32,13 @@ from telegram import (
 from telegram.constants import ChatType
 from telegram.ext import (
     Application,
+    ApplicationHandlerStop,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 
@@ -172,6 +174,10 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
 
     _build_clients_from_settings(app)
 
+    # Global gate: drop callbacks from stale button-bearing messages. Group -1
+    # so it fires before any normal handler.
+    app.add_handler(TypeHandler(Update, _global_btn_gate), group=-1)
+
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(_link_conversation())
@@ -190,6 +196,7 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CallbackQueryHandler(tk_fix, pattern=r"^tkf:\d+$"))
     app.add_handler(CallbackQueryHandler(tk_fix_redownload, pattern=r"^tkfd:\d+$"))
     app.add_handler(CallbackQueryHandler(tk_fix_mark_failed, pattern=r"^tkfm:\d+$"))
+    app.add_handler(CallbackQueryHandler(tk_back, pattern=r"^tkback:\d+$"))
     app.add_handler(_ticket_conversation())
     # Link "Didn't work?" / "Having trouble?" callback. Fires outside the
     # link ConversationHandler so it can interrupt an in-progress poll.
@@ -393,13 +400,15 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
         ]])
 
     try:
-        await app.bot.send_message(
+        sent = await app.bot.send_message(
             chat_id=mapping.telegram_id,
             text="\n".join(lines),
             parse_mode="HTML",
             disable_web_page_preview=True,
             reply_markup=reply_kb,
         )
+        if reply_kb is not None:
+            _record_btn(app, mapping.telegram_id, sent)
         logger.info(
             "Notified telegram_id=%d of comment on issue #%d from '%s'",
             mapping.telegram_id, issue_id, commenter_username,
@@ -596,19 +605,20 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
     ]
 
     kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("💬 Reply", callback_data=f"tkrmenu:{issue_id}"),
+        InlineKeyboardButton("💬 Reply", callback_data=f"tkr:{issue_id}"),
         InlineKeyboardButton("🔧 Fix", callback_data=f"tkf:{issue_id}"),
         InlineKeyboardButton("✅ Close", callback_data=f"tkc:{issue_id}"),
     ]])
 
     try:
-        await app.bot.send_message(
+        sent = await app.bot.send_message(
             chat_id=admin_id,
             text="\n".join(lines),
             parse_mode="HTML",
             disable_web_page_preview=True,
             reply_markup=kb,
         )
+        _record_btn(app, admin_id, sent)
         logger.info("Notified admin of new issue #%d from '%s'", issue_id, reporter_username)
     except Exception:
         logger.exception("Failed to DM admin about new issue #%d", issue_id)
@@ -809,10 +819,11 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if current:
         button_rows.append(current)
 
-    await update.effective_message.reply_text(
+    msg = await update.effective_message.reply_text(
         text,
         reply_markup=InlineKeyboardMarkup(button_rows) if button_rows else None,
     )
+    _record_btn(ctx.application, update.effective_user.id, msg)
 
 
 # --- Ticket management (reply / close from inside Telegram) ----------------
@@ -834,11 +845,67 @@ def _token_for(ctx: ContextTypes.DEFAULT_TYPE, tg_id: int) -> tuple[bool, Option
     return False, mapping.plex_token
 
 
+# --- Interactive-button bookkeeping ----------------------------------------
+# Maximum age before a button-bearing message's buttons stop working.
+BTN_TTL_SECONDS = 6 * 3600  # 6 hours
+
+
+def _record_btn(app, user_id: int, message) -> None:
+    """Record `message` as the most recent button-bearing bot message for `user_id`.
+    Used by the global button gate to dismiss callbacks from older messages."""
+    from datetime import datetime, timezone
+    if message is None:
+        return
+    app.bot_data.setdefault("btn_msgs", {})[user_id] = {
+        "chat_id": message.chat_id,
+        "message_id": message.message_id,
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+async def _global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """TypeHandler at group=-1. Runs before any callback handler. If the callback
+    is from a stale message (not the most recent button-bearing message for
+    this user, or older than BTN_TTL_SECONDS), strip the buttons, answer with
+    an explanation, and raise ApplicationHandlerStop so no other handler runs.
+    """
+    q = update.callback_query
+    if q is None or q.message is None or q.from_user is None:
+        return
+    user_id = q.from_user.id
+    latest = ctx.application.bot_data.get("btn_msgs", {}).get(user_id)
+    if latest is None:
+        return  # no record yet -- allow (gradual rollout)
+    stale = False
+    reason = ""
+    if latest.get("message_id") != q.message.message_id:
+        stale = True
+        reason = "Use the most recent message — this menu is from an older one."
+    else:
+        from datetime import datetime, timezone
+        try:
+            sent = datetime.fromisoformat(latest["sent_at"])
+        except (KeyError, ValueError):
+            sent = None
+        if sent is None or (datetime.now(timezone.utc) - sent).total_seconds() > BTN_TTL_SECONDS:
+            stale = True
+            reason = "This menu has expired. Run the command again."
+    if stale:
+        try:
+            await q.answer(reason, show_alert=False)
+        except Exception:
+            pass
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        raise ApplicationHandlerStop
+
+
 def _ticket_detail_kb(issue_id: int, is_admin: bool) -> InlineKeyboardMarkup:
-    # Admin's top-level Reply opens a submenu (Reply / Close).
-    # User's top-level Reply goes straight to reply input.
-    reply_cb = f"tkrmenu:{issue_id}" if is_admin else f"tkr:{issue_id}"
-    row = [InlineKeyboardButton("💬 Reply", callback_data=reply_cb)]
+    # Reply always goes straight to reply input for everyone (no submenu).
+    # Only Close and Fix have submenus, since they have multiple action variants.
+    row = [InlineKeyboardButton("💬 Reply", callback_data=f"tkr:{issue_id}")]
     if is_admin:
         row.append(InlineKeyboardButton("🔧 Fix", callback_data=f"tkf:{issue_id}"))
         row.append(InlineKeyboardButton("✅ Close", callback_data=f"tkc:{issue_id}"))
@@ -863,7 +930,9 @@ async def tk_reply_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def tk_open(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Tapped [#N] from /tickets list. Sends NEW detail message."""
+    """Tapped [#N] from /tickets list. Sends a NEW detail message with the
+    ticket's context (type, media, S/E, reporter, age) so the admin/user knows
+    what they're acting on without having to scroll back to the list."""
     q = update.callback_query
     await q.answer()
     try:
@@ -875,10 +944,78 @@ async def tk_open(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_admin and token is None:
         await q.message.reply_text("DM me /link first so I can act on tickets as you.")
         return
-    await q.message.reply_text(
-        f"Ticket #{issue_id} — choose an action:",
-        reply_markup=_ticket_detail_kb(issue_id, is_admin),
+
+    text, kb = await _build_ticket_detail(ctx, issue_id, is_admin, token)
+    msg = await q.message.reply_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=kb,
     )
+    _record_btn(ctx.application, tg_id, msg)
+
+
+async def _build_ticket_detail(
+    ctx: ContextTypes.DEFAULT_TYPE,
+    issue_id: int,
+    is_admin: bool,
+    token: Optional[str],
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Render the ticket detail message text + keyboard. Shared between tk_open
+    (sending a new message) and tk_back (editing an existing one)."""
+    seerr: SeerrClient = ctx.bot_data["seerr"]
+    media_label = ""
+    type_emoji = "📝"
+    type_name = "Issue"
+    reporter = ""
+    age = ""
+    try:
+        issue = await seerr.get_issue(issue_id, as_plex_token=None if is_admin else token)
+        type_emoji, type_name = ISSUE_TYPES.get(issue.issue_type, ("❓", "Other"))
+        reporter = issue.created_by or ""
+        age = _format_age(issue.created_at) if issue.created_at else ""
+        if issue.media_type in ("movie", "tv") and issue.tmdb_id:
+            try:
+                title, year = await seerr.get_media_title(issue.media_type, issue.tmdb_id)
+                m_emoji = "🎬" if issue.media_type == "movie" else "📺"
+                media_label = f"{m_emoji} {title}" + (f" ({year})" if year else "")
+                if issue.media_type == "tv" and issue.problem_season:
+                    if issue.problem_episode:
+                        media_label += f" — S{int(issue.problem_season):02d}E{int(issue.problem_episode):02d}"
+                    else:
+                        media_label += f" — S{int(issue.problem_season):02d}"
+            except Exception:
+                logger.exception("get_media_title failed for #%d", issue_id)
+    except Exception:
+        logger.exception("get_issue failed for #%d", issue_id)
+    lines = [f"<b>Ticket #{issue_id}</b>"]
+    if media_label:
+        lines.append(html.escape(media_label))
+    lines.append(f"<b>Issue:</b> {type_emoji} {type_name}")
+    if reporter:
+        lines.append(f"<b>Reported by:</b> {html.escape(reporter)}")
+    if age:
+        lines.append(f"<b>Age:</b> {age}")
+    return "\n".join(lines), _ticket_detail_kb(issue_id, is_admin)
+
+
+async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Cancel from a sub-menu -- edit the message back to the ticket detail view."""
+    q = update.callback_query
+    await q.answer()
+    try:
+        issue_id = int(q.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        return
+    tg_id = update.effective_user.id
+    is_admin, token = _token_for(ctx, tg_id)
+    text, kb = await _build_ticket_detail(ctx, issue_id, is_admin, token)
+    try:
+        await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        logger.exception("tk_back edit failed for #%d", issue_id)
+        return
+    # The same message_id is the active one; refresh sent_at so the 6h timer resets.
+    _record_btn(ctx.application, tg_id, q.message)
 
 
 async def tk_close_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -891,11 +1028,15 @@ async def tk_close_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if update.effective_user.id != ctx.bot_data.get("admin_id"):
         return
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("💬 With comment", callback_data=f"tkcc:{issue_id}"),
-        InlineKeyboardButton("✓ Without comment", callback_data=f"tkcd:{issue_id}"),
-    ]])
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("💬 With comment", callback_data=f"tkcc:{issue_id}"),
+            InlineKeyboardButton("✓ Without comment", callback_data=f"tkcd:{issue_id}"),
+        ],
+        [InlineKeyboardButton("⬅️ Cancel", callback_data=f"tkback:{issue_id}")],
+    ])
     await q.edit_message_text(f"Close ticket #{issue_id}?", reply_markup=kb)
+    _record_btn(ctx.application, update.effective_user.id, q.message)
 
 
 async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -908,12 +1049,15 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if update.effective_user.id != ctx.bot_data.get("admin_id"):
         return
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔄 Redownload", callback_data=f"tkfd:{issue_id}"),
-        InlineKeyboardButton("🚫 Mark Failed", callback_data=f"tkfm:{issue_id}"),
-        InlineKeyboardButton("✅ Close", callback_data=f"tkcd:{issue_id}"),
-    ]])
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔄 Redownload", callback_data=f"tkfd:{issue_id}"),
+            InlineKeyboardButton("🚫 Mark Failed", callback_data=f"tkfm:{issue_id}"),
+        ],
+        [InlineKeyboardButton("⬅️ Cancel", callback_data=f"tkback:{issue_id}")],
+    ])
     await q.edit_message_text(f"🔧 Fix #{issue_id} — how?", reply_markup=kb)
+    _record_btn(ctx.application, update.effective_user.id, q.message)
 
 
 async def tk_fix_redownload(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1146,6 +1290,7 @@ def _ticket_conversation() -> ConversationHandler:
         fallbacks=[CommandHandler("cancel", tk_reply_cancel)],
         name="ticket_reply",
         persistent=False,
+        allow_reentry=True,
     )
 
 
