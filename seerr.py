@@ -7,7 +7,11 @@ from typing import Optional
 
 import httpx
 
+from http_util import execute
+
 logger = logging.getLogger(__name__)
+
+_SERVICE = "Seerr"
 
 
 @dataclass
@@ -85,13 +89,8 @@ class SeerrClient:
 
     async def login_with_plex(self, plex_token: str) -> tuple[int, str, httpx.Cookies]:
         """Authenticate to Seerr as a Plex user. Returns (seerr_user_id, display_name, cookies)."""
-        # /auth/plex needs the X-Plex-Client-Identifier header; reuse Hermes's
-        # client id by sending one. Seerr accepts any non-empty value here.
-        r = await self._client.post(
-            "/auth/plex",
-            json={"authToken": plex_token},
-        )
-        r.raise_for_status()
+        r = await execute(self._client, "POST", "/auth/plex", service=_SERVICE,
+                          json={"authToken": plex_token})
         data = r.json()
         return (
             int(data["id"]),
@@ -114,8 +113,8 @@ class SeerrClient:
             timeout=15.0,
         )
         try:
-            r = await user_client.post("/auth/plex", json={"authToken": plex_token})
-            r.raise_for_status()
+            await execute(user_client, "POST", "/auth/plex", service=_SERVICE,
+                          json={"authToken": plex_token})
         except Exception:
             await user_client.aclose()
             raise
@@ -123,8 +122,8 @@ class SeerrClient:
 
     async def search(self, query: str, limit: int = 5) -> list[MediaResult]:
         """Search Seerr for movies + TV shows matching the query."""
-        r = await self._client.get("/search", params={"query": query})
-        r.raise_for_status()
+        r = await execute(self._client, "GET", "/search", service=_SERVICE,
+                          params={"query": query})
         data = r.json()
         out: list[MediaResult] = []
         for item in data.get("results", []):
@@ -155,8 +154,8 @@ class SeerrClient:
         skip = 0
         page_size = 50
         while True:
-            r = await self._client.get("/user", params={"take": page_size, "skip": skip})
-            r.raise_for_status()
+            r = await execute(self._client, "GET", "/user", service=_SERVICE,
+                              params={"take": page_size, "skip": skip})
             data = r.json()
             for u in data.get("results", []):
                 candidates = [
@@ -181,8 +180,7 @@ class SeerrClient:
         """Return (seasons, tvdb_id) for a TV show. Includes season 0
         (rendered as 'Specials') because anime movies / OVAs / tie-in
         specials often live there and users need to report issues on them."""
-        r = await self._client.get(f"/tv/{tmdb_id}")
-        r.raise_for_status()
+        r = await execute(self._client, "GET", f"/tv/{tmdb_id}", service=_SERVICE)
         data = r.json()
         seasons: list[TvSeason] = []
         for s in data.get("seasons", []):
@@ -211,14 +209,14 @@ class SeerrClient:
         if as_plex_token:
             client = await self._as_user(as_plex_token)
             try:
-                r = await client.get("/issue", params={"filter": filter, "take": take})
-                r.raise_for_status()
+                r = await execute(client, "GET", "/issue", service=_SERVICE,
+                                  params={"filter": filter, "take": take})
                 data = r.json()
             finally:
                 await client.aclose()
         else:
-            r = await self._client.get("/issue", params={"filter": filter, "take": take})
-            r.raise_for_status()
+            r = await execute(self._client, "GET", "/issue", service=_SERVICE,
+                              params={"filter": filter, "take": take})
             data = r.json()
         out: list[IssueListItem] = []
         for item in data.get("results", []):
@@ -247,14 +245,12 @@ class SeerrClient:
         if as_plex_token:
             client = await self._as_user(as_plex_token)
             try:
-                r = await client.get(f"/issue/{issue_id}")
-                r.raise_for_status()
+                r = await execute(client, "GET", f"/issue/{issue_id}", service=_SERVICE)
                 d = r.json()
             finally:
                 await client.aclose()
         else:
-            r = await self._client.get(f"/issue/{issue_id}")
-            r.raise_for_status()
+            r = await execute(self._client, "GET", f"/issue/{issue_id}", service=_SERVICE)
             d = r.json()
         media = d.get("media") or {}
         created_by = d.get("createdBy") or {}
@@ -281,8 +277,7 @@ class SeerrClient:
     async def get_media_title(self, media_type: str, tmdb_id: int) -> tuple[str, str]:
         """Returns (title, year). Year may be empty string."""
         endpoint = "movie" if media_type == "movie" else "tv"
-        r = await self._client.get(f"/{endpoint}/{tmdb_id}")
-        r.raise_for_status()
+        r = await execute(self._client, "GET", f"/{endpoint}/{tmdb_id}", service=_SERVICE)
         d = r.json()
         title = d.get("title") or d.get("name") or "Unknown"
         release = d.get("releaseDate") or d.get("firstAirDate") or ""
@@ -299,13 +294,13 @@ class SeerrClient:
         if as_plex_token:
             client = await self._as_user(as_plex_token)
             try:
-                r = await client.post(f"/issue/{issue_id}/comment", json={"message": message})
-                r.raise_for_status()
+                await execute(client, "POST", f"/issue/{issue_id}/comment",
+                              service=_SERVICE, json={"message": message})
             finally:
                 await client.aclose()
         else:
-            r = await self._client.post(f"/issue/{issue_id}/comment", json={"message": message})
-            r.raise_for_status()
+            await execute(self._client, "POST", f"/issue/{issue_id}/comment",
+                          service=_SERVICE, json={"message": message})
 
     async def resolve_issue(
         self,
@@ -316,13 +311,13 @@ class SeerrClient:
         if as_plex_token:
             client = await self._as_user(as_plex_token)
             try:
-                r = await client.post(f"/issue/{issue_id}/resolved")
-                r.raise_for_status()
+                await execute(client, "POST", f"/issue/{issue_id}/resolved",
+                              service=_SERVICE)
             finally:
                 await client.aclose()
         else:
-            r = await self._client.post(f"/issue/{issue_id}/resolved")
-            r.raise_for_status()
+            await execute(self._client, "POST", f"/issue/{issue_id}/resolved",
+                          service=_SERVICE)
 
     async def create_issue(
         self,
@@ -357,14 +352,14 @@ class SeerrClient:
         if as_plex_token:
             client = await self._as_user(as_plex_token)
             try:
-                r = await client.post("/issue", json=payload)
-                r.raise_for_status()
+                r = await execute(client, "POST", "/issue", service=_SERVICE,
+                                  json=payload)
                 data = r.json()
             finally:
                 await client.aclose()
         else:
-            r = await self._client.post("/issue", json=payload)
-            r.raise_for_status()
+            r = await execute(self._client, "POST", "/issue", service=_SERVICE,
+                              json=payload)
             data = r.json()
         issue_id = data.get("id")
         url = f"{self.public_url}/issues/{issue_id}"

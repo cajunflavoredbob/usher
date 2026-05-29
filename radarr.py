@@ -7,7 +7,12 @@ from typing import Optional
 
 import httpx
 
+from fix_result import FixResult
+from http_util import APIError, execute
+
 logger = logging.getLogger(__name__)
+
+_SERVICE = "Radarr"
 
 
 @dataclass
@@ -32,8 +37,8 @@ class RadarrClient:
 
     async def get_movie_by_tmdb(self, tmdb_id: int) -> Optional[RadarrMovie]:
         """Find a movie in Radarr's library by TMDb ID. None if not present."""
-        r = await self._client.get("/movie", params={"tmdbId": tmdb_id})
-        r.raise_for_status()
+        r = await execute(self._client, "GET", "/movie", service=_SERVICE,
+                          params={"tmdbId": tmdb_id})
         items = r.json()
         if not items:
             return None
@@ -47,99 +52,109 @@ class RadarrClient:
         )
 
     async def delete_movie_file(self, movie_file_id: int) -> None:
-        r = await self._client.delete(f"/moviefile/{movie_file_id}")
-        r.raise_for_status()
+        await execute(self._client, "DELETE", f"/moviefile/{movie_file_id}",
+                      service=_SERVICE)
 
     async def trigger_search(self, movie_id: int) -> None:
-        r = await self._client.post(
-            "/command",
-            json={"name": "MoviesSearch", "movieIds": [movie_id]},
-        )
-        r.raise_for_status()
+        await execute(self._client, "POST", "/command", service=_SERVICE,
+                      json={"name": "MoviesSearch", "movieIds": [movie_id]})
 
-    async def auto_fix(self, tmdb_id: int) -> tuple[bool, str, Optional[int]]:
-        """Delete current file (if any) and trigger search.
-
-        Returns (ok, message, radarr_movie_id). The ID is included on success
-        so the caller can poll for completion.
-        """
-        movie = await self.get_movie_by_tmdb(tmdb_id)
+    async def auto_fix(self, tmdb_id: int) -> FixResult:
+        """Delete current file (if any) and trigger search."""
+        try:
+            movie = await self.get_movie_by_tmdb(tmdb_id)
+        except APIError as exc:
+            return FixResult.failed(f"Radarr lookup failed: {exc.user_message}")
         if movie is None:
-            return False, "Movie isn't in Radarr (not monitored).", None
+            return FixResult.failed("Movie isn't in Radarr (not monitored).")
+
+        steps: list[str] = []
+        poll_info = {"movie_id": movie.id}
+
         if movie.has_file and movie.movie_file_id:
             try:
                 await self.delete_movie_file(movie.movie_file_id)
-            except Exception as exc:
-                return False, f"Couldn't delete file: {exc}", None
+                steps.append("delete")
+            except APIError as exc:
+                return FixResult.failed(f"Couldn't delete file: {exc.user_message}")
+
         try:
             await self.trigger_search(movie.id)
-        except Exception as exc:
-            return False, f"Couldn't trigger search: {exc}", None
-        return True, f"Deleted file (if any) and triggered re-search for '{movie.title}'.", movie.id
+            steps.append("search")
+        except APIError as exc:
+            return FixResult.partial(
+                f"Cleaned up but couldn't trigger search: {exc.user_message}",
+                steps_done=steps, poll_info=poll_info,
+            )
+
+        return FixResult.success(
+            f"Deleted file (if any) and triggered re-search for '{movie.title}'.",
+            steps_done=steps, poll_info=poll_info,
+        )
 
     async def movie_has_file(self, movie_id: int) -> bool:
-        r = await self._client.get(f"/movie/{movie_id}")
-        r.raise_for_status()
+        r = await execute(self._client, "GET", f"/movie/{movie_id}",
+                          service=_SERVICE)
         return bool(r.json().get("hasFile"))
 
-    async def mark_failed(self, tmdb_id: int) -> tuple[bool, str, Optional[int]]:
-        """Blocklist the most recent grab (so the same release won't be re-grabbed),
-        delete the on-disk file, and trigger a new search. End-state matches
-        auto_fix, plus the blocklist step.
-
-        Radarr's /history/failed endpoint alone only blocklists; it does NOT
-        delete or re-search unless the "Redownload Failed" setting is on. We
-        do all three explicitly so behavior is independent of that setting.
+    async def mark_failed(self, tmdb_id: int) -> FixResult:
+        """Blocklist the most recent grab, delete the on-disk file, and trigger
+        a new search. End-state matches auto_fix, plus the blocklist step.
 
         Falls back to delete+search if there's no grab in history.
-        Returns (ok, message, radarr_movie_id).
         """
-        movie = await self.get_movie_by_tmdb(tmdb_id)
-        if movie is None:
-            return False, "Movie isn't in Radarr (not monitored).", None
-
-        # Step 1: blocklist the most recent grab.
         try:
-            r = await self._client.get(
-                "/history",
-                params={
-                    "movieId": movie.id,
-                    "page": 1,
-                    "pageSize": 20,
-                    "sortKey": "date",
-                    "sortDirection": "descending",
-                },
-            )
-            r.raise_for_status()
-        except Exception as exc:
-            return False, f"Couldn't fetch history: {exc}", None
-        records = r.json().get("records") or []
-        grab = next((rec for rec in records if rec.get("eventType") == "grabbed"), None)
-        blocklisted = False
-        if grab is not None:
-            try:
-                r = await self._client.post(f"/history/failed/{grab['id']}")
-                r.raise_for_status()
-                blocklisted = True
-            except Exception as exc:
-                return False, f"Couldn't blocklist release: {exc}", None
+            movie = await self.get_movie_by_tmdb(tmdb_id)
+        except APIError as exc:
+            return FixResult.failed(f"Radarr lookup failed: {exc.user_message}")
+        if movie is None:
+            return FixResult.failed("Movie isn't in Radarr (not monitored).")
 
-        # Step 2: delete the on-disk file (if present).
+        steps: list[str] = []
+        poll_info = {"movie_id": movie.id}
+
+        # Step 1: blocklist most recent grab.
+        blocklisted = False
+        try:
+            r = await execute(
+                self._client, "GET", "/history", service=_SERVICE,
+                params={"movieId": movie.id, "page": 1, "pageSize": 20,
+                        "sortKey": "date", "sortDirection": "descending"},
+            )
+            records = r.json().get("records") or []
+            grab = next((rec for rec in records if rec.get("eventType") == "grabbed"), None)
+            if grab is not None:
+                await execute(self._client, "POST", f"/history/failed/{grab['id']}",
+                              service=_SERVICE)
+                steps.append("blocklist")
+                blocklisted = True
+        except APIError as exc:
+            return FixResult.failed(f"Couldn't blocklist release: {exc.user_message}")
+
+        # Step 2: delete file.
         if movie.has_file and movie.movie_file_id:
             try:
                 await self.delete_movie_file(movie.movie_file_id)
-            except Exception as exc:
-                return False, f"Blocklisted release but couldn't delete file: {exc}", None
+                steps.append("delete")
+            except APIError as exc:
+                prefix = "Blocklisted release but " if blocklisted else ""
+                return FixResult.partial(
+                    f"{prefix}couldn't delete file: {exc.user_message}",
+                    steps_done=steps, poll_info=poll_info,
+                )
 
-        # Step 3: trigger a new search.
+        # Step 3: trigger search.
         try:
             await self.trigger_search(movie.id)
-        except Exception as exc:
-            return False, f"Cleaned up but couldn't trigger search: {exc}", None
+            steps.append("search")
+        except APIError as exc:
+            return FixResult.partial(
+                f"Cleaned up but couldn't trigger search: {exc.user_message}",
+                steps_done=steps, poll_info=poll_info,
+            )
 
         prefix = "Blocklisted current release, " if blocklisted else "No prior grab to blocklist; "
-        return (
-            True,
+        return FixResult.success(
             f"{prefix}deleted '{movie.title}' file, and triggered re-search.",
-            movie.id,
+            steps_done=steps, poll_info=poll_info,
         )
