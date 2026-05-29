@@ -18,15 +18,18 @@ logger = logging.getLogger("hermes")
 async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Check on each pending auto-fix; notify when complete or timed out."""
     store: UserStore = ctx.bot_data["store"]
-    radarr: Optional[RadarrClient] = ctx.bot_data.get("radarr")
-    sonarr: Optional[SonarrClient] = ctx.bot_data.get("sonarr")
     pending = await store.list_pending_autofixes()
     if not pending:
         return
     logger.debug("Polling %d pending auto-fixes", len(pending))
-    from datetime import datetime, timezone
 
     for fix in pending:
+        # Re-fetch the arr clients each iteration so a settings reload mid-tick
+        # picks up the new clients on the very next fix. Bound to locals so a
+        # swap during the single fix's awaits at most affects one iteration.
+        radarr: Optional[RadarrClient] = ctx.bot_data.get("radarr")
+        sonarr: Optional[SonarrClient] = ctx.bot_data.get("sonarr")
+
         # Check timeout first
         try:
             timeout_at = datetime.fromisoformat(fix.timeout_at.replace(" ", "T")).replace(tzinfo=timezone.utc)

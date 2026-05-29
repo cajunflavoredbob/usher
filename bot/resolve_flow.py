@@ -21,6 +21,7 @@ from telegram.ext import (
 
 from http_util import user_friendly_message
 from seerr import SeerrClient
+from store import UserStore
 
 from bot.shared import AWAIT_COMMENT, _token_for
 

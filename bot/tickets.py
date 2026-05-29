@@ -2,6 +2,7 @@
 reply ConversationHandler."""
 from __future__ import annotations
 
+import asyncio
 import html
 import logging
 from typing import Optional
@@ -122,16 +123,6 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         reply_markup=InlineKeyboardMarkup(button_rows) if button_rows else None,
     )
     _record_btn(ctx.application, update.effective_user.id, msg)
-
-
-def _ticket_detail_kb(issue_id: int, is_admin: bool) -> InlineKeyboardMarkup:
-    # Reply always goes straight to reply input for everyone (no submenu).
-    # Only Close and Fix have submenus, since they have multiple action variants.
-    row = [InlineKeyboardButton("💬 Reply", callback_data=f"tkr:{issue_id}")]
-    if is_admin:
-        row.append(InlineKeyboardButton("🔧 Fix", callback_data=f"tkf:{issue_id}"))
-        row.append(InlineKeyboardButton("✅ Close", callback_data=f"tkc:{issue_id}"))
-    return InlineKeyboardMarkup([row])
 
 
 async def tk_reply_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -505,6 +496,16 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         ctx.user_data.pop("tk_reply_id", None)
         ctx.user_data.pop("tk_close_after", None)
         return ConversationHandler.END
+    # If the user started a new reply flow for a different issue during the
+    # add_issue_comment await, our comment still landed on the right ticket
+    # (we bound issue_id at entry) but we mustn't apply the close-after side
+    # effect to whatever flow they're now on.
+    if ctx.user_data.get("tk_reply_id") != issue_id:
+        await update.effective_message.reply_text(
+            f"💬 Reply posted on #{issue_id}. "
+            "(You've started a new reply since then — that one's still active.)"
+        )
+        return ConversationHandler.END
     if close_after:
         try:
             await seerr.resolve_issue(issue_id, as_plex_token=None)
@@ -531,6 +532,14 @@ async def tk_reply_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     return ConversationHandler.END
 
 
+async def _tk_reply_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Conversation_timeout handler. Clear ticket-reply state so an abandoned
+    conversation doesn't leak user_data for the life of the process."""
+    ctx.user_data.pop("tk_reply_id", None)
+    ctx.user_data.pop("tk_close_after", None)
+    return ConversationHandler.END
+
+
 def _ticket_conversation() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[
@@ -541,11 +550,15 @@ def _ticket_conversation() -> ConversationHandler:
             AWAIT_TICKET_REPLY: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, tk_reply_text),
             ],
+            ConversationHandler.TIMEOUT: [
+                MessageHandler(filters.ALL, _tk_reply_timeout),
+            ],
         },
         fallbacks=[CommandHandler("cancel", tk_reply_cancel)],
         name="ticket_reply",
         persistent=False,
         allow_reentry=True,
+        conversation_timeout=600,  # 10 min idle clears tk_reply_id / tk_close_after
     )
 
 async def _run_autofix(

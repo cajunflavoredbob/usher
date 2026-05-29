@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.6] - 2026-05-28
+
+### Fixed
+- **Allowlist read-then-await race** (audit concurrency #1). `bot/issue_flow.py issue_description` now snapshots `bot_data["allowlist"]` into a `frozenset` at handler entry, so a mid-handler settings reload can't shift the eligibility check to a stale set during the subsequent `count_autofix_24h` await.
+- **`btn_msgs` gate is now race-tolerant** (audit concurrency #4 + #13). The gate tracks the last 3 button-bearing messages per user (was: only the latest); rapid-fire webhook DMs no longer make each-other's buttons look stale. Read of the per-user list happens once at gate entry — no read-then-await window. Eviction is FIFO at `BTN_HISTORY_MAX=3`.
+- **Autofix poller re-fetches arr clients per iteration** (audit concurrency #3). `bot/autofix_poll.py poll_pending_autofixes` reads `radarr`/`sonarr` from `bot_data` inside the per-fix loop, so a settings reload during a 10-fix tick picks up the new clients on the very next iteration. The earlier "capture-once-per-tick" pattern could close-then-touch a captured client mid-loop.
+- **`_close_old` tasks are tracked and drained on shutdown** (audit concurrency #5). `bot/app.py _build_clients_from_settings` parks a strong reference to each settings-reload close task in `bot_data["_pending_closes"]`; `_post_shutdown` awaits them via `asyncio.gather` before closing current clients. Eliminates "Task was destroyed while it is pending!" warnings on hot reload + shutdown.
+- **`_post_shutdown` now closes Seerr/Radarr/Sonarr/Plex clients explicitly.** Previous shutdown leaked httpx connection pools.
+- **`tk_reply_text` post-await mismatch check** (audit concurrency #9). After `seerr.add_issue_comment` returns, the handler verifies `ctx.user_data["tk_reply_id"]` still matches the `issue_id` bound at entry. If the user kicked off a new reply flow during the await, the comment still landed on the right ticket (the binding is local) but the close-after side effect is suppressed, with an honest "reply posted; you've started a new one since then" message.
+
+### Added
+- **`conversation_timeout` on all three ConversationHandlers.** `_ticket_conversation` and `_issue_conversation` get 600s (10 min); `_link_conversation` gets 1800s (30 min, covering the 28-min strong-PIN window). Each defines a `ConversationHandler.TIMEOUT` state handler that clears the relevant `user_data` keys (`tk_reply_id`/`tk_close_after`, `link_active_loop`, or the issue flow's `media`/`search_results`/`seasons`/`season`/`episode`/`issue_type`/`description`/`autofix`). Abandoned conversations no longer leak state for the life of the process.
+- **`tests/test_btn_gate.py`** — 11 cases covering `record_btn` history capping + independence per user, and `global_btn_gate` permissive bootstrap, latest-message admission, any-of-recent-N admission, evicted-message blocking, expired-TTL blocking, cross-user isolation, and non-callback-query pass-through. Existing 114 tests still pass; total 125.
+
+### Notes
+- Phase 6 of the v0.11.x hardening roadmap. Closes audit concurrency findings #1, #3, #4, #5, #9, #13.
+- Also picked up several stale-imports + missing-imports inside the split modules that pyflakes flagged (`secrets` in `link_flow`, `asyncio` in `tickets`, `UserStore` in `resolve_flow`, `_require_seerr` in `link_flow` and `issue_flow`, `CreatedIssue` in `issue_flow`, and a duplicate local `_ticket_detail_kb` that shadowed the shared one). None affected the import chain (function bodies aren't evaluated at module load) but they would have NameError'd the first time those handlers ran. All fixed.
+
 ## [0.11.5] - 2026-05-28
 
 ### Changed

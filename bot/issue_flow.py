@@ -19,10 +19,9 @@ from telegram.ext import (
     filters,
 )
 
-from fix_result import FixResult
 from http_util import user_friendly_message
 from radarr import RadarrClient
-from seerr import SeerrClient
+from seerr import CreatedIssue, SeerrClient
 from settings import SettingsStore
 from sonarr import SonarrClient
 from store import UserStore
@@ -38,12 +37,23 @@ from bot.shared import (
     PICK_SEASON,
     PICK_TYPE,
     TITLE,
+    _require_seerr,
 )
-from bot.tickets import _run_autofix, _run_mark_failed
+from bot.tickets import _run_autofix
 
 logger = logging.getLogger("hermes")
 
 # --- Issue conversation ------------------------------------------------------
+
+async def _issue_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Conversation_timeout handler. Clears every user_data key the issue
+    flow can populate so an abandoned conversation doesn't leak state for
+    the life of the process."""
+    for key in ("media", "search_results", "seasons", "season", "episode",
+                "issue_type", "description", "autofix"):
+        ctx.user_data.pop(key, None)
+    return ConversationHandler.END
+
 
 def _issue_conversation() -> ConversationHandler:
     return ConversationHandler(
@@ -60,6 +70,7 @@ def _issue_conversation() -> ConversationHandler:
             DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, issue_description)],
             OFFER_AUTOFIX: [CallbackQueryHandler(issue_offer_autofix, pattern=r"^autofix:")],
             CONFIRM_AUTOFIX: [CallbackQueryHandler(issue_confirm_autofix, pattern=r"^confirm:")],
+            ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, _issue_timeout)],
         },
         fallbacks=[
             CommandHandler("cancel", issue_cancel),
@@ -70,6 +81,7 @@ def _issue_conversation() -> ConversationHandler:
         allow_reentry=True,
         name="issue",
         persistent=False,
+        conversation_timeout=600,  # 10 min idle clears issue user_data
     )
 
 
@@ -377,7 +389,10 @@ async def issue_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     ctx.user_data["description"] = description
     # Decide whether to offer auto-fix
     issue_type = ctx.user_data.get("issue_type")
-    allowlist: set[int] = ctx.bot_data.get("allowlist") or set()
+    # Snapshot the allowlist at handler entry so a mid-handler settings
+    # reload can't shift the eligibility check to a stale set between this
+    # read and the await on store.count_autofix_24h below.
+    allowlist_snapshot: frozenset[int] = frozenset(ctx.bot_data.get("allowlist") or ())
     store: UserStore = ctx.bot_data["store"]
     tg_id = update.effective_user.id
     media = ctx.user_data.get("media", {})
@@ -387,7 +402,7 @@ async def issue_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     is_whole_season = media.get("type") == "tv" and not episode
     eligible = (
         issue_type in AUTOFIX_ELIGIBLE_TYPES
-        and tg_id in allowlist
+        and tg_id in allowlist_snapshot
         and _has_arr_for_media(ctx)
         and not is_whole_season
     )
