@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-05-28
+
+### Changed
+- **All `UserStore` methods are now async.** SQLite work moves into `asyncio.to_thread` so a slow DB call no longer blocks the event loop (other coroutines like the Plex `/link` poll, webhook handlers, and autofix poller can now interleave with DB activity). All ~25 call sites in `bot.py` updated with `await`.
+- **`_token_for` is now async and returns a tri-state `(is_admin, token, decrypt_failed)`.** Callers can distinguish "not linked" from "linked but token won't decrypt" and surface the right message.
+
+### Added
+- **WAL journal mode and `busy_timeout=5000`.** The SQLite connection helper opens with a 5-second busy timeout, and the schema-init step enables WAL once per database file. Combined, these eliminate `database is locked` exceptions under realistic concurrent load (webhook flood + autofix poll + in-flight `/link` poll).
+- **Locked-DB retry with backoff.** `UserStore._run_sync_with_retry` retries `OperationalError("...locked...")` up to 5 times with exponential backoff (50ms → 800ms; worst-case total ~1.5s) before re-raising. Lives off the event loop so the sleeps don't stall anything else.
+- **`Mapping.plex_token_decrypt_failed: bool`.** Distinguishes a token row that exists but can't be decrypted (likely key rotation) from a row that has no token (legacy or never linked with Plex).
+- **`UserStore.count_decrypt_failures()`.** Used at startup to count mappings whose tokens won't decrypt with the current key. If the count is non-zero, admin gets a one-time DM at startup with the count and a pointer to investigate.
+- **User-visible "link broken" message.** When a callsite needs a user's Plex token and finds the row exists but decrypt failed, the user is told to `/unlink` and re-run `/link` instead of being silently treated as unlinked.
+
+### Removed
+- `TokenCrypto.safe_decrypt` — its tri-state logic moved into `UserStore._decrypt_field` so `Mapping` construction can populate `plex_token_decrypt_failed` cleanly.
+
+### Notes
+- Derived from audit findings #4 (concurrency: sync SQLite blocks event loop), #11 (error: no `OperationalError` retry), and #12 (security: silent decrypt-fail masks broken links). Phase 1 of the v0.11.x hardening roadmap.
+- WAL mode persists across connections, so the one-time `PRAGMA journal_mode = WAL` at schema init is enough; existing prod databases will be migrated to WAL automatically the next time `_init_schema` runs.
+
 ## [0.11.0] - 2026-05-28
 
 ### Security

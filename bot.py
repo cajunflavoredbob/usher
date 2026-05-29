@@ -301,6 +301,28 @@ async def _post_init(app: Application) -> None:
             admin_id,
         )
 
+    # If the encryption key rotated, any user_mapping rows with a stored
+    # ciphertext will no longer decrypt. Alert the admin so they know which
+    # linked users will need to /unlink and /link again.
+    store: UserStore = app.bot_data["store"]
+    try:
+        n_failed = await store.count_decrypt_failures()
+    except Exception:
+        logger.exception("count_decrypt_failures failed at startup")
+        n_failed = 0
+    if n_failed:
+        plural = "s" if n_failed != 1 else ""
+        warn = (
+            f"⚠️ {n_failed} stored Plex link{plural} can't be decrypted with the "
+            "current encryption key. Affected users will see a 'link broken' "
+            "message and need to /unlink + /link again. Likely cause: the "
+            "encryption key rotated or HERMES_ENCRYPTION_KEY changed."
+        )
+        try:
+            await app.bot.send_message(chat_id=admin_id, text=warn)
+        except Exception:
+            logger.warning("Couldn't DM admin %d about %d decrypt failure(s)", admin_id, n_failed)
+
 
 async def _post_shutdown(app: Application) -> None:
     runner = app.bot_data.get("http_runner")
@@ -340,7 +362,7 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
         return
 
     store: UserStore = app.bot_data["store"]
-    mapping = store.find_by_plex_username(reporter_username)
+    mapping = await store.find_by_plex_username(reporter_username)
     if mapping is None:
         logger.info(
             "Webhook comment on issue #%d: reporter '%s' not linked in Hermes; dropping",
@@ -437,7 +459,7 @@ async def handle_seerr_resolved(app: Application, payload: dict) -> None:
         return
 
     store: UserStore = app.bot_data["store"]
-    mapping = store.find_by_plex_username(reporter_username)
+    mapping = await store.find_by_plex_username(reporter_username)
     if mapping is None:
         logger.info(
             "Webhook resolved on issue #%d: reporter '%s' not linked in Hermes",
@@ -550,7 +572,7 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
 
     # Skip if admin filed it themselves -- they already saw the /issue confirmation
     store: UserStore = app.bot_data["store"]
-    admin_mapping = store.get(admin_id)
+    admin_mapping = await store.get(admin_id)
     if (admin_mapping and admin_mapping.plex_username
             and admin_mapping.plex_username.lower() == reporter_username.lower()):
         logger.info("ISSUE_REPORTED #%d filed by admin themselves; not DMing", issue_id)
@@ -683,7 +705,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     admin_id = ctx.bot_data.get("admin_id")
     store: UserStore = ctx.bot_data["store"]
     is_admin = user_id == admin_id
-    is_linked = store.get(user_id) is not None
+    is_linked = (await store.get(user_id)) is not None
 
     lines = ["Hi! I forward issue reports to Seerr."]
     if is_admin:
@@ -751,7 +773,7 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     admin_id = ctx.bot_data.get("admin_id")
     is_admin = user_id == admin_id
     store: UserStore = ctx.bot_data["store"]
-    mapping = store.get(user_id)
+    mapping = await store.get(user_id)
 
     # Eligibility check for non-admin users
     if not is_admin:
@@ -828,21 +850,27 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 # --- Ticket management (reply / close from inside Telegram) ----------------
 
-def _token_for(ctx: ContextTypes.DEFAULT_TYPE, tg_id: int) -> tuple[bool, Optional[str]]:
-    """Return (is_admin, plex_token_or_None).
+async def _token_for(ctx: ContextTypes.DEFAULT_TYPE, tg_id: int) -> tuple[bool, Optional[str], bool]:
+    """Return (is_admin, plex_token_or_None, decrypt_failed).
 
     For admin, token is None (we want admin-key attribution via SeerrClient
     bare _client). For non-admin, token is their Plex token; caller must
-    bail if it's None (user isn't linked).
+    bail if it's None (user isn't linked) OR distinguish decrypt_failed=True
+    (link exists but the encryption key changed) so the user can be told to
+    re-run /link.
     """
     admin_id = ctx.bot_data.get("admin_id")
     if tg_id == admin_id:
-        return True, None
+        return True, None, False
     store: UserStore = ctx.bot_data["store"]
-    mapping = store.get(tg_id)
-    if mapping is None or not mapping.plex_token:
-        return False, None
-    return False, mapping.plex_token
+    mapping = await store.get(tg_id)
+    if mapping is None:
+        return False, None, False
+    if mapping.plex_token_decrypt_failed:
+        return False, None, True
+    if not mapping.plex_token:
+        return False, None, False
+    return False, mapping.plex_token, False
 
 
 # --- Interactive-button bookkeeping ----------------------------------------
@@ -940,7 +968,13 @@ async def tk_open(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     except (ValueError, IndexError):
         return
     tg_id = update.effective_user.id
-    is_admin, token = _token_for(ctx, tg_id)
+    is_admin, token, decrypt_failed = await _token_for(ctx, tg_id)
+    if not is_admin and decrypt_failed:
+        await q.message.reply_text(
+            "Your Plex link can't be decrypted (the encryption key may have rotated). "
+            "Run /unlink then /link to reconnect."
+        )
+        return
     if not is_admin and token is None:
         await q.message.reply_text("DM me /link first so I can act on tickets as you.")
         return
@@ -1013,7 +1047,7 @@ async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     except (ValueError, IndexError):
         return
     tg_id = update.effective_user.id
-    is_admin, token = _token_for(ctx, tg_id)
+    is_admin, token, _decrypt_failed = await _token_for(ctx, tg_id)
     text, kb = await _build_ticket_detail(ctx, issue_id, is_admin, token)
     try:
         await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
@@ -1157,8 +1191,8 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
             kwargs["sonarr_episode_id"] = poll_info.get("episode_id")
             kwargs["sonarr_season"] = poll_info.get("season")
             kwargs["expected_episode_ids"] = poll_info.get("expected_episode_ids") or []
-        store.add_pending_autofix(**kwargs)
-        store.log_autofix(update.effective_user.id, media_type, tmdb_id, season=season, episode=episode)
+        await store.add_pending_autofix(**kwargs)
+        await store.log_autofix(update.effective_user.id, media_type, tmdb_id, season=season, episode=episode)
         await q.edit_message_text(
             f"🔧 {action_name} started for #{issue_id}.\n{label}\n\n"
             f"{detail}\n\n"
@@ -1201,7 +1235,13 @@ async def tk_reply_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         issue_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
         return ConversationHandler.END
-    is_admin, token = _token_for(ctx, update.effective_user.id)
+    is_admin, token, decrypt_failed = await _token_for(ctx, update.effective_user.id)
+    if not is_admin and decrypt_failed:
+        await q.message.reply_text(
+            "Your Plex link can't be decrypted (the encryption key may have rotated). "
+            "Run /unlink then /link to reconnect."
+        )
+        return ConversationHandler.END
     if not is_admin and token is None:
         await q.message.reply_text("DM me /link first so I can post comments as you.")
         return ConversationHandler.END
@@ -1241,7 +1281,13 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if not text:
         await update.effective_message.reply_text("Empty message. Send a few words or /cancel.")
         return AWAIT_TICKET_REPLY
-    is_admin, token = _token_for(ctx, update.effective_user.id)
+    is_admin, token, decrypt_failed = await _token_for(ctx, update.effective_user.id)
+    if not is_admin and decrypt_failed:
+        await update.effective_message.reply_text(
+            "Your Plex link can't be decrypted (the encryption key may have rotated). "
+            "Run /unlink then /link to reconnect."
+        )
+        return ConversationHandler.END
     if not is_admin and token is None:
         await update.effective_message.reply_text("Your /link is gone or incomplete. /link to re-link.")
         ctx.user_data.pop("tk_reply_id", None)
@@ -1406,7 +1452,7 @@ async def _finalize_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         logger.exception("plex get_user failed")
         plex_user = None
 
-    store.link_with_plex(
+    await store.link_with_plex(
         telegram_id=tg_id,
         seerr_id=seerr_id,
         seerr_display=display,
@@ -1533,7 +1579,7 @@ async def link_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def cmd_unlink(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     store: UserStore = ctx.bot_data["store"]
-    removed = store.unlink(update.effective_user.id)
+    removed = await store.unlink(update.effective_user.id)
     if removed:
         await update.effective_message.reply_text(
             "🔓 Unlinked. I've removed your Plex token from my storage.\n\n"
@@ -1578,7 +1624,7 @@ async def issue_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if await _require_seerr(update, ctx) is None:
         return ConversationHandler.END
     store: UserStore = ctx.bot_data["store"]
-    if store.get(update.effective_user.id) is None:
+    if (await store.get(update.effective_user.id)) is None:
         await update.effective_message.reply_text(
             "You need to link your Seerr account first. DM me /link <username>."
         )
@@ -1899,7 +1945,7 @@ async def issue_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     if not is_admin:
         settings_store: SettingsStore = ctx.bot_data["settings_store"]
         daily_limit = settings_store.settings.daily_autofix_limit
-        used = store.count_autofix_24h(tg_id)
+        used = await store.count_autofix_24h(tg_id)
         if used >= daily_limit:
             await update.effective_message.reply_text(
                 f"(You've used your {daily_limit} auto-fixes today; "
@@ -1976,7 +2022,7 @@ async def _submit_issue(
     season = ctx.user_data.get("season")
     episode = ctx.user_data.get("episode")
 
-    mapping = store.get(update.effective_user.id)
+    mapping = await store.get(update.effective_user.id)
     if not (mapping and mapping.plex_token and issue_type and media):
         await update.effective_message.reply_text(
             "Lost conversation state or your /link is incomplete. /link then /issue to start over."
@@ -2020,7 +2066,7 @@ async def _submit_issue(
     if autofix:
         ok, detail, poll_info = await _run_autofix(media, season, episode, radarr, sonarr)
         if ok:
-            store.log_autofix(
+            await store.log_autofix(
                 update.effective_user.id,
                 media["type"],
                 media["tmdb_id"],
@@ -2044,7 +2090,7 @@ async def _submit_issue(
                     kwargs["sonarr_episode_id"] = poll_info.get("episode_id")
                     kwargs["sonarr_season"] = poll_info.get("season")
                     kwargs["expected_episode_ids"] = poll_info.get("expected_episode_ids") or []
-                store.add_pending_autofix(**kwargs)
+                await store.add_pending_autofix(**kwargs)
                 lines.append(f"🔧 Auto-fix: {detail}")
                 lines.append("🔔 I'll DM you when the new file finishes downloading (or after 6h timeout).")
             except Exception:
@@ -2141,7 +2187,7 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     store: UserStore = ctx.bot_data["store"]
     radarr: Optional[RadarrClient] = ctx.bot_data.get("radarr")
     sonarr: Optional[SonarrClient] = ctx.bot_data.get("sonarr")
-    pending = store.list_pending_autofixes()
+    pending = await store.list_pending_autofixes()
     if not pending:
         return
     logger.debug("Polling %d pending auto-fixes", len(pending))
@@ -2153,7 +2199,7 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             timeout_at = datetime.fromisoformat(fix.timeout_at.replace(" ", "T")).replace(tzinfo=timezone.utc)
             if datetime.now(timezone.utc) >= timeout_at:
                 await _notify_timeout(ctx, fix)
-                store.mark_autofix_status(fix.id, "timeout")
+                await store.mark_autofix_status(fix.id, "timeout")
                 continue
         except Exception:
             logger.exception("timeout parse failed for fix %d", fix.id)
@@ -2175,7 +2221,7 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     extra = f" ({present}/{total} episodes)"
             if done:
                 await _notify_complete(ctx, fix, extra)
-                store.mark_autofix_status(fix.id, "complete")
+                await store.mark_autofix_status(fix.id, "complete")
         except Exception:
             logger.exception("poll failed for fix %d", fix.id)
 
@@ -2252,7 +2298,7 @@ async def resolve_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if choice == "yes":
         seerr: SeerrClient = ctx.bot_data["seerr"]
         store: UserStore = ctx.bot_data["store"]
-        mapping = store.get(update.effective_user.id)
+        mapping = await store.get(update.effective_user.id)
         token = mapping.plex_token if (mapping and mapping.plex_token) else None
         try:
             await seerr.resolve_issue(issue_id, as_plex_token=token)
@@ -2283,7 +2329,7 @@ async def resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
         return AWAIT_COMMENT
     store: UserStore = ctx.bot_data["store"]
     seerr: SeerrClient = ctx.bot_data["seerr"]
-    mapping = store.get(update.effective_user.id)
+    mapping = await store.get(update.effective_user.id)
     token = mapping.plex_token if (mapping and mapping.plex_token) else None
     try:
         await seerr.add_issue_comment(issue_id, comment, as_plex_token=token)
