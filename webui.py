@@ -37,6 +37,7 @@ from settings import (
     Settings,
     SettingsStore,
     hash_password,
+    validate_public_url,
     verify_password,
 )
 from _version import __version__ as HERMES_VERSION
@@ -585,9 +586,18 @@ async def telegram_post(request: web.Request) -> web.Response:
                                 webhook_url=_webhook_url_from_request(request)),
             content_type="text/html", status=400,
         )
+    public_url = (form.get("hermes_public_url") or "").strip()
+    url_err = validate_public_url(public_url)
+    if url_err:
+        return web.Response(
+            text=_settings_page(s, error=f"Hermes Public URL: {url_err}",
+                                active_tab="telegram",
+                                webhook_url=_webhook_url_from_request(request)),
+            content_type="text/html", status=400,
+        )
     s.telegram_bot_token = token
     s.admin_telegram_id = admin_tg
-    s.hermes_public_url = (form.get("hermes_public_url") or "").strip()
+    s.hermes_public_url = public_url
     restart_needed = (token != _orig_token) or (admin_tg != _orig_admin)
     return await _save_and_render(
         request, active_tab="telegram",
@@ -641,7 +651,15 @@ async def webhook_post(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
     form = await request.post()
     s = store.settings
-    s.webhook_secret = (form.get("webhook_secret") or "").strip()
+    secret = (form.get("webhook_secret") or "").strip()
+    if not secret:
+        return web.Response(
+            text=_settings_page(s, error="Webhook secret cannot be empty.",
+                                active_tab="webhook",
+                                webhook_url=_webhook_url_from_request(request)),
+            content_type="text/html", status=400,
+        )
+    s.webhook_secret = secret
     return await _save_and_render(request, active_tab="webhook")
 
 

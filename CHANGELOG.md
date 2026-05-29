@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-28
+
+### Security
+- **Webhook secret comparison is now constant-time.** `webhook.py` switched from `auth != secret` to `hmac.compare_digest(...)` to eliminate the timing side-channel that could let a LAN-resident attacker recover the secret byte by byte.
+- **Webhook secret is now mandatory.** Previously empty was silently allowed, which made the receiver accept any POST. `SettingsStore` auto-generates a secret on first load if none is present (a warning is logged with a pointer to the `/admin` Webhook tab where the value can be read and pasted into Seerr's webhook config). The webhook handler refuses all POSTs when the secret is somehow unset (defense in depth). The webui rejects an empty secret on save.
+
+### Added
+- **Webhook body size cap (128KB).** The parent aiohttp app keeps its 32MB ceiling for admin backup restores; the webhook handler now enforces a 128KB ceiling via Content-Length check + read-time check, so unauthenticated clients can't force 32MB allocations per request.
+- **Webhook deduplication.** A 60-second / 256-entry bounded SHA-256 body-hash cache drops duplicate deliveries (e.g., Seerr retries after a transient blip). The dedupe cache lives in the handler closure and evicts on TTL + size.
+- **`hermes_public_url` scheme validation.** The webui's Telegram tab now rejects URLs that don't start with `http://` or `https://`. Empty is still acceptable (means "not configured"). New `settings.validate_public_url(url)` helper.
+
+### Fixed
+- **Webhook handlers no longer return 500 on internal exceptions.** Previously a transient Telegram 429 or DB lock inside `handle_seerr_*` returned 500, Seerr retried on backoff, and once throttling cleared the admin got duplicate DMs for the same event. Now: log the exception, return 200. We'd rather lose one notification than spam the admin with five.
+
+### Notes
+- Derived from the four-agent audit (security findings #1, #2, #14; error finding #1; security finding #13). Phase 0 of the v0.11.x hardening roadmap. See `~/hermes_briefing.md` for the full roadmap.
+
 ## [0.10.6] - 2026-05-28
 
 ### Fixed

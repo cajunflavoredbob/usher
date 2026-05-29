@@ -108,12 +108,29 @@ class SettingsStore:
             try:
                 data = json.loads(self.path.read_text())
                 logger.info("Loaded settings from %s", self.path)
-                return Settings.from_dict(data)
+                s = Settings.from_dict(data)
             except Exception:
                 logger.exception("Failed to load %s; seeding fresh from env", self.path)
-        s = self._seed_from_env()
-        self._write(s)
-        logger.info("Seeded settings from env vars -> %s", self.path)
+                s = self._seed_from_env()
+                self._write(s)
+                logger.info("Seeded settings from env vars -> %s", self.path)
+        else:
+            s = self._seed_from_env()
+            self._write(s)
+            logger.info("Seeded settings from env vars -> %s", self.path)
+
+        # Auto-generate webhook_secret if missing. Covers fresh installs
+        # (env var unset) and upgrades from <0.11.0 (where the secret was
+        # optional). The webhook handler refuses POSTs without a secret,
+        # so we guarantee one exists before the bot starts.
+        if not s.webhook_secret:
+            s.webhook_secret = secrets.token_urlsafe(32)
+            logger.warning(
+                "Auto-generated webhook_secret. Copy it from /admin (Webhook tab) "
+                "into your Seerr webhook 'Authorization' header before Seerr can deliver events."
+            )
+            self._write(s)
+
         return s
 
     @staticmethod
@@ -180,6 +197,17 @@ def verify_password(plaintext: str, stored: str) -> bool:
         return False
     candidate = pbkdf2_hmac("sha256", plaintext.encode(), salt, iters)
     return compare_digest(candidate, expected)
+
+
+def validate_public_url(url: str) -> Optional[str]:
+    """Return None if the URL is acceptable, else a user-facing error string.
+    Empty is acceptable (means: not configured)."""
+    url = (url or "").strip()
+    if not url:
+        return None
+    if not (url.startswith("http://") or url.startswith("https://")):
+        return "URL must start with http:// or https://"
+    return None
 
 
 def load_or_create_session_secret(path: str | Path) -> bytes:
