@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-05-28
+
+### Added
+- **`http_util.py`** — shared `APIError` hierarchy (`TransientAPIError`, `PermanentAPIError`, `NotFoundAPIError`), error-body parser (extracts Seerr/Arr `{"message": "..."}` so user-facing text carries the real reason), `execute()` wrapper that handles retry + classify in one call, and `user_friendly_message(exc)` that formats exceptions for Telegram without leaking URLs/headers/stack traces.
+- **`fix_result.py`** — `FixResult` dataclass with `status` (`ok`/`partial`/`failed`), `message`, `steps_done`, and `poll_info`. `.should_poll` is True iff a fresh search was triggered, so partial successes still enqueue the autofix poller.
+- **Transient-failure retry across all API clients.** Seerr / Sonarr / Radarr / Plex calls now retry 429 + 502/503/504/408, plus `httpx.ConnectError`, `TimeoutException`, and `RemoteProtocolError`, up to 3 times with capped exponential backoff (0.5s → 5s cap, jittered). 4xx (except retryable) raises immediately as `PermanentAPIError`; 404 surfaces as `NotFoundAPIError`.
+- **Autofix poller distinguishes media-gone from transient.** `NotFoundAPIError` on the `has_file` poll marks the pending row `failed` and DMs the user that the media was removed instead of polling for the full 6h timeout. `TransientAPIError` keeps polling next tick.
+- **Plex pin-poll escalation.** Per-poll backoff goes 3s → 6s → 12s on consecutive failures; after 5 in a row the user gets a one-time "⚠️ Plex's API isn't responding right now" DM so they don't think the bot is silently broken.
+- **Telegram BadRequest fallback** via new `_edit_or_send(q, text, **kwargs)` helper. When `edit_message_text` fails because the admin edited or deleted the source message, a new `send_message` lands in the same chat instead of silently swallowing the response.
+
+### Changed
+- **Mark Failed / Auto Fix return `FixResult`.** `sonarr.mark_failed_episode`, `sonarr.auto_fix_episode`, `sonarr.auto_fix_season`, `radarr.mark_failed`, `radarr.auto_fix`, plus `_run_autofix` / `_run_mark_failed` all use the structured result. `_apply_fix` consumes `result.should_poll` and `result.status` to deliver honest partial-success messages while still enqueueing the poller when search succeeded.
+- **All user-facing exception strings sanitized.** ~14 sites in `bot.py` (cmd_tickets, tk_*, _finalize_link, _submit_issue, _check_connections, cmd_link*, etc.) now route via `user_friendly_message()` so users see "Seerr isn't responding right now; try again in a minute." instead of `Client error '503 Service Unavailable' for url 'http://192.168.x.x...'`. Logs still get the full exception via `logger.exception`.
+
+### Notes
+- Phase 3 of the v0.11.x hardening roadmap. Closes audit findings #2 (partial-success), #5 (poller media-gone), #9 (Plex poll escalation), #10 (retry), #11 (error-body parsing), #24 (Telegram BadRequest), and security #8 (exception leakage).
+- New tests in `tests/test_http_util.py` (26 cases) cover the response classifier, retry-on-transient, no-retry-on-permanent + no-retry-on-404 paths, connection-error wrapping, and `user_friendly_message` for all branches. Existing 63 tests still pass; total 89.
+
 ## [0.11.2] - 2026-05-28
 
 ### Added

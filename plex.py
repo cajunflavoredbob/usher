@@ -10,7 +10,11 @@ from urllib.parse import urlencode
 
 import httpx
 
+from http_util import execute
+
 logger = logging.getLogger(__name__)
+
+_SERVICE = "Plex"
 
 PRODUCT_NAME = "Hermes"
 DEVICE_NAME = "Telegram Bot"
@@ -72,17 +76,9 @@ class PlexClient:
         # strong=True returns a long opaque code suitable for the auth URL
         # deeplink (~30 min lifetime). strong=False returns a 4-char
         # human-friendly code that works at plex.tv/link (~15 min lifetime).
-        r = await self._http.post(
-            f"{PLEX_API_BASE}/pins",
-            params={"strong": "true" if strong else "false"},
-        )
-        if r.status_code >= 400:
-            # Log the response body so we can see Plex's actual error message
-            logger.error(
-                "Plex /pins POST failed: HTTP %d body=%r",
-                r.status_code, r.text[:500],
-            )
-            r.raise_for_status()
+        r = await execute(self._http, "POST", f"{PLEX_API_BASE}/pins",
+                          service=_SERVICE,
+                          params={"strong": "true" if strong else "false"})
         d = r.json()
         pin_id = d["id"]
         code = d["code"]
@@ -98,16 +94,14 @@ class PlexClient:
 
     async def poll_pin(self, pin_id: int) -> Optional[str]:
         """Return auth token once user has authorized, else None."""
-        r = await self._http.get(f"{PLEX_API_BASE}/pins/{pin_id}")
-        r.raise_for_status()
+        r = await execute(self._http, "GET", f"{PLEX_API_BASE}/pins/{pin_id}",
+                          service=_SERVICE)
         return r.json().get("authToken")
 
     async def get_user(self, auth_token: str) -> PlexUser:
-        r = await self._http.get(
-            f"{PLEX_API_BASE}/user",
-            headers={"X-Plex-Token": auth_token},
-        )
-        r.raise_for_status()
+        r = await execute(self._http, "GET", f"{PLEX_API_BASE}/user",
+                          service=_SERVICE,
+                          headers={"X-Plex-Token": auth_token})
         d = r.json()
         return PlexUser(
             id=d.get("id", 0),

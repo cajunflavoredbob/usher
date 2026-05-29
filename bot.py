@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 from typing import Final, Optional
 
+import telegram
 from telegram import (
     CopyTextButton,
     InlineKeyboardButton,
@@ -54,6 +55,13 @@ from plex import PlexClient
 from webhook import attach_webhook, start_http_server
 from webui import attach_webui
 from settings import SettingsStore, load_or_create_session_secret
+from fix_result import FixResult
+from http_util import (
+    APIError,
+    NotFoundAPIError,
+    TransientAPIError,
+    user_friendly_message,
+)
 from _version import __version__ as HERMES_VERSION
 
 logging.basicConfig(
@@ -658,7 +666,7 @@ async def _check_connections(app: Application) -> dict[str, str]:
             r.raise_for_status()
             out["Seerr"] = f"✅ {r.json().get('version', 'ok')}"
         except Exception as exc:
-            out["Seerr"] = f"❌ {exc}"
+            out["Seerr"] = f"❌ {user_friendly_message(exc)}"
     radarr: Optional[RadarrClient] = app.bot_data.get("radarr")
     if radarr:
         try:
@@ -666,7 +674,7 @@ async def _check_connections(app: Application) -> dict[str, str]:
             r.raise_for_status()
             out["Radarr"] = f"✅ {r.json().get('version', 'ok')}"
         except Exception as exc:
-            out["Radarr"] = f"❌ {exc}"
+            out["Radarr"] = f"❌ {user_friendly_message(exc)}"
     else:
         out["Radarr"] = "— not configured"
     sonarr: Optional[SonarrClient] = app.bot_data.get("sonarr")
@@ -676,7 +684,7 @@ async def _check_connections(app: Application) -> dict[str, str]:
             r.raise_for_status()
             out["Sonarr"] = f"✅ {r.json().get('version', 'ok')}"
         except Exception as exc:
-            out["Sonarr"] = f"❌ {exc}"
+            out["Sonarr"] = f"❌ {user_friendly_message(exc)}"
     else:
         out["Sonarr"] = "— not configured"
     return out
@@ -792,7 +800,7 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         )
     except Exception as exc:
         logger.exception("list_issues failed")
-        await update.effective_message.reply_text(f"Couldn't fetch tickets: {exc}")
+        await update.effective_message.reply_text(f"Couldn't fetch tickets. {user_friendly_message(exc)}")
         return
 
     if not issues:
@@ -849,6 +857,24 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # --- Ticket management (reply / close from inside Telegram) ----------------
+
+async def _edit_or_send(q, text: str, **kwargs) -> None:
+    """Edit the callback's message; if Telegram rejects (e.g., the user
+    edited or deleted the source message), send a new message in the same
+    chat so the response isn't silently dropped.
+    """
+    try:
+        await q.edit_message_text(text, **kwargs)
+        return
+    except telegram.error.BadRequest:
+        pass
+    except Exception:
+        logger.exception("edit_message_text failed unexpectedly; falling back to send")
+    try:
+        await q.message.reply_text(text, **kwargs)
+    except Exception:
+        logger.exception("reply_text fallback also failed")
+
 
 async def _token_for(ctx: ContextTypes.DEFAULT_TYPE, tg_id: int) -> tuple[bool, Optional[str], bool]:
     """Return (is_admin, plex_token_or_None, decrypt_failed).
@@ -1129,7 +1155,7 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
         issue = await seerr.get_issue(issue_id)
     except Exception as exc:
         logger.exception("get_issue failed for #%d", issue_id)
-        await q.edit_message_text(f"Couldn't fetch ticket #{issue_id}: {exc}")
+        await _edit_or_send(q, f"Couldn't fetch ticket #{issue_id}. {user_friendly_message(exc)}")
         return
 
     media_type = issue.media_type
@@ -1139,7 +1165,7 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
     action_name = "Redownload" if strategy == "redownload" else "Mark Failed"
 
     if media_type == "tv" and not episode:
-        await q.edit_message_text(
+        await _edit_or_send(q,
             f"{action_name} only works on individual episodes or movies — not whole "
             f"seasons or shows. For #{issue_id}, fix it in Sonarr directly."
         )
@@ -1160,9 +1186,9 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
             logger.exception("get_tv_seasons failed for #%d", issue_id)
 
     if strategy == "redownload":
-        ok, detail, poll_info = await _run_autofix(media, season, episode, radarr, sonarr)
-    else:  # mark_failed
-        ok, detail, poll_info = await _run_mark_failed(media, season, episode, radarr, sonarr)
+        result = await _run_autofix(media, season, episode, radarr, sonarr)
+    else:
+        result = await _run_mark_failed(media, season, episode, radarr, sonarr)
 
     label = label_title + (f" ({label_year})" if label_year else "")
     if media_type == "tv" and season:
@@ -1171,38 +1197,47 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
             if episode else f" — S{int(season):02d}"
         )
 
-    if not ok:
-        await q.edit_message_text(f"⚠️ {action_name} for #{issue_id} didn't run: {detail}")
+    if result.status == "failed":
+        await _edit_or_send(q, f"⚠️ {action_name} for #{issue_id} didn't run: {result.message}")
         return
 
-    try:
-        kwargs: dict = {
-            "chat_id": q.message.chat_id,
-            "user_id": update.effective_user.id,
-            "media_type": media_type,
-            "label": label or f"#{issue_id}",
-            "issue_id": issue_id,
-            "issue_url": "",
-        }
-        if media_type == "movie" and poll_info:
-            kwargs["radarr_movie_id"] = poll_info.get("movie_id")
-        elif media_type == "tv" and poll_info:
-            kwargs["sonarr_series_id"] = poll_info.get("series_id")
-            kwargs["sonarr_episode_id"] = poll_info.get("episode_id")
-            kwargs["sonarr_season"] = poll_info.get("season")
-            kwargs["expected_episode_ids"] = poll_info.get("expected_episode_ids") or []
-        await store.add_pending_autofix(**kwargs)
-        await store.log_autofix(update.effective_user.id, media_type, tmdb_id, season=season, episode=episode)
-        await q.edit_message_text(
-            f"🔧 {action_name} started for #{issue_id}.\n{label}\n\n"
-            f"{detail}\n\n"
-            "🔔 I'll DM when the new file finishes downloading."
-        )
-    except Exception:
-        logger.exception("failed to enqueue pending autofix for #%d", issue_id)
-        await q.edit_message_text(
-            f"🔧 {action_name} started for #{issue_id} ({detail}), but couldn't enqueue completion notification."
-        )
+    # ok or partial. If a search was triggered, enqueue the completion poller.
+    if result.should_poll:
+        try:
+            kwargs: dict = {
+                "chat_id": q.message.chat_id,
+                "user_id": update.effective_user.id,
+                "media_type": media_type,
+                "label": label or f"#{issue_id}",
+                "issue_id": issue_id,
+                "issue_url": "",
+            }
+            poll_info = result.poll_info or {}
+            if media_type == "movie":
+                kwargs["radarr_movie_id"] = poll_info.get("movie_id")
+            else:
+                kwargs["sonarr_series_id"] = poll_info.get("series_id")
+                kwargs["sonarr_episode_id"] = poll_info.get("episode_id")
+                kwargs["sonarr_season"] = poll_info.get("season")
+                kwargs["expected_episode_ids"] = poll_info.get("expected_episode_ids") or []
+            await store.add_pending_autofix(**kwargs)
+            await store.log_autofix(update.effective_user.id, media_type, tmdb_id,
+                                    season=season, episode=episode)
+        except Exception:
+            logger.exception("failed to enqueue pending autofix for #%d", issue_id)
+            prefix = "🔧" if result.ok else "⚠️"
+            await _edit_or_send(q,
+                f"{prefix} {action_name} for #{issue_id} ({result.message}), "
+                "but couldn't enqueue completion notification."
+            )
+            return
+
+    prefix = "🔧" if result.ok else "⚠️"
+    tail = "\n\n🔔 I'll DM when the new file finishes downloading." if result.should_poll else ""
+    await _edit_or_send(q,
+        f"{prefix} {action_name} for #{issue_id}.\n{label}\n\n{result.message}{tail}"
+    )
+    return
 
 
 async def tk_close_direct(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1220,9 +1255,9 @@ async def tk_close_direct(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         await seerr.resolve_issue(issue_id, as_plex_token=None)
     except Exception as exc:
         logger.exception("resolve_issue failed for #%d", issue_id)
-        await q.edit_message_text(f"Couldn't close #{issue_id}: {exc}")
+        await _edit_or_send(q, f"Couldn't close #{issue_id}. {user_friendly_message(exc)}")
         return
-    await q.edit_message_text(f"✅ Closed ticket #{issue_id}.")
+    await _edit_or_send(q, f"✅ Closed ticket #{issue_id}.")
 
 
 # --- Ticket reply conversation ----------------------------------------------
@@ -1298,7 +1333,7 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await seerr.add_issue_comment(issue_id, text, as_plex_token=token)
     except Exception as exc:
         logger.exception("add_issue_comment failed for #%d", issue_id)
-        await update.effective_message.reply_text(f"Couldn't post comment on #{issue_id}: {exc}")
+        await update.effective_message.reply_text(f"Couldn't post comment on #{issue_id}. {user_friendly_message(exc)}")
         ctx.user_data.pop("tk_reply_id", None)
         ctx.user_data.pop("tk_close_after", None)
         return ConversationHandler.END
@@ -1308,7 +1343,7 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         except Exception as exc:
             logger.exception("resolve_issue failed for #%d", issue_id)
             await update.effective_message.reply_text(
-                f"💬 Comment posted on #{issue_id}, but couldn't close: {exc}"
+                f"💬 Comment posted on #{issue_id}, but couldn't close. {user_friendly_message(exc)}"
             )
             ctx.user_data.pop("tk_reply_id", None)
             ctx.user_data.pop("tk_close_after", None)
@@ -1401,24 +1436,46 @@ async def cmd_link_consent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
 
 
 async def _poll_with_cancel(plex: PlexClient, pin_id: int, max_iters: int,
-                            ctx: ContextTypes.DEFAULT_TYPE, loop_id: str) -> Optional[str]:
+                            ctx: ContextTypes.DEFAULT_TYPE, loop_id: str,
+                            chat_id: Optional[int] = None) -> Optional[str]:
     """Poll Plex until a token is returned, this loop is superseded by a newer
     one (link_active_loop changes), or max_iters is exhausted. The loop_id
     pattern is race-free: a new loop overwrites link_active_loop, and any
     older loops bail on their next check. No reset is needed.
+
+    On consecutive failures (Plex API down), backs off from 3s -> 6s -> 12s
+    and DMs the user once after 5 in a row so they don't think the bot is
+    silently broken.
     """
+    consecutive_failures = 0
+    warned_user = False
     for _ in range(max_iters):
         if ctx.user_data.get("link_active_loop") != loop_id:
             return None
-        await asyncio.sleep(3)
+        sleep_s = min(12.0, 3.0 * (2 ** min(consecutive_failures, 2)))
+        await asyncio.sleep(sleep_s)
         try:
             token = await plex.poll_pin(pin_id)
+            consecutive_failures = 0
             if token:
                 if ctx.user_data.get("link_active_loop") != loop_id:
                     return None
                 return token
         except Exception:
-            logger.exception("poll_pin failed (will retry)")
+            consecutive_failures += 1
+            logger.exception("poll_pin failed (will retry; %d in a row)",
+                             consecutive_failures)
+            if consecutive_failures == 5 and not warned_user and chat_id is not None:
+                warned_user = True
+                try:
+                    await ctx.bot.send_message(
+                        chat_id=chat_id,
+                        text=("⚠️ Plex's API isn't responding right now. Still trying — "
+                              "I'll let you know if a token comes through. If you've "
+                              "already approved in Plex, sit tight."),
+                    )
+                except Exception:
+                    logger.exception("couldn't send Plex-down warning to %s", chat_id)
     return None
 
 
@@ -1439,7 +1496,7 @@ async def _finalize_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             chat_id=chat_id,
             text=(
                 "✓ Plex authorized you, but Seerr rejected the sign-in.\n"
-                f"Reason: {exc}\n\n"
+                f"{user_friendly_message(exc)}\n\n"
                 "Your Plex account probably isn't shared in Seerr yet. "
                 "Ask the admin to invite you."
             ),
@@ -1481,7 +1538,7 @@ async def cmd_link_platform(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
         pin = await plex.request_pin(strong=True)
     except Exception as exc:
         logger.exception("plex request_pin failed")
-        await q.edit_message_text(f"Couldn't start Plex auth: {exc}")
+        await q.edit_message_text(f"Couldn't start Plex auth. {user_friendly_message(exc)}")
         return ConversationHandler.END
 
     loop_id = secrets.token_hex(8)
@@ -1504,7 +1561,9 @@ async def cmd_link_platform(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     await q.edit_message_text(text, reply_markup=kb)
 
     # Strong PIN window: ~28 min (560 × 3s, under the 30-min lifetime).
-    auth_token = await _poll_with_cancel(plex, pin.id, max_iters=560, ctx=ctx, loop_id=loop_id)
+    auth_token = await _poll_with_cancel(plex, pin.id, max_iters=560, ctx=ctx,
+                                         loop_id=loop_id,
+                                         chat_id=update.effective_chat.id)
     if auth_token is None:
         if ctx.user_data.get("link_active_loop") != loop_id:
             # A newer loop (didnt_work fallback) has taken ownership; exit silently
@@ -1532,7 +1591,7 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         pin = await plex.request_pin(strong=False)
     except Exception as exc:
         logger.exception("plex request_pin failed (fallback)")
-        await q.edit_message_text(f"Couldn't get a fresh code: {exc}")
+        await q.edit_message_text(f"Couldn't get a fresh code. {user_friendly_message(exc)}")
         return
 
     # Claim a new loop ID -- any prior poll will see this and exit on its
@@ -1558,7 +1617,9 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     )
 
     # Weak PIN window: ~14 min (280 × 3s, under the 15-min lifetime).
-    auth_token = await _poll_with_cancel(plex, pin.id, max_iters=280, ctx=ctx, loop_id=loop_id)
+    auth_token = await _poll_with_cancel(plex, pin.id, max_iters=280, ctx=ctx,
+                                         loop_id=loop_id,
+                                         chat_id=update.effective_chat.id)
     if auth_token is None:
         if ctx.user_data.get("link_active_loop") != loop_id:
             return  # superseded by another loop
@@ -1665,7 +1726,7 @@ async def _show_search_results(
         results = await seerr.search(query, limit=5)
     except Exception as exc:
         logger.exception("search failed")
-        await reply_method(f"Search failed: {exc}")
+        await reply_method(f"Search failed. {user_friendly_message(exc)}")
         return ConversationHandler.END
     if not results:
         await reply_method(f'No matches for "{query}". Try a different title, or /cancel.')
@@ -1796,7 +1857,7 @@ async def _show_season_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         seasons, tvdb_id = await seerr.get_tv_seasons(tmdb_id)
     except Exception as exc:
         logger.exception("get_tv_seasons failed")
-        await q.edit_message_text(f"Couldn't fetch seasons: {exc}")
+        await q.edit_message_text(f"Couldn't fetch seasons. {user_friendly_message(exc)}")
         return ConversationHandler.END
     if not seasons:
         await q.edit_message_text("No seasons found for this show.")
@@ -2046,7 +2107,7 @@ async def _submit_issue(
         )
     except Exception as exc:
         logger.exception("create_issue failed")
-        await update.effective_message.reply_text(f"Failed to create issue: {exc}")
+        await update.effective_message.reply_text(f"Failed to create issue. {user_friendly_message(exc)}")
         return ConversationHandler.END
 
     emoji, name = ISSUE_TYPES[issue_type]
@@ -2112,32 +2173,32 @@ async def _run_autofix(
     episode: Optional[int],
     radarr: Optional[RadarrClient],
     sonarr: Optional[SonarrClient],
-) -> tuple[bool, str, Optional[dict]]:
-    """Returns (ok, message, poll_info). poll_info on success has keys
-    needed to track completion: movie_id for movies; series_id +
-    (episode_id or season + expected_episode_ids) for TV.
-    """
+) -> FixResult:
+    """Run delete+search via Radarr/Sonarr. Returns FixResult; the caller
+    inspects status (ok/partial/failed) and should_poll to decide whether
+    to enqueue the autofix completion poller."""
     try:
         if media["type"] == "movie":
             if not radarr:
-                return False, "Radarr not configured.", None
-            ok, msg, movie_id = await radarr.auto_fix(media["tmdb_id"])
-            return ok, msg, ({"movie_id": movie_id} if ok else None)
+                return FixResult.failed("Radarr not configured.")
+            return await radarr.auto_fix(media["tmdb_id"])
         if media["type"] == "tv":
             if not sonarr:
-                return False, "Sonarr not configured.", None
+                return FixResult.failed("Sonarr not configured.")
             if not episode:
                 # Whole-season / whole-show auto-fix is not supported -- too
                 # destructive. Episode-only.
-                return False, "Auto-fix only works on individual episodes, not whole seasons.", None
+                return FixResult.failed(
+                    "Auto-fix only works on individual episodes, not whole seasons."
+                )
             tvdb_id = media.get("tvdb_id")
             if not tvdb_id:
-                return False, "Couldn't find TVDb ID for this show.", None
+                return FixResult.failed("Couldn't find TVDb ID for this show.")
             return await sonarr.auto_fix_episode(tvdb_id, season, episode)
     except Exception as exc:
         logger.exception("auto_fix failed")
-        return False, str(exc), None
-    return False, "Unknown media type.", None
+        return FixResult.failed(user_friendly_message(exc))
+    return FixResult.failed("Unknown media type.")
 
 
 async def _run_mark_failed(
@@ -2146,28 +2207,27 @@ async def _run_mark_failed(
     episode: Optional[int],
     radarr: Optional[RadarrClient],
     sonarr: Optional[SonarrClient],
-) -> tuple[bool, str, Optional[dict]]:
-    """Same shape as _run_autofix. Marks the current release as failed; Radarr
-    or Sonarr handles blocklist + new search automatically."""
+) -> FixResult:
+    """Same shape as _run_autofix. Blocklists the most recent grab in
+    addition to delete+search."""
     try:
         if media["type"] == "movie":
             if not radarr:
-                return False, "Radarr not configured.", None
-            ok, msg, movie_id = await radarr.mark_failed(media["tmdb_id"])
-            return ok, msg, ({"movie_id": movie_id} if ok else None)
+                return FixResult.failed("Radarr not configured.")
+            return await radarr.mark_failed(media["tmdb_id"])
         if media["type"] == "tv":
             if not sonarr:
-                return False, "Sonarr not configured.", None
+                return FixResult.failed("Sonarr not configured.")
             if not episode:
-                return False, "Mark Failed only works on individual episodes.", None
+                return FixResult.failed("Mark Failed only works on individual episodes.")
             tvdb_id = media.get("tvdb_id")
             if not tvdb_id:
-                return False, "Couldn't find TVDb ID for this show.", None
+                return FixResult.failed("Couldn't find TVDb ID for this show.")
             return await sonarr.mark_failed_episode(tvdb_id, season, episode)
     except Exception as exc:
         logger.exception("mark_failed failed")
-        return False, str(exc), None
-    return False, "Unknown media type.", None
+        return FixResult.failed(user_friendly_message(exc))
+    return FixResult.failed("Unknown media type.")
 
 
 async def issue_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
@@ -2222,8 +2282,29 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             if done:
                 await _notify_complete(ctx, fix, extra)
                 await store.mark_autofix_status(fix.id, "complete")
+        except NotFoundAPIError:
+            # Media was deleted from Sonarr/Radarr between enqueue and poll.
+            # Mark failed and DM the user instead of polling forever.
+            logger.info("poll: media removed for fix %d; marking failed", fix.id)
+            await _notify_media_gone(ctx, fix)
+            await store.mark_autofix_status(fix.id, "failed")
+        except TransientAPIError:
+            # Service hiccup — keep polling next tick.
+            logger.debug("poll: transient error for fix %d; will retry next tick", fix.id)
         except Exception:
             logger.exception("poll failed for fix %d", fix.id)
+
+
+async def _notify_media_gone(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:
+    text = (
+        f"⚠️ Auto-fix abandoned for *{fix.label}*.\n"
+        "The media was removed from Sonarr/Radarr before the new file landed. "
+        f"Original issue: {fix.issue_url}"
+    )
+    try:
+        await ctx.bot.send_message(chat_id=fix.chat_id, text=text, parse_mode="Markdown")
+    except Exception:
+        logger.exception("notify_media_gone send_message failed for fix %d", fix.id)
 
 
 async def _notify_complete(ctx: ContextTypes.DEFAULT_TYPE, fix, extra: str = "") -> None:
@@ -2304,7 +2385,7 @@ async def resolve_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
             await seerr.resolve_issue(issue_id, as_plex_token=token)
         except Exception as exc:
             logger.exception("resolve_issue failed")
-            await q.edit_message_text(f"Couldn't close issue #{issue_id}: {exc}")
+            await q.edit_message_text(f"Couldn't close issue #{issue_id}. {user_friendly_message(exc)}")
             return ConversationHandler.END
         await q.edit_message_text(f"✅ Issue #{issue_id} closed. Thanks!")
         return ConversationHandler.END
@@ -2335,7 +2416,7 @@ async def resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
         await seerr.add_issue_comment(issue_id, comment, as_plex_token=token)
     except Exception as exc:
         logger.exception("add_issue_comment failed")
-        await update.effective_message.reply_text(f"Couldn't add comment: {exc}")
+        await update.effective_message.reply_text(f"Couldn't add comment. {user_friendly_message(exc)}")
         ctx.user_data.pop("awaiting_comment_for", None)
         return ConversationHandler.END
     await update.effective_message.reply_text(
