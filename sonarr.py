@@ -149,9 +149,16 @@ class SonarrClient:
     async def mark_failed_episode(
         self, tvdb_id: int, season: int, episode: int
     ) -> tuple[bool, str, Optional[dict]]:
-        """Find the most recent grab for this episode and mark it failed.
-        Sonarr will blocklist the release and trigger a new search.
-        Returns (ok, message, poll_info).
+        """Blocklist the most recent grab (so the same release won't be re-grabbed),
+        delete the on-disk file, and trigger a new search. End-state matches
+        auto_fix_episode, plus the blocklist step.
+
+        Sonarr's /history/failed endpoint alone only blocklists; it does NOT
+        delete or re-search unless the "Redownload Failed" setting is on. We
+        do all three explicitly so behavior is independent of that setting.
+
+        Falls back to delete+search if there's no grab in history (e.g., file
+        was manually imported). Returns (ok, message, poll_info).
         """
         series = await self.get_series_by_tvdb(tvdb_id)
         if series is None:
@@ -160,6 +167,8 @@ class SonarrClient:
         match = next((e for e in episodes if e.episode == episode), None)
         if match is None:
             return False, f"S{season:02d}E{episode:02d} not found in Sonarr.", None
+
+        # Step 1: blocklist the most recent grab so Sonarr won't re-grab the same release.
         try:
             r = await self._client.get(
                 "/history",
@@ -176,17 +185,32 @@ class SonarrClient:
             return False, f"Couldn't fetch history: {exc}", None
         records = r.json().get("records") or []
         grab = next((rec for rec in records if rec.get("eventType") == "grabbed"), None)
-        if grab is None:
-            return False, "No download history to mark failed (no recent grab).", None
-        history_id = grab.get("id")
+        blocklisted = False
+        if grab is not None:
+            try:
+                r = await self._client.post(f"/history/failed/{grab['id']}")
+                r.raise_for_status()
+                blocklisted = True
+            except Exception as exc:
+                return False, f"Couldn't blocklist release: {exc}", None
+
+        # Step 2: delete the on-disk file (if present).
+        if match.has_file and match.episode_file_id:
+            try:
+                await self.delete_episode_file(match.episode_file_id)
+            except Exception as exc:
+                return False, f"Blocklisted release but couldn't delete file: {exc}", None
+
+        # Step 3: trigger a new search.
         try:
-            r = await self._client.post(f"/history/failed/{history_id}")
-            r.raise_for_status()
+            await self.trigger_episode_search([match.id])
         except Exception as exc:
-            return False, f"Couldn't mark failed: {exc}", None
+            return False, f"Cleaned up but couldn't trigger search: {exc}", None
+
+        prefix = "Blocklisted current release, " if blocklisted else "No prior grab to blocklist; "
         return (
             True,
-            f"Marked current release of '{series.title}' S{season:02d}E{episode:02d} as failed. Sonarr will blocklist it and search again.",
+            f"{prefix}deleted '{series.title}' S{season:02d}E{episode:02d} file, and triggered re-search.",
             {"series_id": series.id, "episode_id": match.id},
         )
 

@@ -83,13 +83,22 @@ class RadarrClient:
         return bool(r.json().get("hasFile"))
 
     async def mark_failed(self, tmdb_id: int) -> tuple[bool, str, Optional[int]]:
-        """Find the most recent grab record for this movie and mark it failed.
-        Radarr will blocklist the release and trigger a new search.
+        """Blocklist the most recent grab (so the same release won't be re-grabbed),
+        delete the on-disk file, and trigger a new search. End-state matches
+        auto_fix, plus the blocklist step.
+
+        Radarr's /history/failed endpoint alone only blocklists; it does NOT
+        delete or re-search unless the "Redownload Failed" setting is on. We
+        do all three explicitly so behavior is independent of that setting.
+
+        Falls back to delete+search if there's no grab in history.
         Returns (ok, message, radarr_movie_id).
         """
         movie = await self.get_movie_by_tmdb(tmdb_id)
         if movie is None:
             return False, "Movie isn't in Radarr (not monitored).", None
+
+        # Step 1: blocklist the most recent grab.
         try:
             r = await self._client.get(
                 "/history",
@@ -106,16 +115,31 @@ class RadarrClient:
             return False, f"Couldn't fetch history: {exc}", None
         records = r.json().get("records") or []
         grab = next((rec for rec in records if rec.get("eventType") == "grabbed"), None)
-        if grab is None:
-            return False, "No download history to mark failed (no recent grab).", None
-        history_id = grab.get("id")
+        blocklisted = False
+        if grab is not None:
+            try:
+                r = await self._client.post(f"/history/failed/{grab['id']}")
+                r.raise_for_status()
+                blocklisted = True
+            except Exception as exc:
+                return False, f"Couldn't blocklist release: {exc}", None
+
+        # Step 2: delete the on-disk file (if present).
+        if movie.has_file and movie.movie_file_id:
+            try:
+                await self.delete_movie_file(movie.movie_file_id)
+            except Exception as exc:
+                return False, f"Blocklisted release but couldn't delete file: {exc}", None
+
+        # Step 3: trigger a new search.
         try:
-            r = await self._client.post(f"/history/failed/{history_id}")
-            r.raise_for_status()
+            await self.trigger_search(movie.id)
         except Exception as exc:
-            return False, f"Couldn't mark failed: {exc}", None
+            return False, f"Cleaned up but couldn't trigger search: {exc}", None
+
+        prefix = "Blocklisted current release, " if blocklisted else "No prior grab to blocklist; "
         return (
             True,
-            f"Marked current release of '{movie.title}' as failed. Radarr will blocklist it and search again.",
+            f"{prefix}deleted '{movie.title}' file, and triggered re-search.",
             movie.id,
         )

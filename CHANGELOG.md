@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.6] - 2026-05-28
+
+### Fixed
+- **"Mark Failed" now actually replaces the file.** Previous behavior only called Sonarr/Radarr's `/history/failed/{id}` endpoint, which blocklists the release but does NOT delete the on-disk file or trigger a new search unless the global "Redownload Failed" setting is on (it usually isn't). Symptom: instant "marked failed" confirmation, but the broken file stayed on disk and SABnzbd never saw a new job.
+
+  `mark_failed_episode` (Sonarr) and `mark_failed` (Radarr) now perform a strict superset of `auto_fix` / `auto_fix_episode`:
+  1. Blocklist the most recent grab via `/history/failed/{id}` (skipped cleanly if no grab history exists).
+  2. Delete the on-disk file (if present).
+  3. Trigger a fresh search.
+
+  Success message updated to reflect the actual end-state. `poll_info` shape unchanged, so the existing post-fix polling in `_run_mark_failed` continues to work without modification.
+
+### Notes
+- Discovered via ticket #28 (`Mating Season S01E08`): file was a 1.1 GB zero-byte payload (EBML header all `0x00`) that Plex's `/transcode/universal/decision` endpoint rejected with HTTP 400. "Mark Failed" was the right user intent but didn't carry out the file replacement.
+
 ## [0.10.5] - 2026-05-28
 
 ### Added
