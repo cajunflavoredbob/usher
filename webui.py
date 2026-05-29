@@ -24,6 +24,10 @@ import io
 import json
 import logging
 import os
+import shutil
+import signal
+import sqlite3
+import tempfile
 import time
 import zipfile
 from hashlib import sha256
@@ -32,6 +36,21 @@ from typing import Awaitable, Callable, Optional
 
 from aiohttp import web
 
+from auth_util import (
+    CSRF_COOKIE,
+    CSRF_FORM_FIELD,
+    LoginThrottle,
+    attach_csrf_cookie,
+    audit,
+    client_ip,
+    clear_setup_token,
+    csrf_for_request,
+    generate_csrf_token,
+    load_or_create_setup_token,
+    request_is_secure,
+    validate_csrf,
+)
+from backup_crypto import is_wrapped, unwrap, wrap
 from settings import (
     DEFAULT_DAILY_AUTOFIX_LIMIT,
     Settings,
@@ -48,6 +67,37 @@ SESSION_COOKIE = "hermes_session"
 SESSION_TTL_SECONDS = 7 * 24 * 3600
 
 ReloadCallback = Callable[[], Awaitable[None]]
+
+# Single in-memory throttle shared by all login_post invocations in this process.
+_throttle = LoginThrottle()
+
+
+def _set_session_cookie(resp, cookie_value: str, *, secure: bool) -> None:
+    resp.set_cookie(
+        SESSION_COOKIE, cookie_value,
+        max_age=SESSION_TTL_SECONDS,
+        httponly=True, samesite="Lax", secure=secure,
+    )
+
+
+def _schedule_clean_exit(delay_s: float = 2.0) -> None:
+    """Send SIGTERM to self after `delay_s` so PTB's run_polling and
+    aiohttp's runner unwind cleanly (closing httpx clients, DB
+    connections, the HTTP server). Falls back to os._exit only if
+    the SIGTERM dispatch itself fails."""
+    loop = asyncio.get_running_loop()
+    def _kill():
+        try:
+            os.kill(os.getpid(), signal.SIGTERM)
+        except Exception:
+            logger.exception("SIGTERM dispatch failed; falling back to os._exit")
+            os._exit(0)
+    loop.call_later(delay_s, _kill)
+
+
+def _csrf_input(token: str) -> str:
+    """HTML hidden field for double-submit CSRF validation."""
+    return f'<input type="hidden" name="{CSRF_FORM_FIELD}" value="{_esc(token)}">'
 
 
 # --- Session helpers --------------------------------------------------------
@@ -218,11 +268,13 @@ def _settings_page(
     active_tab: str = "telegram",
     webhook_url: str = "",
     marker_target: str = "",
+    csrf_token: str = "",
 ) -> str:
     if active_tab not in TAB_KEYS:
         active_tab = "telegram"
     ids_str = ",".join(str(i) for i in s.allowed_autofix_telegram_ids)
     admin_tg_val = str(s.admin_telegram_id) if s.admin_telegram_id else ""
+    csrf = _csrf_input(csrf_token)
 
     # Inline marker next to the relevant form's Save button. marker_target
     # defaults to the active tab so the obvious case Just Works.
@@ -242,6 +294,7 @@ def _settings_page(
 
     telegram_form = f"""
 <form method="POST" action="/admin/telegram">
+  {csrf}
   <h2>Telegram</h2>
   <div class="note">Changes to the bot token or admin user ID restart the container so the new identity takes effect.</div>
   <label>Bot Token <span class="note">(from @BotFather)</span></label>
@@ -257,6 +310,7 @@ def _settings_page(
 
     seerr_form = f"""
 <form method="POST" action="/admin/seerr">
+  {csrf}
   <h2>Seerr</h2>
   <label>Seerr URL</label>
   <input type="text" name="seerr_url" value="{_esc(s.seerr_url)}" placeholder="http://192.168.1.10:5056" required>
@@ -270,6 +324,7 @@ def _settings_page(
 
     autofix_form = f"""
 <form method="POST" action="/admin/autofix">
+  {csrf}
   <h2>Auto-fix (Radarr / Sonarr)</h2>
   <p class="intro">When a user reports a Video, Audio, or Subtitle issue, Hermes can ask Radarr or Sonarr to delete the current file and trigger a new search. Configure the URLs and API keys below, then list the Telegram users allowed to use it. The admin always bypasses the per-day limit.</p>
 
@@ -297,6 +352,7 @@ def _settings_page(
 
     webhook_form = f"""
 <form method="POST" action="/admin/webhook">
+  {csrf}
   <h2>Webhook</h2>
   <p>Hermes receives webhook events from Seerr on this URL:</p>
   <div class="url-box">{_esc(webhook_url)}</div>
@@ -312,6 +368,7 @@ def _settings_page(
 
     account_section = f"""
 <form method="POST" action="/admin/password">
+  {csrf}
   <h2>Change Password</h2>
   <label>Current password</label>
   <input type="password" name="current" required>
@@ -322,16 +379,22 @@ def _settings_page(
   <button type="submit">Change Password</button>{marker("account")}
 </form>
 
-<form method="GET" action="/admin/backup">
+<form method="POST" action="/admin/backup">
+  {csrf}
   <h2>Download Backup</h2>
-  <div class="note">Downloads a ZIP containing settings.json, the mappings database, and the encryption key. Treat this file as secret.</div>
+  <div class="note">Downloads a ZIP containing settings.json, the mappings database, and the encryption key. Treat this file as secret. Optionally wrap it with a passphrase (PBKDF2 + AES-GCM).</div>
+  <label>Passphrase <span class="note">(optional)</span></label>
+  <input type="password" name="passphrase" placeholder="Leave blank for plain ZIP">
   <button type="submit">Download Backup</button>
 </form>
 
 <form method="POST" action="/admin/restore" enctype="multipart/form-data">
+  {csrf}
   <h2>Restore from Backup</h2>
-  <input type="file" name="backup" accept=".zip" required>
-  <div class="note">Overwrites settings, mappings DB, and encryption key. The container will restart.</div>
+  <input type="file" name="backup" accept=".zip,.hermes-backup" required>
+  <label>Passphrase <span class="note">(required only if the backup was wrapped)</span></label>
+  <input type="password" name="passphrase" placeholder="Leave blank for plain ZIP">
+  <div class="note">Overwrites settings, mappings DB, and encryption key after validating them. Current files are copied to <code>/data/pre-restore-TIMESTAMP/</code> first. The container restarts.</div>
   <button type="submit" class="danger">Restore</button>{marker("restore")}
 </form>
 """
@@ -379,12 +442,27 @@ async def setup_get(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
     if store.settings.admin.is_set():
         return web.HTTPFound("/admin/login")
+    setup_token = load_or_create_setup_token(request.app["data_dir"])
+    csrf = csrf_for_request(request)
     s = store.settings
     admin_tg_val = str(s.admin_telegram_id) if s.admin_telegram_id else ""
+
+    token_field = ""
+    if setup_token:
+        token_field = """
+  <h2>Setup Token</h2>
+  <p class="note">A one-time setup token was printed to the container logs on first run.
+  Paste it here to prove you have host access (run <code>docker logs hermes | grep "setup token"</code>).</p>
+  <label>Setup token</label>
+  <input type="text" name="setup_token" required autocomplete="off">
+"""
+
     body = _page("Setup", f"""
 <h1>Hermes First-Time Setup</h1>
 <p>Configure the minimum settings needed to bring the bot online. You can change everything later from the admin UI.</p>
 <form method="POST" action="/admin/setup">
+  {_csrf_input(csrf)}
+  {token_field}
   <h2>Admin Account</h2>
   <label>Username</label>
   <input type="text" name="username" required autofocus>
@@ -409,7 +487,9 @@ async def setup_get(request: web.Request) -> web.Response:
   <div class="note">After saving, the container will restart to bring the bot online.</div>
 </form>
 """)
-    return web.Response(text=body, content_type="text/html")
+    resp = web.Response(text=body, content_type="text/html")
+    attach_csrf_cookie(resp, csrf, secure=request_is_secure(request))
+    return resp
 
 
 async def setup_post(request: web.Request) -> web.Response:
@@ -417,6 +497,19 @@ async def setup_post(request: web.Request) -> web.Response:
     if store.settings.admin.is_set():
         return web.HTTPFound("/admin/login")
     form = await request.post()
+    if not validate_csrf(request, form.get(CSRF_FORM_FIELD)):
+        audit("setup_csrf_fail", ip=client_ip(request))
+        return web.Response(text="CSRF token mismatch.", status=403)
+
+    setup_token = load_or_create_setup_token(request.app["data_dir"])
+    if setup_token:
+        submitted = (form.get("setup_token") or "").strip()
+        if not submitted or not hmac.compare_digest(submitted, setup_token):
+            audit("setup_token_fail", ip=client_ip(request))
+            body = _page("Setup", _flash(error="Invalid setup token.") +
+                         '<p><a href="/admin/setup">Try again</a></p>')
+            return web.Response(text=body, content_type="text/html", status=403)
+
     username = (form.get("username") or "").strip()
     password = form.get("password") or ""
     confirm = form.get("confirm") or ""
@@ -456,6 +549,8 @@ async def setup_post(request: web.Request) -> web.Response:
     s.seerr_url = seerr_url
     s.seerr_api_key = seerr_api_key
     store.save()
+    clear_setup_token(request.app["data_dir"])
+    audit("setup_complete", user=username, ip=client_ip(request))
     logger.info("Setup complete; admin '%s' created, bot token + seerr configured", username)
 
     # Tell the surrounding app (setup-only mode) that we're done -- it will exit
@@ -480,9 +575,11 @@ async def login_get(request: web.Request) -> web.Response:
         return web.HTTPFound("/admin/setup")
     if _current_user(request):
         return web.HTTPFound("/admin")
-    body = _page("Login", """
+    csrf = csrf_for_request(request)
+    body = _page("Login", f"""
 <h1>Hermes Admin</h1>
 <form method="POST" action="/admin/login">
+  {_csrf_input(csrf)}
   <label>Username</label>
   <input type="text" name="username" required autofocus>
   <label>Password</label>
@@ -490,26 +587,53 @@ async def login_get(request: web.Request) -> web.Response:
   <button type="submit">Log in</button>
 </form>
 """)
-    return web.Response(text=body, content_type="text/html")
+    resp = web.Response(text=body, content_type="text/html")
+    attach_csrf_cookie(resp, csrf, secure=request_is_secure(request))
+    return resp
 
 
 async def login_post(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
     form = await request.post()
+    if not validate_csrf(request, form.get(CSRF_FORM_FIELD)):
+        audit("login_csrf_fail", ip=client_ip(request))
+        return web.Response(text="CSRF token mismatch.", status=403)
+
+    ip = client_ip(request)
+    locked = _throttle.is_locked(ip)
+    if locked is not None:
+        audit("login_throttled", ip=ip, seconds_left=int(locked))
+        body = _page("Login", _flash(
+            error=f"Too many failed attempts. Try again in {int(locked)}s."
+        ) + '<p><a href="/admin/login">Back</a></p>')
+        return web.Response(text=body, content_type="text/html", status=429,
+                            headers={"Retry-After": str(int(locked))})
+
     username = (form.get("username") or "").strip()
     password = form.get("password") or ""
     admin = store.settings.admin
-    if not admin.is_set() or username != admin.username or not verify_password(password, admin.password_hash):
+    if (not admin.is_set() or username != admin.username
+            or not verify_password(password, admin.password_hash)):
+        _throttle.record_failure(ip)
+        audit("login_fail", user=username or "-", ip=ip)
         body = _page("Login", _flash(error="Invalid credentials.") +
                      '<p><a href="/admin/login">Try again</a></p>')
         return web.Response(text=body, content_type="text/html", status=401)
+
+    _throttle.record_success(ip)
+    audit("login_success", user=username, ip=ip)
+    secure = request_is_secure(request)
     cookie = _make_session_cookie(request.app["session_secret"], username)
     resp = web.HTTPFound("/admin")
-    resp.set_cookie(SESSION_COOKIE, cookie, max_age=SESSION_TTL_SECONDS, httponly=True, samesite="Lax")
+    _set_session_cookie(resp, cookie, secure=secure)
+    # Rotate CSRF cookie after privilege change.
+    attach_csrf_cookie(resp, generate_csrf_token(), secure=secure)
     return resp
 
 
 async def logout(request: web.Request) -> web.Response:
+    user = _current_user(request)
+    audit("logout", user=user or "-", ip=client_ip(request))
     resp = web.HTTPFound("/admin/login")
     resp.del_cookie(SESSION_COOKIE)
     return resp
@@ -518,14 +642,18 @@ async def logout(request: web.Request) -> web.Response:
 async def admin_get(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
     active_tab = request.query.get("tab", "telegram")
-    return web.Response(
+    csrf = csrf_for_request(request)
+    resp = web.Response(
         text=_settings_page(
             store.settings,
             active_tab=active_tab,
             webhook_url=_webhook_url_from_request(request),
+            csrf_token=csrf,
         ),
         content_type="text/html",
     )
+    attach_csrf_cookie(resp, csrf, secure=request_is_secure(request))
+    return resp
 
 
 async def _save_and_render(
@@ -549,20 +677,37 @@ async def _save_and_render(
             except Exception as exc:
                 logger.exception("Hot reload failed")
                 err = f"Saved, but hot reload failed: {exc}. Restart the container."
-    return web.Response(
+    csrf = csrf_for_request(request)
+    resp = web.Response(
         text=_settings_page(
             store.settings,
             message=msg, error=err,
             active_tab=active_tab,
             webhook_url=_webhook_url_from_request(request),
+            csrf_token=csrf,
         ),
         content_type="text/html",
     )
+    attach_csrf_cookie(resp, csrf, secure=request_is_secure(request))
+    return resp
+
+
+def _csrf_check_or_403(request: web.Request, form) -> Optional[web.Response]:
+    """Reusable CSRF gate for admin POST handlers. Returns the rejection
+    response (caller should `return` it) or None to proceed."""
+    if not validate_csrf(request, form.get(CSRF_FORM_FIELD)):
+        audit("admin_csrf_fail", user=_current_user(request) or "-",
+              ip=client_ip(request), path=request.path)
+        return web.Response(text="CSRF token mismatch.", status=403)
+    return None
 
 
 async def telegram_post(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
     form = await request.post()
+    csrf_resp = _csrf_check_or_403(request, form)
+    if csrf_resp is not None:
+        return csrf_resp
     s = store.settings
     _orig_token = s.telegram_bot_token
     _orig_admin = s.admin_telegram_id
@@ -572,7 +717,8 @@ async def telegram_post(request: web.Request) -> web.Response:
         return web.Response(
             text=_settings_page(s, error="Bot token is required.",
                                 active_tab="telegram",
-                                webhook_url=_webhook_url_from_request(request)),
+                                webhook_url=_webhook_url_from_request(request),
+                                csrf_token=csrf_for_request(request)),
             content_type="text/html", status=400,
         )
     try:
@@ -583,7 +729,8 @@ async def telegram_post(request: web.Request) -> web.Response:
         return web.Response(
             text=_settings_page(s, error="Admin Telegram User ID must be a positive integer.",
                                 active_tab="telegram",
-                                webhook_url=_webhook_url_from_request(request)),
+                                webhook_url=_webhook_url_from_request(request),
+                                csrf_token=csrf_for_request(request)),
             content_type="text/html", status=400,
         )
     public_url = (form.get("hermes_public_url") or "").strip()
@@ -592,7 +739,8 @@ async def telegram_post(request: web.Request) -> web.Response:
         return web.Response(
             text=_settings_page(s, error=f"Hermes Public URL: {url_err}",
                                 active_tab="telegram",
-                                webhook_url=_webhook_url_from_request(request)),
+                                webhook_url=_webhook_url_from_request(request),
+                                csrf_token=csrf_for_request(request)),
             content_type="text/html", status=400,
         )
     s.telegram_bot_token = token
@@ -609,6 +757,9 @@ async def telegram_post(request: web.Request) -> web.Response:
 async def seerr_post(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
     form = await request.post()
+    csrf_resp = _csrf_check_or_403(request, form)
+    if csrf_resp is not None:
+        return csrf_resp
     s = store.settings
     s.seerr_url = (form.get("seerr_url") or "").strip()
     s.seerr_api_key = (form.get("seerr_api_key") or "").strip()
@@ -619,6 +770,9 @@ async def seerr_post(request: web.Request) -> web.Response:
 async def autofix_post(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
     form = await request.post()
+    csrf_resp = _csrf_check_or_403(request, form)
+    if csrf_resp is not None:
+        return csrf_resp
     s = store.settings
     s.radarr_url = (form.get("radarr_url") or "").strip()
     s.radarr_api_key = (form.get("radarr_api_key") or "").strip()
@@ -640,7 +794,8 @@ async def autofix_post(request: web.Request) -> web.Response:
         return web.Response(
             text=_settings_page(s, error="Per-user daily limit must be a positive integer.",
                                 active_tab="autofix",
-                                webhook_url=_webhook_url_from_request(request)),
+                                webhook_url=_webhook_url_from_request(request),
+                                csrf_token=csrf_for_request(request)),
             content_type="text/html", status=400,
         )
     s.daily_autofix_limit = limit
@@ -650,13 +805,17 @@ async def autofix_post(request: web.Request) -> web.Response:
 async def webhook_post(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
     form = await request.post()
+    csrf_resp = _csrf_check_or_403(request, form)
+    if csrf_resp is not None:
+        return csrf_resp
     s = store.settings
     secret = (form.get("webhook_secret") or "").strip()
     if not secret:
         return web.Response(
             text=_settings_page(s, error="Webhook secret cannot be empty.",
                                 active_tab="webhook",
-                                webhook_url=_webhook_url_from_request(request)),
+                                webhook_url=_webhook_url_from_request(request),
+                                csrf_token=csrf_for_request(request)),
             content_type="text/html", status=400,
         )
     s.webhook_secret = secret
@@ -666,6 +825,9 @@ async def webhook_post(request: web.Request) -> web.Response:
 async def change_password(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
     form = await request.post()
+    csrf_resp = _csrf_check_or_403(request, form)
+    if csrf_resp is not None:
+        return csrf_resp
     current = form.get("current") or ""
     new = form.get("new") or ""
     confirm = form.get("confirm") or ""
@@ -674,22 +836,26 @@ async def change_password(request: web.Request) -> web.Response:
         return web.Response(
             text=_settings_page(store.settings, error="Current password is incorrect.",
                                 active_tab="account",
-                                webhook_url=_webhook_url_from_request(request)),
+                                webhook_url=_webhook_url_from_request(request),
+                                csrf_token=csrf_for_request(request)),
             content_type="text/html", status=400,
         )
     if len(new) < 8 or new != confirm:
         return web.Response(
             text=_settings_page(store.settings, error="New password must be >= 8 chars and match confirm.",
                                 active_tab="account",
-                                webhook_url=_webhook_url_from_request(request)),
+                                webhook_url=_webhook_url_from_request(request),
+                                csrf_token=csrf_for_request(request)),
             content_type="text/html", status=400,
         )
     admin.password_hash = hash_password(new)
     store.save()
+    audit("password_changed", user=_current_user(request) or "-", ip=client_ip(request))
     return web.Response(
         text=_settings_page(store.settings, message="Password changed.",
                             active_tab="account",
-                            webhook_url=_webhook_url_from_request(request)),
+                            webhook_url=_webhook_url_from_request(request),
+                            csrf_token=csrf_for_request(request)),
         content_type="text/html",
     )
 
@@ -700,6 +866,12 @@ async def backup_download(request: web.Request) -> web.Response:
     db_path: Path = Path(request.app["db_path"])
     enc_key_path = data_dir / "encryption.key"
 
+    form = await request.post()
+    csrf_resp = _csrf_check_or_403(request, form)
+    if csrf_resp is not None:
+        return csrf_resp
+    passphrase = form.get("passphrase") or ""
+
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         if settings_path.exists():
@@ -708,53 +880,128 @@ async def backup_download(request: web.Request) -> web.Response:
             zf.write(db_path, "mappings.sqlite")
         if enc_key_path.exists():
             zf.write(enc_key_path, "encryption.key")
+    raw_zip = buf.getvalue()
+
+    if passphrase:
+        blob = wrap(raw_zip, passphrase)
+        ext = "hermes-backup"
+        ctype = "application/octet-stream"
+    else:
+        blob = raw_zip
+        ext = "zip"
+        ctype = "application/zip"
 
     ts = time.strftime("%Y%m%d-%H%M%S")
+    audit("backup_download", user=_current_user(request) or "-",
+          ip=client_ip(request), wrapped=bool(passphrase))
     return web.Response(
-        body=buf.getvalue(),
+        body=blob,
         headers={
-            "Content-Type": "application/zip",
-            "Content-Disposition": f'attachment; filename="hermes-backup-{ts}.zip"',
+            "Content-Type": ctype,
+            "Content-Disposition": f'attachment; filename="hermes-backup-{ts}.{ext}"',
         },
     )
 
 
-async def restore_upload(request: web.Request) -> web.Response:
+def _restore_error(request: web.Request, message: str, status: int = 400) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
+    return web.Response(
+        text=_settings_page(store.settings, error=message,
+                            active_tab="account",
+                            marker_target="restore",
+                            webhook_url=_webhook_url_from_request(request),
+                            csrf_token=csrf_for_request(request)),
+        content_type="text/html", status=status,
+    )
+
+
+async def restore_upload(request: web.Request) -> web.Response:
     data_dir: Path = request.app["data_dir"]
     settings_path: Path = request.app["settings_path"]
     db_path: Path = Path(request.app["db_path"])
     enc_key_path = data_dir / "encryption.key"
 
+    # Multipart parsing: pull CSRF token, optional passphrase, and the file.
     reader = await request.multipart()
-    field = await reader.next()
-    if field is None or field.name != "backup":
-        return web.Response(text=_settings_page(store.settings, error="No backup file in upload.",
-                                                        active_tab="account",
-                                                        marker_target="restore",
-                                                        webhook_url=_webhook_url_from_request(request)),
-                            content_type="text/html", status=400)
-    data = await field.read()
+    csrf_form_value: Optional[str] = None
+    passphrase = ""
+    file_bytes: Optional[bytes] = None
+    while True:
+        field = await reader.next()
+        if field is None:
+            break
+        if field.name == CSRF_FORM_FIELD:
+            csrf_form_value = (await field.text()).strip()
+        elif field.name == "passphrase":
+            passphrase = await field.text()
+        elif field.name == "backup":
+            file_bytes = await field.read()
 
-    # Validate the ZIP before touching anything on disk
+    if not validate_csrf(request, csrf_form_value):
+        audit("admin_csrf_fail", user=_current_user(request) or "-",
+              ip=client_ip(request), path=request.path)
+        return web.Response(text="CSRF token mismatch.", status=403)
+
+    if file_bytes is None:
+        return _restore_error(request, "No backup file in upload.")
+
+    # Unwrap passphrase-protected backup if needed.
+    if is_wrapped(file_bytes):
+        if not passphrase:
+            return _restore_error(request, "This backup is passphrase-protected. Provide the passphrase.")
+        try:
+            file_bytes = unwrap(file_bytes, passphrase)
+        except ValueError as exc:
+            return _restore_error(request, f"Couldn't decrypt backup: {exc}")
+
+    # Validate ZIP structure + member integrity before touching disk.
     try:
-        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
             names = set(zf.namelist())
             if "settings.json" not in names and "mappings.sqlite" not in names:
                 raise ValueError("Backup must contain settings.json and/or mappings.sqlite")
             if "settings.json" in names:
-                json.loads(zf.read("settings.json").decode())  # parse-check
+                # parse-check: must be valid JSON the Settings dataclass accepts.
+                data = json.loads(zf.read("settings.json").decode())
+                Settings.from_dict(data)
+            if "encryption.key" in names:
+                key_bytes = zf.read("encryption.key").strip()
+                # Fernet() raises on invalid key shape (length, base64, etc).
+                from cryptography.fernet import Fernet
+                Fernet(key_bytes)
+            if "mappings.sqlite" in names:
+                sqlite_bytes = zf.read("mappings.sqlite")
+                with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as tmp:
+                    tmp.write(sqlite_bytes)
+                    tmp_path = tmp.name
+                try:
+                    with sqlite3.connect(tmp_path) as c:
+                        row = c.execute("PRAGMA integrity_check").fetchone()
+                    if not row or row[0] != "ok":
+                        raise ValueError(
+                            f"SQLite integrity check failed: {row[0] if row else 'unknown'}"
+                        )
+                finally:
+                    try:
+                        Path(tmp_path).unlink()
+                    except OSError:
+                        pass
     except Exception as exc:
-        return web.Response(
-            text=_settings_page(store.settings, error=f"Invalid backup: {exc}",
-                                active_tab="account",
-                                marker_target="restore",
-                                webhook_url=_webhook_url_from_request(request)),
-            content_type="text/html", status=400,
-        )
+        return _restore_error(request, f"Invalid backup: {exc}")
+
+    # Snapshot current files before overwriting so a failed restore is recoverable.
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    backup_dir = data_dir / f"pre-restore-{ts}"
+    try:
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        for src in (settings_path, db_path, enc_key_path):
+            if Path(src).exists():
+                shutil.copy2(src, backup_dir / Path(src).name)
+    except Exception:
+        logger.exception("pre-restore snapshot failed; proceeding anyway")
 
     try:
-        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
             if "settings.json" in names:
                 settings_path.write_bytes(zf.read("settings.json"))
             if "mappings.sqlite" in names:
@@ -762,21 +1009,17 @@ async def restore_upload(request: web.Request) -> web.Response:
             if "encryption.key" in names:
                 enc_key_path.write_bytes(zf.read("encryption.key"))
     except Exception as exc:
-        return web.Response(
-            text=_settings_page(store.settings, error=f"Restore failed: {exc}",
-                                active_tab="account",
-                                marker_target="restore",
-                                webhook_url=_webhook_url_from_request(request)),
-            content_type="text/html", status=500,
-        )
+        return _restore_error(request, f"Restore failed: {exc}", status=500)
 
-    logger.info("Restore complete; exiting in 2s so the container restarts and picks up new state")
-    loop = asyncio.get_running_loop()
-    loop.call_later(2.0, lambda: os._exit(0))
+    audit("restore_complete", user=_current_user(request) or "-",
+          ip=client_ip(request), backup_dir=str(backup_dir))
+    logger.info("Restore complete; restarting in 2s (snapshot at %s)", backup_dir)
+    _schedule_clean_exit(2.0)
 
-    body = _page("Restore", """
+    body = _page("Restore", f"""
 <h1>Restore Complete</h1>
 <p>Container is restarting. Refresh in a few seconds.</p>
+<p class="note">Previous files snapshot to <code>{_esc(backup_dir)}</code>.</p>
 """)
     return web.Response(text=body, content_type="text/html")
 
@@ -832,5 +1075,5 @@ def attach_webui(
     app.router.add_post("/admin/autofix", autofix_post)
     app.router.add_post("/admin/webhook", webhook_post)
     app.router.add_post("/admin/password", change_password)
-    app.router.add_get("/admin/backup", backup_download)
+    app.router.add_post("/admin/backup", backup_download)
     app.router.add_post("/admin/restore", restore_upload)
