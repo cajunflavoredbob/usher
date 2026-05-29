@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.4] - 2026-05-28
+
+### Security
+- **CSRF tokens on every admin POST.** Double-submit cookie pattern: a `hermes_csrf` cookie (SameSite=Strict) is set on every form-rendering page; every POST validates the cookie matches a hidden `csrf_token` form field via `hmac.compare_digest`. Pre-auth flows (`/admin/setup`, `/admin/login`) and authenticated flows (`/admin/*`) both gated. Validation lives in `auth_util.validate_csrf`.
+- **Login throttling.** 5 failed login attempts per IP within a 5-minute sliding window returns HTTP 429 with `Retry-After`; success resets the counter. `auth_util.LoginThrottle` is process-local in-memory.
+- **First-run setup token.** On a fresh install (no admin account, no `/data/setup_token` file), `auth_util.load_or_create_setup_token` generates a random token, persists it to `/data/setup_token` (chmod 600), and logs it at WARNING level. `/admin/setup` rejects submissions without a matching token, so the first visitor on a LAN-exposed port can't claim the admin account silently. Token is cleared on successful setup. Existing installs (admin already configured) skip the token check entirely.
+- **Audit log.** Dedicated `hermes.audit` logger records `login_success`, `login_fail`, `login_throttled`, `login_csrf_fail`, `setup_csrf_fail`, `setup_token_fail`, `setup_complete`, `password_changed`, `backup_download`, `restore_complete`, `admin_csrf_fail`, `logout` with `user`, `ip`, and event-specific fields. Searchable with `grep hermes.audit`.
+- **`Secure` cookie flag when behind HTTPS.** Session and CSRF cookies set `Secure=True` when `request.scheme == "https"` or `X-Forwarded-Proto: https` is present. Plain-HTTP LAN installs keep working unchanged.
+- **Backup ZIP can be wrapped with a passphrase.** New `backup_crypto.py`: PBKDF2(SHA-256, 600k iters) over the passphrase → 32-byte key → Fernet (AES-128-CBC + HMAC-SHA256). Output format: 12-byte magic `HERMES-BAK1\n` + 16-byte salt + Fernet token. File extension changes to `.hermes-backup`. Restore detects the format by magic prefix and prompts for the passphrase. The Account tab adds an optional "Passphrase" field to both backup and restore forms.
+- **`restore_upload` validates uploads before overwriting.** Each member of the uploaded ZIP is sanity-checked: `settings.json` must parse and accept into the `Settings` dataclass; `encryption.key` must initialize a `Fernet(key)` without raising; `mappings.sqlite` is written to a tempfile and validated with `PRAGMA integrity_check` (must return `ok`). Current `settings.json`, `mappings.sqlite`, and `encryption.key` are copied to `/data/pre-restore-YYYYMMDD-HHMMSS/` before the new files land.
+
+### Changed
+- **Clean shutdown instead of `os._exit(0)`.** Settings-change-triggered restarts (`bot.py` setup-only mode + full-mode `_on_settings_changed`) and the post-restore exit in `webui.py` now send `SIGTERM` to self after a 2s delay via `_schedule_clean_exit`, letting PTB's `run_polling` and aiohttp's `runner.cleanup()` close httpx clients, DB connections, and the HTTP server gracefully. Falls back to `os._exit(0)` only if `SIGTERM` dispatch itself fails.
+- **`/admin/backup` is now a POST.** Previous GET still worked but couldn't accept the optional passphrase. CSRF token required. Plain (no passphrase) downloads still serve a `.zip`.
+
+### Added
+- **`auth_util.py`** — `LoginThrottle`, CSRF helpers (`validate_csrf`, `attach_csrf_cookie`, `generate_csrf_token`, `csrf_for_request`), setup-token persistence (`load_or_create_setup_token`, `clear_setup_token`), `request_is_secure`, `client_ip`, `audit`.
+- **`backup_crypto.py`** — `wrap`, `unwrap`, `is_wrapped`, format constants.
+- **Tests** — `tests/test_auth_util.py` (throttle lifecycle, CSRF, setup token, secure-cookie detection, client IP — 19 cases), `tests/test_backup_crypto.py` (round-trip, wrong passphrase, malformed input, magic detection, salt randomness — 6 cases). Total 114 tests.
+
+### Notes
+- Phase 4 of the v0.11.x hardening roadmap. Closes audit findings #7 (CSRF + throttle + first-run guard), #8 (restore validation + backup snapshot), #10 (cookie Secure), #11 (backup passphrase), security #17 (clean shutdown), and adds a separate audit-log surface.
+- Existing installs upgrading from <0.11.4 keep working: the setup-token guard only fires when `admin.is_set()` is False, and existing CSRF cookies are minted on the next GET. No data migration required.
+
 ## [0.11.3] - 2026-05-28
 
 ### Added

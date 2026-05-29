@@ -90,6 +90,22 @@ ISSUE_TYPES: Final = {
 AUTOFIX_ELIGIBLE_TYPES = {1, 2, 3}
 
 
+def _schedule_clean_exit(delay_s: float = 2.0) -> None:
+    """Send SIGTERM to self after `delay_s` so PTB's run_polling and aiohttp's
+    runner unwind cleanly (closing httpx clients, DB connections, the HTTP
+    server). Falls back to os._exit only if the SIGTERM dispatch itself fails.
+    """
+    import signal
+    loop = asyncio.get_running_loop()
+    def _kill():
+        try:
+            os.kill(os.getpid(), signal.SIGTERM)
+        except Exception:
+            logger.exception("SIGTERM dispatch failed; falling back to os._exit")
+            os._exit(0)
+    loop.call_later(delay_s, _kill)
+
+
 # --- App setup ---------------------------------------------------------------
 
 
@@ -254,8 +270,7 @@ async def _post_init(app: Application) -> None:
         s = settings_store.settings
         if s.telegram_bot_token != boot_token or s.admin_telegram_id != boot_admin_id:
             logger.info("Bot token or admin id changed; exiting in 2s to restart")
-            loop = asyncio.get_running_loop()
-            loop.call_later(2.0, lambda: os._exit(0))
+            _schedule_clean_exit(2.0)
             return
         logger.info("Settings changed; rebuilding clients")
         _build_clients_from_settings(app)
@@ -2482,8 +2497,7 @@ async def _run_setup_only(settings_store: SettingsStore, session_secret: bytes,
         # restarts into configured mode.
         if settings_store.settings.is_bot_configured():
             logger.info("Setup complete; exiting in 2s so container restarts into full mode")
-            loop = asyncio.get_running_loop()
-            loop.call_later(2.0, lambda: os._exit(0))
+            _schedule_clean_exit(2.0)
 
     attach_webui(
         web_app,
