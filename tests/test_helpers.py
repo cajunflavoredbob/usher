@@ -5,9 +5,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-# These pull in bot.py at import. bot.py has no side effects at module level
-# beyond imports + class/function defs, so this is safe in CI.
-from bot import _derive_parent_name, _format_age
+from bot.issue_flow import _derive_parent_name
+from bot.shared import format_age as _format_age
 
 
 def _iso(delta: timedelta) -> str:
