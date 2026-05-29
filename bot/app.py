@@ -110,7 +110,16 @@ def _build_clients_from_settings(app: Application) -> None:
                     logger.exception("Error closing prior %s client", key)
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(_close_old())
+            task = loop.create_task(_close_old())
+            # Keep a strong reference so the task isn't garbage-collected
+            # mid-aclose() (CPython 3.12+ logs "Task was destroyed while
+            # it is pending!"). _post_shutdown awaits any still-pending
+            # entries before closing current clients.
+            pending_closes = app.bot_data.setdefault("_pending_closes", [])
+            pending_closes.append(task)
+            # Prune finished tasks opportunistically so the list doesn't
+            # grow unbounded across many reloads.
+            app.bot_data["_pending_closes"] = [t for t in pending_closes if not t.done()]
         except RuntimeError:
             # No loop running (startup path) -- nothing to close anyway since
             # old_clients was populated from bot_data which would be empty.
@@ -355,6 +364,25 @@ async def _post_init(app: Application) -> None:
 
 
 async def _post_shutdown(app: Application) -> None:
+    # Drain any prior settings-reload close tasks that haven't finished.
+    pending_closes = app.bot_data.get("_pending_closes") or []
+    if pending_closes:
+        try:
+            await asyncio.gather(*pending_closes, return_exceptions=True)
+        except Exception:
+            logger.exception("draining pending close tasks failed")
+
+    # Close current API clients explicitly so httpx connection pools don't
+    # leak. PlexClient is built once at startup and stashed under "plex";
+    # the arr clients are managed by _build_clients_from_settings.
+    for key in ("seerr", "radarr", "sonarr", "plex"):
+        client = app.bot_data.get(key)
+        if client is not None and hasattr(client, "close"):
+            try:
+                await client.close()
+            except Exception:
+                logger.exception("Error closing %s on shutdown", key)
+
     runner = app.bot_data.get("http_runner")
     if runner is not None:
         try:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 from typing import Optional
 
 from telegram import (
@@ -17,6 +18,7 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
     ConversationHandler,
+    MessageHandler,
     filters,
 )
 
@@ -29,9 +31,17 @@ from bot.shared import (
     AWAIT_LINK_CONSENT,
     AWAIT_PLATFORM_CHOICE,
     _record_btn,
+    _require_seerr,
 )
 
 logger = logging.getLogger("hermes")
+
+async def _link_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Conversation_timeout handler. Clears link_active_loop so an abandoned
+    link flow doesn't keep an orphaned poll alive in user_data."""
+    ctx.user_data.pop("link_active_loop", None)
+    return ConversationHandler.END
+
 
 def _link_conversation() -> ConversationHandler:
     return ConversationHandler(
@@ -39,6 +49,7 @@ def _link_conversation() -> ConversationHandler:
         states={
             AWAIT_LINK_CONSENT: [CallbackQueryHandler(cmd_link_consent, pattern=r"^link_consent:")],
             AWAIT_PLATFORM_CHOICE: [CallbackQueryHandler(cmd_link_platform, pattern=r"^tklplat:")],
+            ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, _link_timeout)],
         },
         fallbacks=[CommandHandler("cancel", link_cancel)],
         per_user=True,
@@ -46,6 +57,7 @@ def _link_conversation() -> ConversationHandler:
         allow_reentry=True,
         name="link",
         persistent=False,
+        conversation_timeout=1800,  # 30 min covers the 28-min strong-PIN window
     )
 
 

@@ -213,55 +213,77 @@ async def token_for(
 
 
 # --- Button bookkeeping -----------------------------------------------------
+# How many recent button-bearing messages per user the gate will admit. Three
+# is enough to cover a rapid-fire webhook burst (new-issue + comment + resolve)
+# without letting truly-old messages stay live.
+BTN_HISTORY_MAX = 3
+
 
 def record_btn(app, user_id: int, message) -> None:
-    """Record `message` as the most recent button-bearing bot message for `user_id`.
-    Used by the global button gate to dismiss callbacks from older messages."""
+    """Record `message` as a button-bearing bot message for `user_id`. The
+    global button gate admits callbacks whose source message matches any of
+    the last BTN_HISTORY_MAX entries (FIFO eviction)."""
     if message is None:
         return
-    app.bot_data.setdefault("btn_msgs", {})[user_id] = {
+    history: dict = app.bot_data.setdefault("btn_msgs", {})
+    entry = {
         "chat_id": message.chat_id,
         "message_id": message.message_id,
         "sent_at": datetime.now(timezone.utc).isoformat(),
     }
+    user_entries: list = history.setdefault(user_id, [])
+    user_entries.append(entry)
+    while len(user_entries) > BTN_HISTORY_MAX:
+        user_entries.pop(0)
 
 
 async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """TypeHandler at group=-1. Runs before any callback handler. If the callback
-    is from a stale message (not the most recent button-bearing message for
-    this user, or older than BTN_TTL_SECONDS), strip the buttons, answer with
-    an explanation, and raise ApplicationHandlerStop so no other handler runs.
+    """TypeHandler at group=-1. Runs before any callback handler. The gate
+    snapshots the per-user button history once at entry, then decides — so a
+    concurrent webhook that appends a fresh entry mid-await can't shift the
+    decision out from under us. A callback is admitted iff its source message
+    matches one of the recent BTN_HISTORY_MAX entries AND is younger than
+    BTN_TTL_SECONDS.
     """
     q = update.callback_query
     if q is None or q.message is None or q.from_user is None:
         return
     user_id = q.from_user.id
-    latest = ctx.application.bot_data.get("btn_msgs", {}).get(user_id)
-    if latest is None:
+    # Snapshot via list copy so concurrent record_btn calls don't mutate
+    # the iterable we're inspecting.
+    entries = list(ctx.application.bot_data.get("btn_msgs", {}).get(user_id, []))
+    if not entries:
         return  # no record yet -- allow (gradual rollout)
-    stale = False
-    reason = ""
-    if latest.get("message_id") != q.message.message_id:
-        stale = True
-        reason = "Use the most recent message — this menu is from an older one."
-    else:
+
+    msg_id = q.message.message_id
+    now = datetime.now(timezone.utc)
+    for e in entries:
+        if e.get("message_id") != msg_id:
+            continue
         try:
-            sent = datetime.fromisoformat(latest["sent_at"])
+            sent = datetime.fromisoformat(e["sent_at"])
         except (KeyError, ValueError):
-            sent = None
-        if sent is None or (datetime.now(timezone.utc) - sent).total_seconds() > BTN_TTL_SECONDS:
-            stale = True
-            reason = "This menu has expired. Run the command again."
-    if stale:
-        try:
-            await q.answer(reason, show_alert=False)
-        except Exception:
-            pass
-        try:
-            await q.edit_message_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-        raise ApplicationHandlerStop
+            continue
+        if (now - sent).total_seconds() <= BTN_TTL_SECONDS:
+            return  # this callback's source message is still live
+
+    # No matching live entry. Determine the most likely reason for the
+    # toast: stale (message wasn't the most recent) vs. expired (it was,
+    # but past the TTL).
+    latest = entries[-1]
+    if latest.get("message_id") == msg_id:
+        reason = "This menu has expired. Run the command again."
+    else:
+        reason = "Use the most recent message — this menu is from an older one."
+    try:
+        await q.answer(reason, show_alert=False)
+    except Exception:
+        pass
+    try:
+        await q.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    raise ApplicationHandlerStop
 
 
 # --- Ticket detail keyboard ------------------------------------------------
