@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-05-28
+
+### Added
+- **pytest harness.** New `tests/` directory with coverage of `Settings` round-trips and `SettingsStore` upgrade paths (`test_settings.py`); `UserStore` lifecycle including decrypt-failed semantics across key rotation and concurrent-write smoke (`test_store.py`); webhook auth + dispatch + dedupe + size cap + handler-exception containment (`test_webhook.py`); pure helpers `_format_age` and `_derive_parent_name` (`test_helpers.py`). 63 tests total, run in <1s locally.
+- **Dev dependencies file** (`requirements-dev.txt`) — pytest + pytest-asyncio. Not pulled into the Docker image.
+- **`pytest.ini`** sets `asyncio_mode = auto` so async tests don't need a per-function decorator.
+- **CI test workflow** (`.github/workflows/test.yml`) runs on every push to main and on PRs.
+- **Release workflow now gates on tests.** The build job depends on a test job; tag pushes won't ship an image if tests fail.
+
+### Notes
+- Phase 2 of the v0.11.x hardening roadmap. No source-code logic changes; this is purely a safety net for the heavier refactors in v0.11.5 (bot.py split) and v0.11.6 (concurrency hardening).
+- The `_format_age` and `_derive_parent_name` tests import `bot.py` directly. `bot.py` has no side effects at module level beyond imports + class/function defs, so this is safe in CI without env vars set.
+
 ## [0.11.1] - 2026-05-28
 
 ### Changed
