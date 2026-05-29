@@ -26,14 +26,6 @@ class MediaResult:
 
 
 @dataclass
-class SeerrUser:
-    id: int
-    username: Optional[str]
-    plex_username: Optional[str]
-    display_name: str
-
-
-@dataclass
 class CreatedIssue:
     id: int
     url: str
@@ -86,6 +78,11 @@ class SeerrClient:
 
     async def close(self) -> None:
         await self._client.aclose()
+
+    async def ping(self) -> str:
+        """Return Seerr's version string. Raises APIError on failure."""
+        r = await execute(self._client, "GET", "/status", service=_SERVICE)
+        return r.json().get("version", "?")
 
     async def login_with_plex(self, plex_token: str) -> tuple[int, str, httpx.Cookies]:
         """Authenticate to Seerr as a Plex user. Returns (seerr_user_id, display_name, cookies)."""
@@ -144,37 +141,6 @@ class SeerrClient:
             if len(out) >= limit:
                 break
         return out
-
-    async def find_user(self, query: str) -> Optional[SeerrUser]:
-        """Find a Seerr user by username, plexUsername, or displayName (case-insensitive).
-
-        Iterates pages until found or exhausted (Seerr default page size = 10).
-        """
-        q = query.strip().lower()
-        skip = 0
-        page_size = 50
-        while True:
-            r = await execute(self._client, "GET", "/user", service=_SERVICE,
-                              params={"take": page_size, "skip": skip})
-            data = r.json()
-            for u in data.get("results", []):
-                candidates = [
-                    (u.get("username") or "").lower(),
-                    (u.get("plexUsername") or "").lower(),
-                    (u.get("jellyfinUsername") or "").lower(),
-                    (u.get("displayName") or "").lower(),
-                ]
-                if q in candidates:
-                    return SeerrUser(
-                        id=u["id"],
-                        username=u.get("username"),
-                        plex_username=u.get("plexUsername"),
-                        display_name=u.get("displayName") or u.get("plexUsername") or u.get("username") or "?",
-                    )
-            page = data.get("pageInfo", {})
-            if page.get("page", 1) >= page.get("pages", 1):
-                return None
-            skip += page_size
 
     async def get_tv_seasons(self, tmdb_id: int) -> tuple[list[TvSeason], Optional[int]]:
         """Return (seasons, tvdb_id) for a TV show. Includes season 0

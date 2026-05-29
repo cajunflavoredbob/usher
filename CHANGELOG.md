@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.5] - 2026-05-28
+
+### Changed
+- **`bot.py` split into a `bot/` package** along domain lines. ~2560 lines now spread across nine modules: `bot/app.py` (wiring, `main()`, startup/shutdown, `_check_connections`, `cmd_start`/`cmd_status`, error handler, setup-only path), `bot/shared.py` (constants, conversation states, cross-module helpers, `format_media_title_line`), `bot/webhook_handlers.py`, `bot/tickets.py`, `bot/issue_flow.py`, `bot/link_flow.py`, `bot/autofix_poll.py`, `bot/resolve_flow.py`, plus `bot/__init__.py` and `bot/__main__.py`. Entry point is now `python -m bot`. No behavior changes — pure refactor.
+- **Per-client three-step workflow helpers.** `sonarr._run_episode_workflow(*, series, match, blocklist: bool)` and `radarr._run_movie_workflow(*, movie, blocklist: bool)` collapse the near-identical orchestration that previously lived inside `auto_fix*` / `mark_failed*`. Both pairs of public methods drop from ~60 lines each to a ~5-line prelude + delegation. Same `FixResult` semantics as v0.11.3.
+- **`_check_connections` uses `ping()` instead of reaching into `_client`.** Adds `ping()` to `SeerrClient`, `RadarrClient`, `SonarrClient` (each calls the upstream version endpoint via the standard `execute()` wrapper, so retries + classified errors come along for free). Closes audit finding H3 (private-attr leakage).
+
+### Added
+- **`format_media_title_line(seerr, media, *, problem_season=None, problem_episode=None)`** in `bot/shared.py`. Builds `"🎬 Movie Title (Year)"` or `"📺 Show Title (Year) — S01E02"` from a Seerr webhook payload's media block. Used by all three `handle_seerr_*` handlers; deletes ~40 lines of drifting title-construction code.
+- **`format_se_suffix(problem_season, problem_episode)`** helper used by the new title formatter and the `reported` flow's season/episode suffix.
+
+### Removed
+- `SeerrClient.find_user` + the `SeerrUser` dataclass — dead code, never called from the bot.
+- `bot.py` — replaced by the `bot/` package. `python bot.py` → `python -m bot`.
+
+### Updated
+- `Dockerfile` — `COPY bot/ ./bot/` plus the unchanged top-level modules; `CMD ["python", "-m", "bot"]`.
+- `tests/test_helpers.py` — imports update to `from bot.shared import format_age` and `from bot.issue_flow import _derive_parent_name`. All 114 tests still pass.
+
+### Notes
+- Phase 5 of the v0.11.x hardening roadmap. Closes audit findings H1 (bot.py god module), H2 (radarr/sonarr duplication), H3 (private-client access in `_check_connections`), M1 (handle_seerr_* title duplication), and M2 (dead code).
+- `bot/shared.py` exposes both the new clean names (`format_age`, `token_for`, `record_btn`, etc.) and underscore-prefixed aliases (`_format_age`, `_token_for`, `_record_btn`, etc.) so the extracted handler modules keep their original symbol references without renaming. New call sites should prefer the unprefixed names.
+- Highest single-release risk in the roadmap. End-to-end import chain verified (`from bot.app import main` + every domain module's public symbols); the test suite (114 cases) passes. Manual smoke after deploy: `/start`, `/link`, `/tickets`, `/issue`, webhook DM, auto-fix Redownload, Mark Failed.
+
 ## [0.11.4] - 2026-05-28
 
 ### Security

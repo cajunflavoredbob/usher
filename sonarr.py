@@ -43,6 +43,11 @@ class SonarrClient:
     async def close(self) -> None:
         await self._client.aclose()
 
+    async def ping(self) -> str:
+        """Return Sonarr's version string. Raises APIError on failure."""
+        r = await execute(self._client, "GET", "/system/status", service=_SERVICE)
+        return r.json().get("version", "?")
+
     async def get_series_by_tvdb(self, tvdb_id: int) -> Optional[SonarrSeries]:
         r = await execute(self._client, "GET", "/series", service=_SERVICE,
                           params={"tvdbId": tvdb_id})
@@ -80,36 +85,47 @@ class SonarrClient:
                       json={"name": "SeasonSearch", "seriesId": series_id,
                             "seasonNumber": season})
 
-    async def auto_fix_episode(
-        self, tvdb_id: int, season: int, episode: int
+    async def _run_episode_workflow(
+        self, *, series: SonarrSeries, match: SonarrEpisode, blocklist: bool,
     ) -> FixResult:
-        """Delete current file (if any) and trigger a new search."""
-        try:
-            series = await self.get_series_by_tvdb(tvdb_id)
-        except APIError as exc:
-            return FixResult.failed(f"Sonarr lookup failed: {exc.user_message}")
-        if series is None:
-            return FixResult.failed("Series isn't in Sonarr.")
-        try:
-            episodes = await self.get_episodes(series.id, season)
-        except APIError as exc:
-            return FixResult.failed(f"Sonarr episode lookup failed: {exc.user_message}")
-        match = next((e for e in episodes if e.episode == episode), None)
-        if match is None:
-            return FixResult.failed(f"S{season:02d}E{episode:02d} not found in Sonarr.")
-
+        """Optional blocklist + delete + search workflow for a single episode.
+        auto_fix_episode calls with blocklist=False; mark_failed_episode with
+        blocklist=True. Status semantics match v0.11.3: ok if all steps
+        succeed; partial if an early step succeeded but search failed;
+        failed if nothing happened.
+        """
         steps: list[str] = []
         poll_info = {"series_id": series.id, "episode_id": match.id}
 
-        # Step 1: delete file (if any).
+        blocklisted = False
+        if blocklist:
+            try:
+                r = await execute(
+                    self._client, "GET", "/history", service=_SERVICE,
+                    params={"episodeId": match.id, "page": 1, "pageSize": 20,
+                            "sortKey": "date", "sortDirection": "descending"},
+                )
+                records = r.json().get("records") or []
+                grab = next((rec for rec in records if rec.get("eventType") == "grabbed"), None)
+                if grab is not None:
+                    await execute(self._client, "POST", f"/history/failed/{grab['id']}",
+                                  service=_SERVICE)
+                    steps.append("blocklist")
+                    blocklisted = True
+            except APIError as exc:
+                return FixResult.failed(f"Couldn't blocklist release: {exc.user_message}")
+
         if match.has_file and match.episode_file_id:
             try:
                 await self.delete_episode_file(match.episode_file_id)
                 steps.append("delete")
             except APIError as exc:
-                return FixResult.failed(f"Couldn't delete file: {exc.user_message}")
+                prefix = "Blocklisted release but " if blocklisted else ""
+                return FixResult.partial(
+                    f"{prefix}couldn't delete file: {exc.user_message}",
+                    steps_done=steps, poll_info=poll_info,
+                )
 
-        # Step 2: trigger search.
         try:
             await self.trigger_episode_search([match.id])
             steps.append("search")
@@ -119,11 +135,52 @@ class SonarrClient:
                 steps_done=steps, poll_info=poll_info,
             )
 
-        return FixResult.success(
-            f"Deleted '{series.title}' S{season:02d}E{episode:02d} file "
-            "(if any) and triggered re-search.",
-            steps_done=steps, poll_info=poll_info,
-        )
+        if blocklist:
+            prefix = "Blocklisted current release, " if blocklisted else "No prior grab to blocklist; "
+            message = (
+                f"{prefix}deleted '{series.title}' S{match.season:02d}E{match.episode:02d} "
+                "file, and triggered re-search."
+            )
+        else:
+            message = (
+                f"Deleted '{series.title}' S{match.season:02d}E{match.episode:02d} file "
+                "(if any) and triggered re-search."
+            )
+        return FixResult.success(message, steps_done=steps, poll_info=poll_info)
+
+    async def _resolve_episode(
+        self, tvdb_id: int, season: int, episode: int
+    ) -> tuple[Optional[SonarrSeries], Optional[SonarrEpisode], Optional[FixResult]]:
+        """Common prelude for episode-level workflows: locate series + match.
+        Returns (series, match, error_result). Caller bails when error_result
+        is not None."""
+        try:
+            series = await self.get_series_by_tvdb(tvdb_id)
+        except APIError as exc:
+            return None, None, FixResult.failed(f"Sonarr lookup failed: {exc.user_message}")
+        if series is None:
+            return None, None, FixResult.failed("Series isn't in Sonarr.")
+        try:
+            episodes = await self.get_episodes(series.id, season)
+        except APIError as exc:
+            return series, None, FixResult.failed(
+                f"Sonarr episode lookup failed: {exc.user_message}"
+            )
+        match = next((e for e in episodes if e.episode == episode), None)
+        if match is None:
+            return series, None, FixResult.failed(
+                f"S{season:02d}E{episode:02d} not found in Sonarr."
+            )
+        return series, match, None
+
+    async def auto_fix_episode(
+        self, tvdb_id: int, season: int, episode: int
+    ) -> FixResult:
+        """Delete current file (if any) and trigger a new search."""
+        series, match, err = await self._resolve_episode(tvdb_id, season, episode)
+        if err is not None:
+            return err
+        return await self._run_episode_workflow(series=series, match=match, blocklist=False)
 
     async def auto_fix_season(
         self, tvdb_id: int, season: int
@@ -178,73 +235,12 @@ class SonarrClient:
         self, tvdb_id: int, season: int, episode: int
     ) -> FixResult:
         """Blocklist the most recent grab, delete the on-disk file, and trigger
-        a new search. End-state matches auto_fix_episode, plus the blocklist step.
-
-        Falls back to delete+search if there's no grab in history.
+        a new search. Falls back to delete+search if there's no grab in history.
         """
-        try:
-            series = await self.get_series_by_tvdb(tvdb_id)
-        except APIError as exc:
-            return FixResult.failed(f"Sonarr lookup failed: {exc.user_message}")
-        if series is None:
-            return FixResult.failed("Series isn't in Sonarr.")
-        try:
-            episodes = await self.get_episodes(series.id, season)
-        except APIError as exc:
-            return FixResult.failed(f"Sonarr episode lookup failed: {exc.user_message}")
-        match = next((e for e in episodes if e.episode == episode), None)
-        if match is None:
-            return FixResult.failed(f"S{season:02d}E{episode:02d} not found in Sonarr.")
-
-        steps: list[str] = []
-        poll_info = {"series_id": series.id, "episode_id": match.id}
-
-        # Step 1: blocklist most recent grab.
-        blocklisted = False
-        try:
-            r = await execute(
-                self._client, "GET", "/history", service=_SERVICE,
-                params={"episodeId": match.id, "page": 1, "pageSize": 20,
-                        "sortKey": "date", "sortDirection": "descending"},
-            )
-            records = r.json().get("records") or []
-            grab = next((rec for rec in records if rec.get("eventType") == "grabbed"), None)
-            if grab is not None:
-                await execute(self._client, "POST", f"/history/failed/{grab['id']}",
-                              service=_SERVICE)
-                steps.append("blocklist")
-                blocklisted = True
-        except APIError as exc:
-            return FixResult.failed(f"Couldn't blocklist release: {exc.user_message}")
-
-        # Step 2: delete file.
-        if match.has_file and match.episode_file_id:
-            try:
-                await self.delete_episode_file(match.episode_file_id)
-                steps.append("delete")
-            except APIError as exc:
-                prefix = "Blocklisted release but " if blocklisted else ""
-                return FixResult.partial(
-                    f"{prefix}couldn't delete file: {exc.user_message}",
-                    steps_done=steps, poll_info=poll_info,
-                )
-
-        # Step 3: trigger search.
-        try:
-            await self.trigger_episode_search([match.id])
-            steps.append("search")
-        except APIError as exc:
-            return FixResult.partial(
-                f"Cleaned up but couldn't trigger search: {exc.user_message}",
-                steps_done=steps, poll_info=poll_info,
-            )
-
-        prefix = "Blocklisted current release, " if blocklisted else "No prior grab to blocklist; "
-        return FixResult.success(
-            f"{prefix}deleted '{series.title}' S{season:02d}E{episode:02d} file, "
-            "and triggered re-search.",
-            steps_done=steps, poll_info=poll_info,
-        )
+        series, match, err = await self._resolve_episode(tvdb_id, season, episode)
+        if err is not None:
+            return err
+        return await self._run_episode_workflow(series=series, match=match, blocklist=True)
 
     async def episode_has_file(self, episode_id: int) -> bool:
         r = await execute(self._client, "GET", f"/episode/{episode_id}",
