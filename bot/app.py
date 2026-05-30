@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from aiohttp import web
+import telegram
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -169,29 +170,39 @@ async def _check_connections(app: Application) -> dict[str, str]:
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     admin_id = ctx.bot_data.get("admin_id")
-    store: UserStore = ctx.bot_data["store"]
     is_admin = user_id == admin_id
-    is_linked = (await store.get(user_id)) is not None
 
-    lines = ["Hi! I forward issue reports to Seerr."]
-    if is_admin:
-        summary = await _check_connections(ctx.application)
-        lines.append("\n*Connection status:*")
-        lines.append(_format_status(summary))
-    if not is_linked:
-        lines.append(
-            "\nGet started by DMing me:\n"
-            "  `/link <your seerr or plex username>`"
+    if not is_admin:
+        # Non-admins see ONLY greeting + commands. No connection diagnostics,
+        # no inline "DM me /link" directive (the command is listed below).
+        await update.effective_message.reply_text(
+            "Hi! I forward issue reports to Seerr.\n\n"
+            "*Commands*\n"
+            "  /link — sign in with Plex (DM only)\n"
+            "  /unlink — remove your link\n"
+            "  /issue — report a problem with a movie or TV show\n"
+            "  /tickets — list your open tickets\n"
+            "  /help — show this",
+            parse_mode="Markdown",
         )
-    lines.append(
-        "\n*Commands*\n"
-        "  /link — sign in with Plex (DM only)\n"
-        "  /unlink — remove your link\n"
-        "  /issue — report a problem with a movie or TV show\n"
-        "  /tickets — list your open tickets\n"
-        + ("  /status — connection diagnostics (admin only)\n" if is_admin else "")
-        + "  /help — show this"
-    )
+        return
+
+    # Admin path: keeps the connection-status block + the admin-only /status hint.
+    summary = await _check_connections(ctx.application)
+    lines = [
+        "Hi! I forward issue reports to Seerr.",
+        "",
+        "*Connection status:*",
+        _format_status(summary),
+        "",
+        "*Commands*",
+        "  /link — sign in with Plex (DM only)",
+        "  /unlink — remove your link",
+        "  /issue — report a problem with a movie or TV show",
+        "  /tickets — list your open tickets",
+        "  /status — connection diagnostics (admin only)",
+        "  /help — show this",
+    ]
     await update.effective_message.reply_text(
         "\n".join(lines), parse_mode="Markdown"
     )
@@ -342,19 +353,37 @@ async def _post_init(app: Application) -> None:
     else:
         admin_url = f"http://<host>:{app.bot_data['http_port']}/admin"
     msg = (
-        "👋 Bot is online.\n\n"
+        f"👋 Bot is online (v{HERMES_VERSION}).\n\n"
         f"{_format_status(summary)}\n\n"
         f"Admin UI: {admin_url}\n"
         "Run `/link` to authorize with Plex (per-user issue attribution)."
     )
     try:
         await app.bot.send_message(chat_id=admin_id, text=msg, parse_mode="Markdown")
-    except Exception:
-        logger.info(
-            "Couldn't DM admin %d on startup (likely never started a conversation with the bot). "
-            "Admin should send /start to see the welcome.",
+    except telegram.error.Forbidden:
+        logger.warning(
+            "Couldn't DM admin %d on startup: the bot is blocked by the admin. "
+            "Admin must unblock the bot in Telegram (or /start the bot first).",
             admin_id,
         )
+    except telegram.error.BadRequest as exc:
+        msg_lower = str(exc).lower()
+        if "chat not found" in msg_lower:
+            logger.warning(
+                "Couldn't DM admin %d on startup: chat not found. "
+                "admin_telegram_id may be wrong -- it must be a numeric user ID "
+                "(from @userinfobot), not a username.",
+                admin_id,
+            )
+        elif "user is deactivated" in msg_lower:
+            logger.warning(
+                "Couldn't DM admin %d on startup: user is deactivated.",
+                admin_id,
+            )
+        else:
+            logger.warning("Couldn't DM admin %d on startup: %s", admin_id, exc)
+    except Exception:
+        logger.exception("Couldn't DM admin %d on startup (unexpected)", admin_id)
 
     store: UserStore = app.bot_data["store"]
     try:
@@ -405,8 +434,29 @@ async def _post_shutdown(app: Application) -> None:
             logger.exception("HTTP server cleanup failed")
 
 
+# user_data keys populated by the three ConversationHandlers. Cleared on
+# error so a mid-conversation crash doesn't leak half-state into the next
+# /issue / /link / /tickets.
+_CONVERSATION_USER_DATA_KEYS = (
+    "tk_reply_id", "tk_close_after",
+    "link_active_loop",
+    "media", "search_results", "seasons", "season",
+    "episode", "issue_type", "description", "autofix",
+    "research_parent",
+)
+
+
 async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     logger.exception("Unhandled error: %s", ctx.error)
+    # Clear any half-populated conversation state so the next conversation
+    # entry sees a clean slate. ctx.user_data may be None on errors that
+    # fire outside a per-user context (e.g., job-queue exceptions); guard.
+    try:
+        if ctx.user_data is not None:
+            for key in _CONVERSATION_USER_DATA_KEYS:
+                ctx.user_data.pop(key, None)
+    except Exception:
+        logger.debug("on_error user_data cleanup failed (non-fatal)", exc_info=True)
 
 
 def _migrate_legacy_env_into_settings(settings_store: SettingsStore) -> bool:

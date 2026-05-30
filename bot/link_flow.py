@@ -302,10 +302,15 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     if auth_token is None:
         if ctx.user_data.get("link_active_loop") != loop_id:
             return  # superseded by another loop
+        # Clear the loop key explicitly so the parent /link conversation
+        # doesn't think it's still polling (audit ERR #19).
+        ctx.user_data.pop("link_active_loop", None)
         await q.edit_message_text("⏱️ Plex auth timed out. /link to try again.")
         return
 
     await _finalize_link(update, ctx, auth_token)
+    # Successful link -- clear the loop key so a later /link is a fresh start.
+    ctx.user_data.pop("link_active_loop", None)
     try:
         await q.edit_message_reply_markup(reply_markup=None)
     except Exception:

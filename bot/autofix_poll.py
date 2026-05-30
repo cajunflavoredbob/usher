@@ -43,21 +43,9 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception:
             logger.exception("timeout parse failed for fix %d", fix.id)
 
-        # Poll for completion
+        # Poll for completion (dispatch lives on PendingAutofix.is_complete)
         try:
-            done = False
-            extra = ""
-            if fix.media_type == "movie" and radarr and fix.radarr_movie_id:
-                done = await radarr.movie_has_file(fix.radarr_movie_id)
-            elif fix.media_type == "tv" and sonarr:
-                if fix.sonarr_episode_id:
-                    done = await sonarr.episode_has_file(fix.sonarr_episode_id)
-                elif fix.sonarr_series_id and fix.sonarr_season and fix.expected_episode_ids:
-                    present, total = await sonarr.season_files_present(
-                        fix.sonarr_series_id, fix.sonarr_season, fix.expected_episode_ids
-                    )
-                    done = present >= total and total > 0
-                    extra = f" ({present}/{total} episodes)"
+            done, extra = await fix.is_complete(radarr, sonarr)
             if done:
                 await _notify_complete(ctx, fix, extra)
                 await store.mark_autofix_status(fix.id, "complete")

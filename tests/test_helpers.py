@@ -39,6 +39,27 @@ def test_format_age_invalid_returns_qmark():
     assert _format_age("not-a-date") == "?"
 
 
+def test_format_age_warns_once_per_prefix(caplog):
+    """Regression for audit ERR #20: an unparseable timestamp should log
+    WARN once per distinct 20-char prefix so a Seerr format change doesn't
+    pass silently, but repeat hits don't spam the log."""
+    # Clear the module-level seen set so this test is order-independent.
+    from bot.shared import _FORMAT_AGE_WARNED
+    _FORMAT_AGE_WARNED.clear()
+    caplog.set_level("WARNING", logger="hermes")
+    # First two calls share the same prefix -> one WARN.
+    _format_age("garbage-1234567890")
+    _format_age("garbage-1234567890")
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"
+                and "format_age" in r.getMessage()]
+    assert len(warnings) == 1
+    # A different prefix -> another WARN.
+    _format_age("totally-different-prefix")
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"
+                and "format_age" in r.getMessage()]
+    assert len(warnings) == 2
+
+
 # --- _derive_parent_name ---
 
 

@@ -106,6 +106,24 @@ class PendingAutofix:
     started_at: str
     timeout_at: str
 
+    async def is_complete(self, radarr, sonarr) -> tuple[bool, str]:
+        """Returns (done, extra_suffix). `extra_suffix` is the
+        "(present/total episodes)" string for whole-season fixes,
+        empty for movie/single-episode. Polymorphic dispatch over
+        media_type lives here so the poller stays flat."""
+        if self.media_type == "movie" and radarr and self.radarr_movie_id:
+            return await radarr.movie_has_file(self.radarr_movie_id), ""
+        if self.media_type == "tv" and sonarr:
+            if self.sonarr_episode_id:
+                return await sonarr.episode_has_file(self.sonarr_episode_id), ""
+            if self.sonarr_series_id and self.sonarr_season and self.expected_episode_ids:
+                present, total = await sonarr.season_files_present(
+                    self.sonarr_series_id, self.sonarr_season, self.expected_episode_ids,
+                )
+                return (present >= total and total > 0,
+                        f" ({present}/{total} episodes)")
+        return False, ""
+
 
 class UserStore:
     def __init__(self, db_path: str | Path, crypto: Optional[TokenCrypto] = None):

@@ -79,10 +79,26 @@ def schedule_clean_exit(delay_s: float = 2.0) -> None:
 
 # --- Formatting -------------------------------------------------------------
 
+# Module-level set of timestamps that have already produced a parse-fail
+# warning. Prevents log spam if Seerr starts emitting a non-ISO format
+# while still surfacing the change on the first occurrence so we notice.
+_FORMAT_AGE_WARNED: set[str] = set()
+
+
 def format_age(created_at_iso: str) -> str:
     try:
         created = datetime.fromisoformat(created_at_iso.replace("Z", "+00:00"))
     except ValueError:
+        # Log once per unparseable prefix so a Seerr format change isn't
+        # silently swallowed by `return "?"`.
+        key = (created_at_iso or "")[:20]
+        if key not in _FORMAT_AGE_WARNED:
+            _FORMAT_AGE_WARNED.add(key)
+            logger.warning(
+                "format_age: couldn't parse timestamp %r as ISO 8601; "
+                "returning '?'. Has Seerr's payload format changed?",
+                created_at_iso,
+            )
         return "?"
     delta = datetime.now(timezone.utc) - created
     secs = int(delta.total_seconds())
@@ -99,6 +115,34 @@ def format_age(created_at_iso: str) -> str:
 
 def format_status(summary: dict[str, str]) -> str:
     return "\n".join(f"  • *{k}*: {v}" for k, v in summary.items())
+
+
+def format_media_label(
+    title: str, year: str, *,
+    season: Optional[int] = None,
+    episode: Optional[int] = None,
+) -> str:
+    """Single canonical media label across the bot.
+
+    Examples:
+      Inception                            -> "Inception"
+      Inception (2010)                     -> "Inception (2010)"
+      Mating Season (2026) — S01           -> "Mating Season (2026) — S01"
+      Mating Season (2026) — S01E08        -> "Mating Season (2026) — S01E08"
+
+    Used by /tickets list, ticket-detail header, /issue summary, and the
+    auto-fix completion / abandoned DMs so the format never drifts.
+    """
+    base = title or "(unknown)"
+    if year:
+        base = f"{base} ({year})"
+    if season:
+        s = int(season)
+        if episode:
+            base += f" — S{s:02d}E{int(episode):02d}"
+        else:
+            base += f" — S{s:02d}"
+    return base
 
 
 def format_se_suffix(problem_season, problem_episode) -> str:
@@ -315,3 +359,4 @@ _global_btn_gate = global_btn_gate
 _ticket_detail_kb = ticket_detail_kb
 _format_media_title_line = format_media_title_line
 _format_se_suffix = format_se_suffix
+_format_media_label = format_media_label
