@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.8] - 2026-05-30
+
+### Fixed
+- **`load_or_create_session_secret` no longer strips bytes from the loaded secret.** The previous `p.read_bytes().strip()` call removed ASCII whitespace bytes (`\n`, `\t`, ` `, etc.) from both ends of the 32-byte random secret. Since `secrets.token_bytes(32)` returns uniformly random bytes, ~7% of secrets had a whitespace byte at one end; on those installs the runtime session key was 30–31 bytes (silently truncated) and varied between the first and second load. CI on v0.11.7 caught the case where a freshly-generated secret happened to start with `\n` and the round-trip mismatch failed `test_session_secret_persists`. New `test_session_secret_preserves_whitespace_bytes` deterministic regression added.
+
+### Notes
+- **Back-compat hazard for the ~7% of installs whose existing session secret has a leading or trailing whitespace byte on disk.** The pre-v0.11.8 binary read that secret minus those bytes; the v0.11.8 binary will read the full 32 bytes. The HMAC key changes → previously-issued admin session cookies become invalid → admin sees one auto-logout on the upgrade. Re-login is the only step.
+- 126 tests pass (was 125; added the regression).
+
 ## [0.11.7] - 2026-05-29
 
 ### Fixed

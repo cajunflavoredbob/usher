@@ -214,7 +214,10 @@ def load_or_create_session_secret(path: str | Path) -> bytes:
     p = Path(path)
     if p.exists():
         try:
-            data = p.read_bytes().strip()
+            # Read raw bytes -- never .strip(), since the secret is random
+            # binary and may legitimately start or end with byte 0x0a, 0x20,
+            # 0x09, etc. (CI flake: a `\n` first byte got silently lost.)
+            data = p.read_bytes()
             if data:
                 return data
         except OSError:
