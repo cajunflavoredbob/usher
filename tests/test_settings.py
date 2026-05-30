@@ -159,3 +159,16 @@ def test_session_secret_persists(tmp_path: Path):
     b = load_or_create_session_secret(p)
     assert a == b
     assert len(a) == 32
+
+
+def test_session_secret_preserves_whitespace_bytes(tmp_path: Path):
+    """Regression: bytes 0x0a / 0x20 / 0x09 at either end must NOT be stripped.
+    CI failure on v0.11.7: a random secret starting with `\\n` lost its first
+    byte on the second read because the loader used .strip()."""
+    p = tmp_path / "session_secret"
+    # Plant a secret whose ends are ASCII-whitespace bytes.
+    seeded = b"\n" + b"x" * 30 + b" "
+    p.write_bytes(seeded)
+    loaded = load_or_create_session_secret(p)
+    assert loaded == seeded
+    assert len(loaded) == 32
