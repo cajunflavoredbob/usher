@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.11] - 2026-05-30
+
+### Security
+- **PBKDF2 auto-upgrade on successful login** (audit SEC #16). After a successful `verify_password`, the stored hash's iteration count is parsed from the `pbkdf2_sha256$<iters>$<salt>$<hash>` format and compared against the current `PBKDF2_ITERATIONS`. If lower, the password is rehashed and persisted, and an `event=password_rehashed user=... ip=... from_iters=N to_iters=M` audit line is written. The rehash is wrapped in its own try/except so a write failure doesn't roll back the (already-successful) login.
+
+### Removed
+- **`_run_autofix` and `_run_mark_failed` back-compat shims** in `bot/tickets.py`. Confirmed orphan since v0.11.7 migrated `bot/issue_flow.py` to call `_run_arr_action` directly. Module docstring updated to drop them from the public-entry-points list.
+- **Unused-imports sweep across `bot/*` and root modules.** `bot/app.py` (`typing.Optional`), `bot/shared.py` (`html`), `bot/link_flow.py` (`_record_btn`), `bot/resolve_flow.py` (`typing.Optional`, `InlineKeyboardButton`, `InlineKeyboardMarkup`, `_token_for`), `bot/tickets.py` (`AUTOFIX_ELIGIBLE_TYPES`), `webui.py` (`CSRF_COOKIE`). Pyflakes-clean now.
+
+### Added
+- `tests/test_login_pbkdf2_auto_upgrade.py` — 3 cases: a hash already at the current iter count is NOT rehashed (no audit entry); a stale-iter hash IS rehashed + audit-logged with `from_iters`/`to_iters` fields, and the new hash still verifies the same password; a malformed stored hash fails the login with 401 (not 500) and doesn't trigger the rehash path.
+- 163 tests total (was 160).
+
+### Notes
+- After this release: **the only outstanding audit item is SEC #9 (session rotation / jti) — explicitly deferred to v0.12 per the briefing.** ERR #18 (Plex API logging hygiene) is verified already-closed by v0.11.3's `execute()` wrapper, which uniformly parses error bodies into `APIError.user_message` and logs them at the call site via `logger.exception`. The pre-v0.11.3 explicit-body block in `plex.request_pin` was already removed during the v0.11.3 migration.
+- v1.0 gate per the briefing: closed audit ✓ + one week clean operational use (in progress since 2026-05-30) + non-trivial test coverage. Next planned investment: handler-level test harness (v0.11.12 scope).
+
 ## [0.11.10] - 2026-05-30
 
 ### Fixed

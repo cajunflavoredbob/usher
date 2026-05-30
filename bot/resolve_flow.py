@@ -3,13 +3,8 @@ optionally add a comment, optionally close the ticket."""
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
-from telegram import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Update,
-)
+from telegram import Update
 from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
@@ -24,7 +19,7 @@ from seerr import SeerrClient
 from store import UserStore
 
 from bot.callback_prefixes import RESOLVE
-from bot.shared import AWAIT_COMMENT, _token_for
+from bot.shared import AWAIT_COMMENT
 
 logger = logging.getLogger("hermes")
 
