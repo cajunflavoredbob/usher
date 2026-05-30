@@ -30,6 +30,16 @@ from webui import attach_webui
 from _version import __version__ as HERMES_VERSION
 
 from bot.autofix_poll import poll_pending_autofixes
+from bot.callback_prefixes import (
+    LINK_HELP,
+    TK_BACK,
+    TK_CLOSE,
+    TK_CLOSE_DIRECT,
+    TK_FIX,
+    TK_FIX_MARK_FAILED,
+    TK_FIX_REDOWNLOAD,
+    TK_OPEN,
+)
 from bot.issue_flow import _issue_conversation
 from bot.link_flow import _link_conversation, cmd_link_didnt_work, cmd_unlink
 from bot.resolve_flow import _resolve_conversation
@@ -48,12 +58,16 @@ from bot.tickets import (
     tk_fix_mark_failed,
     tk_fix_redownload,
     tk_open,
-    tk_reply_menu,
 )
 from bot.webhook_handlers import (
     handle_seerr_comment,
     handle_seerr_reported,
     handle_seerr_resolved,
+)
+from const import (
+    ADMIN_UPLOAD_MAX_BYTES,
+    AUTOFIX_POLL_FIRST_DELAY_S,
+    AUTOFIX_POLL_INTERVAL_S,
 )
 
 logging.basicConfig(
@@ -241,22 +255,21 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     # Ticket-management callbacks (must be registered before the conversation
     # so the non-conversation taps -- open / close-menu / close-direct -- work
     # even when no conversation is active)
-    app.add_handler(CallbackQueryHandler(tk_open, pattern=r"^tkopen:\d+$"))
-    app.add_handler(CallbackQueryHandler(tk_reply_menu, pattern=r"^tkrmenu:\d+$"))
-    app.add_handler(CallbackQueryHandler(tk_close_menu, pattern=r"^tkc:\d+$"))
-    app.add_handler(CallbackQueryHandler(tk_close_direct, pattern=r"^tkcd:\d+$"))
-    app.add_handler(CallbackQueryHandler(tk_fix, pattern=r"^tkf:\d+$"))
-    app.add_handler(CallbackQueryHandler(tk_fix_redownload, pattern=r"^tkfd:\d+$"))
-    app.add_handler(CallbackQueryHandler(tk_fix_mark_failed, pattern=r"^tkfm:\d+$"))
-    app.add_handler(CallbackQueryHandler(tk_back, pattern=r"^tkback:\d+$"))
+    app.add_handler(CallbackQueryHandler(tk_open, pattern=fr"^{TK_OPEN}:\d+$"))
+    app.add_handler(CallbackQueryHandler(tk_close_menu, pattern=fr"^{TK_CLOSE}:\d+$"))
+    app.add_handler(CallbackQueryHandler(tk_close_direct, pattern=fr"^{TK_CLOSE_DIRECT}:\d+$"))
+    app.add_handler(CallbackQueryHandler(tk_fix, pattern=fr"^{TK_FIX}:\d+$"))
+    app.add_handler(CallbackQueryHandler(tk_fix_redownload, pattern=fr"^{TK_FIX_REDOWNLOAD}:\d+$"))
+    app.add_handler(CallbackQueryHandler(tk_fix_mark_failed, pattern=fr"^{TK_FIX_MARK_FAILED}:\d+$"))
+    app.add_handler(CallbackQueryHandler(tk_back, pattern=fr"^{TK_BACK}:\d+$"))
     app.add_handler(_ticket_conversation())
-    app.add_handler(CallbackQueryHandler(cmd_link_didnt_work, pattern=r"^tklhelp$"))
+    app.add_handler(CallbackQueryHandler(cmd_link_didnt_work, pattern=fr"^{LINK_HELP}$"))
     app.add_error_handler(on_error)
 
     app.job_queue.run_repeating(
         poll_pending_autofixes,
-        interval=60,
-        first=30,
+        interval=AUTOFIX_POLL_INTERVAL_S,
+        first=AUTOFIX_POLL_FIRST_DELAY_S,
         name="autofix_poller",
     )
 
@@ -268,7 +281,7 @@ async def _post_init(app: Application) -> None:
     summary = await _check_connections(app)
     logger.info("Startup checks: %s", " | ".join(f"{k}={v}" for k, v in summary.items()))
 
-    web_app = web.Application(client_max_size=32 * 1024 * 1024)
+    web_app = web.Application(client_max_size=ADMIN_UPLOAD_MAX_BYTES)
 
     async def _on_comment(payload: dict) -> None:
         await handle_seerr_comment(app, payload)
@@ -429,7 +442,7 @@ async def _run_setup_only(settings_store: SettingsStore, session_secret: bytes,
         "Running in SETUP-ONLY mode. Open http://<host>:%d/admin to finish setup.",
         http_port,
     )
-    web_app = web.Application(client_max_size=32 * 1024 * 1024)
+    web_app = web.Application(client_max_size=ADMIN_UPLOAD_MAX_BYTES)
 
     async def _on_settings_changed() -> None:
         if settings_store.settings.is_bot_configured():

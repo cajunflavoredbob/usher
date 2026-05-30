@@ -27,11 +27,20 @@ from plex import PlexClient
 from seerr import SeerrClient
 from store import UserStore
 
+from bot.callback_prefixes import LINK_CONSENT, LINK_HELP, LINK_PLATFORM
 from bot.shared import (
     AWAIT_LINK_CONSENT,
     AWAIT_PLATFORM_CHOICE,
     _record_btn,
     _require_seerr,
+)
+from const import (
+    LINK_FLOW_TIMEOUT_S,
+    PLEX_POLL_FAILURE_WARN_THRESHOLD,
+    PLEX_POLL_INTERVAL_S,
+    PLEX_POLL_MAX_BACKOFF_S,
+    PLEX_STRONG_PIN_MAX_ITERS,
+    PLEX_WEAK_PIN_MAX_ITERS,
 )
 
 logger = logging.getLogger("hermes")
@@ -47,8 +56,8 @@ def _link_conversation() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[CommandHandler("link", cmd_link)],
         states={
-            AWAIT_LINK_CONSENT: [CallbackQueryHandler(cmd_link_consent, pattern=r"^link_consent:")],
-            AWAIT_PLATFORM_CHOICE: [CallbackQueryHandler(cmd_link_platform, pattern=r"^tklplat:")],
+            AWAIT_LINK_CONSENT: [CallbackQueryHandler(cmd_link_consent, pattern=fr"^{LINK_CONSENT}:")],
+            AWAIT_PLATFORM_CHOICE: [CallbackQueryHandler(cmd_link_platform, pattern=fr"^{LINK_PLATFORM}:")],
             ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, _link_timeout)],
         },
         fallbacks=[CommandHandler("cancel", link_cancel)],
@@ -57,7 +66,7 @@ def _link_conversation() -> ConversationHandler:
         allow_reentry=True,
         name="link",
         persistent=False,
-        conversation_timeout=1800,  # 30 min covers the 28-min strong-PIN window
+        conversation_timeout=LINK_FLOW_TIMEOUT_S,  # 30 min covers the 28-min strong-PIN window
     )
 
 
@@ -69,8 +78,8 @@ async def cmd_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if await _require_seerr(update, ctx) is None:
         return ConversationHandler.END
     rows = [[
-        InlineKeyboardButton("✅ Yes, continue", callback_data="link_consent:yes"),
-        InlineKeyboardButton("🛑 Cancel", callback_data="link_consent:no"),
+        InlineKeyboardButton("✅ Yes, continue", callback_data=f"{LINK_CONSENT}:yes"),
+        InlineKeyboardButton("🛑 Cancel", callback_data=f"{LINK_CONSENT}:no"),
     ]]
     await msg.reply_text(
         "Sign in with Plex so issues you submit are tagged as you.\n\n"
@@ -89,8 +98,8 @@ async def cmd_link_consent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
         await q.edit_message_text("Cancelled. /link to try again later.")
         return ConversationHandler.END
     kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("💻 Desktop", callback_data="tklplat:desktop"),
-        InlineKeyboardButton("📱 iOS / Android", callback_data="tklplat:mobile"),
+        InlineKeyboardButton("💻 Desktop", callback_data=f"{LINK_PLATFORM}:desktop"),
+        InlineKeyboardButton("📱 iOS / Android", callback_data=f"{LINK_PLATFORM}:mobile"),
     ]])
     await q.edit_message_text(
         "Where are you using Telegram?",
@@ -116,7 +125,10 @@ async def _poll_with_cancel(plex: PlexClient, pin_id: int, max_iters: int,
     for _ in range(max_iters):
         if ctx.user_data.get("link_active_loop") != loop_id:
             return None
-        sleep_s = min(12.0, 3.0 * (2 ** min(consecutive_failures, 2)))
+        sleep_s = min(
+            PLEX_POLL_MAX_BACKOFF_S,
+            PLEX_POLL_INTERVAL_S * (2 ** min(consecutive_failures, 2)),
+        )
         await asyncio.sleep(sleep_s)
         try:
             token = await plex.poll_pin(pin_id)
@@ -129,7 +141,8 @@ async def _poll_with_cancel(plex: PlexClient, pin_id: int, max_iters: int,
             consecutive_failures += 1
             logger.exception("poll_pin failed (will retry; %d in a row)",
                              consecutive_failures)
-            if consecutive_failures == 5 and not warned_user and chat_id is not None:
+            if (consecutive_failures == PLEX_POLL_FAILURE_WARN_THRESHOLD
+                    and not warned_user and chat_id is not None):
                 warned_user = True
                 try:
                     await ctx.bot.send_message(
@@ -211,22 +224,23 @@ async def cmd_link_platform(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     if platform == "desktop":
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🌐 Open Plex authorization", url=pin.auth_url)],
-            [InlineKeyboardButton("❌ Having trouble?", callback_data="tklhelp")],
+            [InlineKeyboardButton("❌ Having trouble?", callback_data=LINK_HELP)],
         ])
         text = "Authorize Hermes in Plex:\n\nSign in and tap Allow."
     else:  # mobile
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("📋 Copy auth link",
                                   copy_text=CopyTextButton(text=pin.auth_url))],
-            [InlineKeyboardButton("❌ Didn't work?", callback_data="tklhelp")],
+            [InlineKeyboardButton("❌ Didn't work?", callback_data=LINK_HELP)],
         ])
         text = "Tap to copy the auth link, then paste it into a browser."
 
     await q.edit_message_text(text, reply_markup=kb)
 
-    # Strong PIN window: ~28 min (560 × 3s, under the 30-min lifetime).
-    auth_token = await _poll_with_cancel(plex, pin.id, max_iters=560, ctx=ctx,
-                                         loop_id=loop_id,
+    # Strong PIN window: under the 30-min lifetime; see const.py.
+    auth_token = await _poll_with_cancel(plex, pin.id,
+                                         max_iters=PLEX_STRONG_PIN_MAX_ITERS,
+                                         ctx=ctx, loop_id=loop_id,
                                          chat_id=update.effective_chat.id)
     if auth_token is None:
         if ctx.user_data.get("link_active_loop") != loop_id:
@@ -280,9 +294,10 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         disable_web_page_preview=True,
     )
 
-    # Weak PIN window: ~14 min (280 × 3s, under the 15-min lifetime).
-    auth_token = await _poll_with_cancel(plex, pin.id, max_iters=280, ctx=ctx,
-                                         loop_id=loop_id,
+    # Weak PIN window: under the 15-min lifetime; see const.py.
+    auth_token = await _poll_with_cancel(plex, pin.id,
+                                         max_iters=PLEX_WEAK_PIN_MAX_ITERS,
+                                         ctx=ctx, loop_id=loop_id,
                                          chat_id=update.effective_chat.id)
     if auth_token is None:
         if ctx.user_data.get("link_active_loop") != loop_id:

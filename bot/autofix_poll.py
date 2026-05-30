@@ -13,6 +13,9 @@ from radarr import RadarrClient
 from sonarr import SonarrClient
 from store import UserStore
 
+from bot.callback_prefixes import RESOLVE
+from const import AUTOFIX_TIMEOUT_HOURS
+
 logger = logging.getLogger("hermes")
 
 async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -90,8 +93,8 @@ async def _notify_complete(ctx: ContextTypes.DEFAULT_TYPE, fix, extra: str = "")
         "Did this resolve the problem?"
     )
     keyboard = [[
-        InlineKeyboardButton("✅ Yes, close it", callback_data=f"resolve:{fix.issue_id}:yes"),
-        InlineKeyboardButton("💬 No, add a comment", callback_data=f"resolve:{fix.issue_id}:no"),
+        InlineKeyboardButton("✅ Yes, close it", callback_data=f"{RESOLVE}:{fix.issue_id}:yes"),
+        InlineKeyboardButton("💬 No, add a comment", callback_data=f"{RESOLVE}:{fix.issue_id}:no"),
     ]]
     try:
         await ctx.bot.send_message(
@@ -106,14 +109,14 @@ async def _notify_complete(ctx: ContextTypes.DEFAULT_TYPE, fix, extra: str = "")
 
 async def _notify_timeout(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:
     text = (
-        f"⏱️ Auto-fix timed out (6h) for *{fix.label}*.\n"
+        f"⏱️ Auto-fix timed out ({AUTOFIX_TIMEOUT_HOURS}h) for *{fix.label}*.\n"
         f"No new file was imported. Check Sonarr/Radarr to see if a release was grabbed.\n"
         f"Original issue: {fix.issue_url}\n\n"
         "Want to add a comment for the admin to follow up?"
     )
     keyboard = [[
-        InlineKeyboardButton("💬 Add a comment", callback_data=f"resolve:{fix.issue_id}:no"),
-        InlineKeyboardButton("🙅 No, leave it", callback_data=f"resolve:{fix.issue_id}:skip"),
+        InlineKeyboardButton("💬 Add a comment", callback_data=f"{RESOLVE}:{fix.issue_id}:no"),
+        InlineKeyboardButton("🙅 No, leave it", callback_data=f"{RESOLVE}:{fix.issue_id}:skip"),
     ]]
     try:
         await ctx.bot.send_message(

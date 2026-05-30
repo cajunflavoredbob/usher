@@ -291,10 +291,13 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
 def ticket_detail_kb(issue_id: int, is_admin: bool) -> InlineKeyboardMarkup:
     """Top-level row for a ticket's detail view. Reply goes straight to the
     reply input (no submenu); only Close and Fix have submenus."""
-    row = [InlineKeyboardButton("💬 Reply", callback_data=f"tkr:{issue_id}")]
+    # Local import avoids a circular dep at module load (callback_prefixes is
+    # a leaf module so this is cheap).
+    from bot.callback_prefixes import TK_CLOSE, TK_FIX, TK_REPLY
+    row = [InlineKeyboardButton("💬 Reply", callback_data=f"{TK_REPLY}:{issue_id}")]
     if is_admin:
-        row.append(InlineKeyboardButton("🔧 Fix", callback_data=f"tkf:{issue_id}"))
-        row.append(InlineKeyboardButton("✅ Close", callback_data=f"tkc:{issue_id}"))
+        row.append(InlineKeyboardButton("🔧 Fix", callback_data=f"{TK_FIX}:{issue_id}"))
+        row.append(InlineKeyboardButton("✅ Close", callback_data=f"{TK_CLOSE}:{issue_id}"))
     return InlineKeyboardMarkup([row])
 
 
