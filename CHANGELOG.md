@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.12] - 2026-05-30
+
+### Added
+- **`tests/_handler_harness.py`** — minimal PTB handler test harness. Factory helpers for `Update` + `CallbackQuery` + `CallbackContext`-shaped objects with sensible `bot_data` defaults (admin_id, SimpleNamespace AsyncMock seerr/radarr/sonarr clients, store stub with AsyncMock methods, settings_store stub). Recording wrappers on `reply_text` / `edit_message_text` / `answer` / `edit_message_reply_markup` so tests can assert on what each handler emitted. Reusable foundation for future handler tests.
+- **`tests/test_cmd_tickets.py`** — 7 cases. Admin lists all (with "All open tickets" header + `as_plex_token=None`); user lists own (with "Your open tickets" header + scoped token); unlinked non-admin gets the /link prompt; empty list per-role messaging; raw exceptions wrapped to user-friendly strings; `seerr=None` short-circuits via the require-seerr helper.
+- **`tests/test_apply_fix.py`** — 7 cases. Non-admin blocked + "Admin only." toast + `admin_callback_blocked` audit log; movie redownload happy path enqueues pending autofix + logs autofix event + edits success message; movie mark_failed happy path; `get_issue` failure surfaces user-friendly message and does NOT echo raw exception; whole-season TV rejected with "only works on individual episodes"; partial-success (delete failed but search ran) still enqueues poller; failed result skips enqueue.
+- **`tests/test_issue_pick_media.py`** — 5 cases. Version-tag match advances to `PICK_TYPE`; **version-tag mismatch shows "Search context changed" and ends the conversation (the v0.11.10 CONC #10 regression test);** missing search_results entirely treated as mismatch; malformed callback_data (too few parts) shows "Couldn't parse selection"; non-int version in callback_data same.
+- **`tests/test_tk_reply_text.py`** — 7 cases. Admin reply posts with `as_plex_token=None`; user reply posts with their Plex token; decrypt_failed mapping shows the broken-link message instead of silent "not linked"; **post-await mismatch suppresses close-after side effect (the v0.11.6 CONC #9 regression test);** close_after happy path calls both `add_issue_comment` + `resolve_issue`; empty whitespace-only message re-prompts and stays in state; missing `tk_reply_id` ends quietly.
+- **189 tests total** (was 163; +26). Handler coverage starts here and can grow with each new handler change.
+
+### Notes
+- Advances the v1.0 gate's "non-trivial test coverage" criterion from "data + helper layers only" to "data + helper layers + the four highest-traffic and most-recently-patched handlers."
+- The harness is intentionally minimal -- it models the surface area handlers actually touch, not the full PTB Application. If future handlers exercise PTB internals the harness doesn't yet cover, extend it as needed.
+- No source-code logic changes.
+
 ## [0.11.11] - 2026-05-30
 
 ### Security
