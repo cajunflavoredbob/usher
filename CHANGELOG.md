@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.7] - 2026-05-29
+
+### Fixed
+- **`_submit_issue` was calling `_run_autofix` with a stale tuple-unpacking shape.** Carried over from before v0.11.3 made the orchestrators return `FixResult`; would have `ValueError`'d on first user-side auto-fix-during-/issue. Rewritten to consume the structured result + use `result.should_poll` to decide whether to enqueue the completion poller.
+
+### Added
+- **`const.py`** — named timeouts and limits used across multiple modules: Plex poll cadence + window + escalation threshold + backoff cap, autofix poll interval / first-delay / 6h timeout, keyboard layout caps (3/row), search result count, HTTP upload caps (32MB admin restore vs 128KB webhook), and the three ConversationHandler timeouts. Single source of truth for tuning.
+- **`bot/callback_prefixes.py`** — named constants for every `callback_data` prefix (`TK_OPEN`, `TK_REPLY`, `TK_FIX_REDOWNLOAD`, `TK_FIX_MARK_FAILED`, `TK_CLOSE`, `TK_CLOSE_WITH_COMMENT`, `TK_CLOSE_DIRECT`, `TK_BACK`, `LINK_CONSENT`, `LINK_PLATFORM`, `LINK_HELP`, `ISSUE_MEDIA`, `ISSUE_SEASON`, `ISSUE_EPISODE`, `ISSUE_TYPE`, `ISSUE_AUTOFIX_OFFER`, `ISSUE_AUTOFIX_CONFIRM`, `ISSUE_CANCEL`, `ISSUE_RESEARCH_PARENT`, `RESOLVE`). All inline keyboards and `CallbackQueryHandler` patterns updated to use them.
+
+### Changed
+- **`_run_autofix` and `_run_mark_failed` collapse into `_run_arr_action`** (`bot/tickets.py`) keyed by `action: Literal["fix", "mark_failed"]`. The two outer names remain as one-line back-compat shims; `_apply_fix` and `_submit_issue` are migrated to call `_run_arr_action` directly.
+- **`bot/app.py`, `bot/link_flow.py`, `bot/issue_flow.py`, `bot/autofix_poll.py`, `bot/tickets.py`, `bot/resolve_flow.py`, `bot/webhook_handlers.py`, `bot/shared.py`** all import named constants instead of carrying magic strings + magic numbers (Plex poll iters, autofix poll interval, conversation timeouts, keyboard buttons-per-row, search result count, upload caps).
+- **Module-level docstrings on `bot/*.py`** refined for the v0.11.5 split's responsibility lines.
+
+### Removed
+- **`tk_reply_menu` callback handler + the `tkrmenu:` pattern registration.** Confirmed orphan (no keyboard emits `tkrmenu:` since v0.10.4 made admin Reply go direct).
+
+### Updated
+- `Dockerfile` — `const.py` added to the top-level `COPY` list.
+
+### Notes
+- Phase 7 (final) of the v0.11.x hardening roadmap. Closes audit findings M3 (callback prefix sprawl), M6 (magic numbers), L3 (`_run_autofix`/`_run_mark_failed` duplication), and the silent v0.11.3 regression in `_submit_issue`.
+- All 125 tests still pass. No new tests added — this phase is pure tidiness + one quietly-broken-since-v0.11.3 user path put right.
+- After this release: **all Critical + High audit findings are closed**. Per the v1.0 gate in `~/hermes_briefing.md` (Critical + High closed + one week of clean operational use + non-trivial test coverage), the remaining wait is bake time. 125 tests cover the data + helper layers; handler-level tests would be the natural next investment before tagging v1.0.
+
 ## [0.11.6] - 2026-05-28
 
 ### Fixed

@@ -23,13 +23,14 @@ from http_util import user_friendly_message
 from seerr import SeerrClient
 from store import UserStore
 
+from bot.callback_prefixes import RESOLVE
 from bot.shared import AWAIT_COMMENT, _token_for
 
 logger = logging.getLogger("hermes")
 
 def _resolve_conversation() -> ConversationHandler:
     return ConversationHandler(
-        entry_points=[CallbackQueryHandler(resolve_start, pattern=r"^resolve:")],
+        entry_points=[CallbackQueryHandler(resolve_start, pattern=fr"^{RESOLVE}:")],
         states={
             AWAIT_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, resolve_comment)],
         },

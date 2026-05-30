@@ -1,11 +1,21 @@
 """Ticket management: /tickets, the tk_* callback family, _apply_fix, and the
-reply ConversationHandler."""
+reply ConversationHandler.
+
+Public entry points:
+  cmd_tickets          /tickets list command
+  tk_open, tk_back, tk_close_menu, tk_close_direct, tk_fix,
+    tk_fix_redownload, tk_fix_mark_failed                callback handlers
+  tk_reply_start, tk_close_with_comment_start, tk_reply_text  reply convo
+  _ticket_conversation()                                      conversation
+  _run_arr_action(action="fix" | "mark_failed")               arr orchestrator
+  _run_autofix / _run_mark_failed                             back-compat shims
+"""
 from __future__ import annotations
 
 import asyncio
 import html
 import logging
-from typing import Optional
+from typing import Literal, Optional
 
 from telegram import (
     InlineKeyboardButton,
@@ -28,6 +38,16 @@ from seerr import SeerrClient
 from sonarr import SonarrClient
 from store import UserStore
 
+from bot.callback_prefixes import (
+    TK_BACK,
+    TK_CLOSE_DIRECT,
+    TK_CLOSE_WITH_COMMENT,
+    TK_FIX_MARK_FAILED,
+    TK_FIX_REDOWNLOAD,
+    TK_OPEN,
+    TK_REPLY,
+)
+from const import TICKET_REPLY_TIMEOUT_S
 from bot.shared import (
     AUTOFIX_ELIGIBLE_TYPES,
     AWAIT_TICKET_REPLY,
@@ -111,7 +131,7 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     button_rows: list[list[InlineKeyboardButton]] = []
     current: list[InlineKeyboardButton] = []
     for issue in issues:
-        current.append(InlineKeyboardButton(f"#{issue.id}", callback_data=f"tkopen:{issue.id}"))
+        current.append(InlineKeyboardButton(f"#{issue.id}", callback_data=f"{TK_OPEN}:{issue.id}"))
         if len(current) == 4:
             button_rows.append(current)
             current = []
@@ -123,23 +143,6 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         reply_markup=InlineKeyboardMarkup(button_rows) if button_rows else None,
     )
     _record_btn(ctx.application, update.effective_user.id, msg)
-
-
-async def tk_reply_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Admin tapped top-level [Reply]. Opens [Reply] [Close] sub-menu."""
-    q = update.callback_query
-    await q.answer()
-    try:
-        issue_id = int(q.data.split(":", 1)[1])
-    except (ValueError, IndexError):
-        return
-    if update.effective_user.id != ctx.bot_data.get("admin_id"):
-        return
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("💬 Reply", callback_data=f"tkr:{issue_id}"),
-        InlineKeyboardButton("✅ Close", callback_data=f"tkcd:{issue_id}"),
-    ]])
-    await q.edit_message_text(f"Reply to ticket #{issue_id}?", reply_markup=kb)
 
 
 async def tk_open(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -255,10 +258,10 @@ async def tk_close_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     kb = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("💬 Comment", callback_data=f"tkcc:{issue_id}"),
-            InlineKeyboardButton("✓ No comment", callback_data=f"tkcd:{issue_id}"),
+            InlineKeyboardButton("💬 Comment", callback_data=f"{TK_CLOSE_WITH_COMMENT}:{issue_id}"),
+            InlineKeyboardButton("✓ No comment", callback_data=f"{TK_CLOSE_DIRECT}:{issue_id}"),
         ],
-        [InlineKeyboardButton("⬅️ Cancel", callback_data=f"tkback:{issue_id}")],
+        [InlineKeyboardButton("⬅️ Cancel", callback_data=f"{TK_BACK}:{issue_id}")],
     ])
     await q.edit_message_text(f"Close ticket #{issue_id}?", reply_markup=kb)
     _record_btn(ctx.application, update.effective_user.id, q.message)
@@ -276,10 +279,10 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     kb = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🔄 Redownload", callback_data=f"tkfd:{issue_id}"),
-            InlineKeyboardButton("🚫 Mark Failed", callback_data=f"tkfm:{issue_id}"),
+            InlineKeyboardButton("🔄 Redownload", callback_data=f"{TK_FIX_REDOWNLOAD}:{issue_id}"),
+            InlineKeyboardButton("🚫 Mark Failed", callback_data=f"{TK_FIX_MARK_FAILED}:{issue_id}"),
         ],
-        [InlineKeyboardButton("⬅️ Cancel", callback_data=f"tkback:{issue_id}")],
+        [InlineKeyboardButton("⬅️ Cancel", callback_data=f"{TK_BACK}:{issue_id}")],
     ])
     await q.edit_message_text(f"🔧 Fix #{issue_id} — how?", reply_markup=kb)
     _record_btn(ctx.application, update.effective_user.id, q.message)
@@ -543,8 +546,8 @@ async def _tk_reply_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 def _ticket_conversation() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[
-            CallbackQueryHandler(tk_reply_start, pattern=r"^tkr:\d+$"),
-            CallbackQueryHandler(tk_close_with_comment_start, pattern=r"^tkcc:\d+$"),
+            CallbackQueryHandler(tk_reply_start, pattern=fr"^{TK_REPLY}:\d+$"),
+            CallbackQueryHandler(tk_close_with_comment_start, pattern=fr"^{TK_CLOSE_WITH_COMMENT}:\d+$"),
         ],
         states={
             AWAIT_TICKET_REPLY: [
@@ -558,69 +561,66 @@ def _ticket_conversation() -> ConversationHandler:
         name="ticket_reply",
         persistent=False,
         allow_reentry=True,
-        conversation_timeout=600,  # 10 min idle clears tk_reply_id / tk_close_after
+        conversation_timeout=TICKET_REPLY_TIMEOUT_S,  # idle clears tk_reply_id / tk_close_after
     )
 
-async def _run_autofix(
+FixAction = Literal["fix", "mark_failed"]
+
+
+async def _run_arr_action(
     media: dict,
     season: Optional[int],
     episode: Optional[int],
     radarr: Optional[RadarrClient],
     sonarr: Optional[SonarrClient],
+    *,
+    action: FixAction,
 ) -> FixResult:
-    """Run delete+search via Radarr/Sonarr. Returns FixResult; the caller
-    inspects status (ok/partial/failed) and should_poll to decide whether
-    to enqueue the autofix completion poller."""
+    """Run the configured Arr action against the media. `action="fix"` is the
+    plain delete+search (Auto-fix); `action="mark_failed"` adds the blocklist
+    step (Mark Failed). Returns FixResult — see fix_result.py for the
+    ok/partial/failed status semantics and should_poll heuristic."""
+    op_label = "Auto-fix" if action == "fix" else "Mark Failed"
     try:
         if media["type"] == "movie":
             if not radarr:
                 return FixResult.failed("Radarr not configured.")
-            return await radarr.auto_fix(media["tmdb_id"])
-        if media["type"] == "tv":
-            if not sonarr:
-                return FixResult.failed("Sonarr not configured.")
-            if not episode:
-                # Whole-season / whole-show auto-fix is not supported -- too
-                # destructive. Episode-only.
-                return FixResult.failed(
-                    "Auto-fix only works on individual episodes, not whole seasons."
-                )
-            tvdb_id = media.get("tvdb_id")
-            if not tvdb_id:
-                return FixResult.failed("Couldn't find TVDb ID for this show.")
-            return await sonarr.auto_fix_episode(tvdb_id, season, episode)
-    except Exception as exc:
-        logger.exception("auto_fix failed")
-        return FixResult.failed(user_friendly_message(exc))
-    return FixResult.failed("Unknown media type.")
-
-
-async def _run_mark_failed(
-    media: dict,
-    season: Optional[int],
-    episode: Optional[int],
-    radarr: Optional[RadarrClient],
-    sonarr: Optional[SonarrClient],
-) -> FixResult:
-    """Same shape as _run_autofix. Blocklists the most recent grab in
-    addition to delete+search."""
-    try:
-        if media["type"] == "movie":
-            if not radarr:
-                return FixResult.failed("Radarr not configured.")
+            if action == "fix":
+                return await radarr.auto_fix(media["tmdb_id"])
             return await radarr.mark_failed(media["tmdb_id"])
         if media["type"] == "tv":
             if not sonarr:
                 return FixResult.failed("Sonarr not configured.")
             if not episode:
-                return FixResult.failed("Mark Failed only works on individual episodes.")
+                # Whole-season / whole-show variants are too destructive.
+                return FixResult.failed(
+                    f"{op_label} only works on individual episodes, not whole seasons."
+                )
             tvdb_id = media.get("tvdb_id")
             if not tvdb_id:
                 return FixResult.failed("Couldn't find TVDb ID for this show.")
+            if action == "fix":
+                return await sonarr.auto_fix_episode(tvdb_id, season, episode)
             return await sonarr.mark_failed_episode(tvdb_id, season, episode)
     except Exception as exc:
-        logger.exception("mark_failed failed")
+        logger.exception("%s failed", op_label)
         return FixResult.failed(user_friendly_message(exc))
     return FixResult.failed("Unknown media type.")
+
+
+async def _run_autofix(
+    media: dict, season: Optional[int], episode: Optional[int],
+    radarr: Optional[RadarrClient], sonarr: Optional[SonarrClient],
+) -> FixResult:
+    """Back-compat shim: forwards to _run_arr_action(action="fix")."""
+    return await _run_arr_action(media, season, episode, radarr, sonarr, action="fix")
+
+
+async def _run_mark_failed(
+    media: dict, season: Optional[int], episode: Optional[int],
+    radarr: Optional[RadarrClient], sonarr: Optional[SonarrClient],
+) -> FixResult:
+    """Back-compat shim: forwards to _run_arr_action(action="mark_failed")."""
+    return await _run_arr_action(media, season, episode, radarr, sonarr, action="mark_failed")
 
 

@@ -12,6 +12,7 @@ from telegram.ext import Application
 from seerr import SeerrClient
 from store import UserStore
 
+from bot.callback_prefixes import TK_CLOSE, TK_FIX, TK_REPLY
 from bot.shared import (
     ISSUE_TYPE_LABELS,
     format_media_title_line,
@@ -83,7 +84,7 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
     reply_kb = None
     if issue_status == "OPEN":
         reply_kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton("💬 Reply", callback_data=f"tkr:{issue_id}"),
+            InlineKeyboardButton("💬 Reply", callback_data=f"{TK_REPLY}:{issue_id}"),
         ]])
 
     try:
@@ -242,9 +243,9 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
     ]
 
     kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("💬 Reply", callback_data=f"tkr:{issue_id}"),
-        InlineKeyboardButton("🔧 Fix", callback_data=f"tkf:{issue_id}"),
-        InlineKeyboardButton("✅ Close", callback_data=f"tkc:{issue_id}"),
+        InlineKeyboardButton("💬 Reply", callback_data=f"{TK_REPLY}:{issue_id}"),
+        InlineKeyboardButton("🔧 Fix", callback_data=f"{TK_FIX}:{issue_id}"),
+        InlineKeyboardButton("✅ Close", callback_data=f"{TK_CLOSE}:{issue_id}"),
     ]])
 
     try:

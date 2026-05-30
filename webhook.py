@@ -32,8 +32,10 @@ DEDUPE_TTL_S = 60
 DEDUPE_MAX = 256
 
 # Seerr's JSON payloads are well under 8KB. The parent aiohttp app has
-# client_max_size=32MB for admin backup restores; we enforce a tighter
-# limit here so unauthenticated clients can't allocate 32MB per request.
+# client_max_size=ADMIN_UPLOAD_MAX_BYTES (32MB) for admin backup restores;
+# we enforce a tighter limit here so unauthenticated clients can't
+# allocate 32MB per request. Kept here (not imported from const) to avoid
+# a fanout dependency from a leaf module.
 MAX_BODY_BYTES = 128 * 1024
 
 

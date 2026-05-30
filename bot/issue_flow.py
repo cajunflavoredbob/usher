@@ -26,6 +26,16 @@ from settings import SettingsStore
 from sonarr import SonarrClient
 from store import UserStore
 
+from bot.callback_prefixes import (
+    ISSUE_AUTOFIX_CONFIRM,
+    ISSUE_AUTOFIX_OFFER,
+    ISSUE_CANCEL,
+    ISSUE_EPISODE,
+    ISSUE_MEDIA,
+    ISSUE_RESEARCH_PARENT,
+    ISSUE_SEASON,
+    ISSUE_TYPE,
+)
 from bot.shared import (
     AUTOFIX_ELIGIBLE_TYPES,
     CONFIRM_AUTOFIX,
@@ -39,7 +49,8 @@ from bot.shared import (
     TITLE,
     _require_seerr,
 )
-from bot.tickets import _run_autofix
+from bot.tickets import _run_arr_action
+from const import ISSUE_FLOW_TIMEOUT_S, KB_BUTTONS_PER_ROW, SEARCH_RESULT_LIMIT
 
 logger = logging.getLogger("hermes")
 
@@ -61,27 +72,27 @@ def _issue_conversation() -> ConversationHandler:
         states={
             TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, issue_title)],
             PICK_MEDIA: [
-                CallbackQueryHandler(issue_pick_media, pattern=r"^media:"),
-                CallbackQueryHandler(issue_research_parent, pattern=r"^research_parent$"),
+                CallbackQueryHandler(issue_pick_media, pattern=fr"^{ISSUE_MEDIA}:"),
+                CallbackQueryHandler(issue_research_parent, pattern=fr"^{ISSUE_RESEARCH_PARENT}$"),
             ],
-            PICK_SEASON: [CallbackQueryHandler(issue_pick_season, pattern=r"^season:")],
-            PICK_EPISODE: [CallbackQueryHandler(issue_pick_episode, pattern=r"^ep:")],
-            PICK_TYPE: [CallbackQueryHandler(issue_pick_type, pattern=r"^type:")],
+            PICK_SEASON: [CallbackQueryHandler(issue_pick_season, pattern=fr"^{ISSUE_SEASON}:")],
+            PICK_EPISODE: [CallbackQueryHandler(issue_pick_episode, pattern=fr"^{ISSUE_EPISODE}:")],
+            PICK_TYPE: [CallbackQueryHandler(issue_pick_type, pattern=fr"^{ISSUE_TYPE}:")],
             DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, issue_description)],
-            OFFER_AUTOFIX: [CallbackQueryHandler(issue_offer_autofix, pattern=r"^autofix:")],
-            CONFIRM_AUTOFIX: [CallbackQueryHandler(issue_confirm_autofix, pattern=r"^confirm:")],
+            OFFER_AUTOFIX: [CallbackQueryHandler(issue_offer_autofix, pattern=fr"^{ISSUE_AUTOFIX_OFFER}:")],
+            CONFIRM_AUTOFIX: [CallbackQueryHandler(issue_confirm_autofix, pattern=fr"^{ISSUE_AUTOFIX_CONFIRM}:")],
             ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, _issue_timeout)],
         },
         fallbacks=[
             CommandHandler("cancel", issue_cancel),
-            CallbackQueryHandler(issue_cancel, pattern=r"^cancel$"),
+            CallbackQueryHandler(issue_cancel, pattern=fr"^{ISSUE_CANCEL}$"),
         ],
         per_user=True,
         per_chat=True,
         allow_reentry=True,
         name="issue",
         persistent=False,
-        conversation_timeout=600,  # 10 min idle clears issue user_data
+        conversation_timeout=ISSUE_FLOW_TIMEOUT_S,
     )
 
 
@@ -127,7 +138,7 @@ async def _show_search_results(
     messages or `query.edit_message_text` for edits."""
     seerr: SeerrClient = ctx.bot_data["seerr"]
     try:
-        results = await seerr.search(query, limit=5)
+        results = await seerr.search(query, limit=SEARCH_RESULT_LIMIT)
     except Exception as exc:
         logger.exception("search failed")
         await reply_method(f"Search failed. {user_friendly_message(exc)}")
@@ -154,9 +165,9 @@ async def _show_search_results(
     for i, r in enumerate(results):
         keycap = _KEYCAP_DIGITS[i] if i < len(_KEYCAP_DIGITS) else str(i + 1)
         btn_row.append(InlineKeyboardButton(
-            keycap, callback_data=f"media:{r.media_type}:{r.tmdb_id}",
+            keycap, callback_data=f"{ISSUE_MEDIA}:{r.media_type}:{r.tmdb_id}",
         ))
-        if len(btn_row) == 3:
+        if len(btn_row) == KB_BUTTONS_PER_ROW:
             rows.append(btn_row)
             btn_row = []
     last_partial_row = btn_row  # may be empty or have 1-2 buttons
@@ -170,20 +181,20 @@ async def _show_search_results(
         if parent:
             ctx.user_data["research_parent"] = parent
 
-    cancel_btn = InlineKeyboardButton("Cancel", callback_data="cancel")
+    cancel_btn = InlineKeyboardButton("Cancel", callback_data=ISSUE_CANCEL)
     if parent:
         # Flush the last partial row, then parent on its own row, then Cancel.
         if last_partial_row:
             rows.append(last_partial_row)
         rows.append([InlineKeyboardButton(
             f'🔍 Search "{parent}" instead',
-            callback_data="research_parent",
+            callback_data=ISSUE_RESEARCH_PARENT,
         )])
         rows.append([cancel_btn])
     else:
         # No parent button -- append Cancel to the last partial row if there's
         # room, else give it its own row.
-        if last_partial_row and len(last_partial_row) < 3:
+        if last_partial_row and len(last_partial_row) < KB_BUTTONS_PER_ROW:
             last_partial_row.append(cancel_btn)
             rows.append(last_partial_row)
         else:
@@ -233,7 +244,7 @@ async def issue_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
             )
             rows.append([InlineKeyboardButton(
                 f'🔍 Search "{parent}" instead',
-                callback_data="research_parent",
+                callback_data=ISSUE_RESEARCH_PARENT,
             )])
         text += "\n\nOr /issue to start over."
         await q.edit_message_text(
@@ -272,13 +283,13 @@ async def _show_season_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     rows = []
     row = []
     for s in seasons:
-        row.append(InlineKeyboardButton(f"S{s.season_number}", callback_data=f"season:{s.season_number}"))
+        row.append(InlineKeyboardButton(f"S{s.season_number}", callback_data=f"{ISSUE_SEASON}:{s.season_number}"))
         if len(row) == 4:
             rows.append(row)
             row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton("Cancel", callback_data="cancel")])
+    rows.append([InlineKeyboardButton("Cancel", callback_data=ISSUE_CANCEL)])
     label = ctx.user_data["media"]["title"]
     if ctx.user_data["media"]["year"]:
         label += f" ({ctx.user_data['media']['year']})"
@@ -305,14 +316,14 @@ async def issue_pick_season(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     row = []
     # Up to ep_count buttons; "Whole season" option last
     for ep in range(1, ep_count + 1):
-        row.append(InlineKeyboardButton(f"E{ep}", callback_data=f"ep:{ep}"))
+        row.append(InlineKeyboardButton(f"E{ep}", callback_data=f"{ISSUE_EPISODE}:{ep}"))
         if len(row) == 5:
             rows.append(row)
             row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton("📦 Whole season", callback_data="ep:0")])
-    rows.append([InlineKeyboardButton("Cancel", callback_data="cancel")])
+    rows.append([InlineKeyboardButton("📦 Whole season", callback_data=f"{ISSUE_EPISODE}:0")])
+    rows.append([InlineKeyboardButton("Cancel", callback_data=ISSUE_CANCEL)])
     await q.edit_message_text(
         f"Season {season} — which episode?",
         reply_markup=InlineKeyboardMarkup(rows),
@@ -336,10 +347,10 @@ async def issue_pick_episode(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
 async def _show_type_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     rows = [[
-        InlineKeyboardButton(f"{e} {n}", callback_data=f"type:{i}")
+        InlineKeyboardButton(f"{e} {n}", callback_data=f"{ISSUE_TYPE}:{i}")
         for i, (e, n) in ISSUE_TYPES.items()
     ]]
-    rows.append([InlineKeyboardButton("Cancel", callback_data="cancel")])
+    rows.append([InlineKeyboardButton("Cancel", callback_data=ISSUE_CANCEL)])
     media = ctx.user_data["media"]
     label = media["title"]
     if media.get("year"):
@@ -424,8 +435,8 @@ async def issue_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     else:
         remaining_msg = ""
     rows = [[
-        InlineKeyboardButton("✅ Try auto-fix", callback_data="autofix:yes"),
-        InlineKeyboardButton("📨 Just report", callback_data="autofix:no"),
+        InlineKeyboardButton("✅ Try auto-fix", callback_data=f"{ISSUE_AUTOFIX_OFFER}:yes"),
+        InlineKeyboardButton("📨 Just report", callback_data=f"{ISSUE_AUTOFIX_OFFER}:no"),
     ]]
     await update.effective_message.reply_text(
         f"Try to auto-fix? This will delete the file and trigger a new search.{remaining_msg}",
@@ -451,8 +462,8 @@ async def issue_offer_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         await q.edit_message_text("Got it. Submitting issue without auto-fix.")
         return await _submit_issue(update, ctx, autofix=False)
     rows = [[
-        InlineKeyboardButton("⚠️ Yes, delete & re-search", callback_data="confirm:yes"),
-        InlineKeyboardButton("No, just report", callback_data="confirm:no"),
+        InlineKeyboardButton("⚠️ Yes, delete & re-search", callback_data=f"{ISSUE_AUTOFIX_CONFIRM}:yes"),
+        InlineKeyboardButton("No, just report", callback_data=f"{ISSUE_AUTOFIX_CONFIRM}:no"),
     ]]
     await q.edit_message_text(
         "⚠️ This will *delete the current file* from disk and trigger a new download. Confirm?",
@@ -532,8 +543,12 @@ async def _submit_issue(
 
     # 2. If auto-fix requested, run it
     if autofix:
-        ok, detail, poll_info = await _run_autofix(media, season, episode, radarr, sonarr)
-        if ok:
+        result = await _run_arr_action(media, season, episode, radarr, sonarr, action="fix")
+        if result.status == "failed":
+            lines.append(f"⚠️ Auto-fix didn't run: {result.message}")
+        else:
+            # ok or partial: always log the autofix event; only enqueue the
+            # completion poller when search actually ran.
             await store.log_autofix(
                 update.effective_user.id,
                 media["type"],
@@ -541,32 +556,36 @@ async def _submit_issue(
                 season=season,
                 episode=episode,
             )
-            # Enqueue notification-tracking record
-            try:
-                kwargs = {
-                    "chat_id": update.effective_chat.id,
-                    "user_id": update.effective_user.id,
-                    "media_type": media["type"],
-                    "label": label,
-                    "issue_id": created.id,
-                    "issue_url": created.url,
-                }
-                if media["type"] == "movie" and poll_info:
-                    kwargs["radarr_movie_id"] = poll_info.get("movie_id")
-                elif media["type"] == "tv" and poll_info:
-                    kwargs["sonarr_series_id"] = poll_info.get("series_id")
-                    kwargs["sonarr_episode_id"] = poll_info.get("episode_id")
-                    kwargs["sonarr_season"] = poll_info.get("season")
-                    kwargs["expected_episode_ids"] = poll_info.get("expected_episode_ids") or []
-                await store.add_pending_autofix(**kwargs)
-                lines.append(f"🔧 Auto-fix: {detail}")
-                lines.append("🔔 I'll DM you when the new file finishes downloading (or after 6h timeout).")
-            except Exception:
-                logger.exception("failed to enqueue pending autofix")
-                lines.append(f"🔧 Auto-fix: {detail}")
-                lines.append("(Couldn't enqueue completion notification.)")
-        else:
-            lines.append(f"⚠️ Auto-fix didn't run: {detail}")
+            if result.should_poll:
+                try:
+                    poll_info = result.poll_info or {}
+                    kwargs = {
+                        "chat_id": update.effective_chat.id,
+                        "user_id": update.effective_user.id,
+                        "media_type": media["type"],
+                        "label": label,
+                        "issue_id": created.id,
+                        "issue_url": created.url,
+                    }
+                    if media["type"] == "movie":
+                        kwargs["radarr_movie_id"] = poll_info.get("movie_id")
+                    else:
+                        kwargs["sonarr_series_id"] = poll_info.get("series_id")
+                        kwargs["sonarr_episode_id"] = poll_info.get("episode_id")
+                        kwargs["sonarr_season"] = poll_info.get("season")
+                        kwargs["expected_episode_ids"] = poll_info.get("expected_episode_ids") or []
+                    await store.add_pending_autofix(**kwargs)
+                    prefix = "🔧" if result.ok else "⚠️"
+                    lines.append(f"{prefix} Auto-fix: {result.message}")
+                    lines.append("🔔 I'll DM you when the new file finishes downloading (or after 6h timeout).")
+                except Exception:
+                    logger.exception("failed to enqueue pending autofix")
+                    prefix = "🔧" if result.ok else "⚠️"
+                    lines.append(f"{prefix} Auto-fix: {result.message}")
+                    lines.append("(Couldn't enqueue completion notification.)")
+            else:
+                # No search step ran — there's nothing to poll for.
+                lines.append(f"⚠️ Auto-fix: {result.message}")
 
     lines.append("\nUse /tickets to manage it.")
     await update.effective_message.reply_text("\n".join(lines))
