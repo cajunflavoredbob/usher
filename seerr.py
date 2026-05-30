@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Optional
 
@@ -12,6 +14,13 @@ from http_util import execute
 logger = logging.getLogger(__name__)
 
 _SERVICE = "Seerr"
+
+# Per-Plex-token authenticated client cache. Reuses warm clients under a
+# webhook comment flood instead of paying the TCP-handshake + /auth/plex
+# cost on every call (audit CONC #11). LRU + TTL bounded so a token flood
+# doesn't blow up FD count.
+_USER_CLIENT_TTL_S = 300.0
+_USER_CLIENT_MAX = 32
 
 
 @dataclass
@@ -75,9 +84,18 @@ class SeerrClient:
             headers={"X-Api-Key": api_key, "Accept": "application/json"},
             timeout=timeout,
         )
+        # Per-Plex-token authenticated client cache. Value is
+        # (httpx.AsyncClient, expires_at_monotonic). Cache owns aclose().
+        self._user_clients: "OrderedDict[str, tuple[httpx.AsyncClient, float]]" = OrderedDict()
 
     async def close(self) -> None:
         await self._client.aclose()
+        for client, _ in list(self._user_clients.values()):
+            try:
+                await client.aclose()
+            except Exception:
+                logger.warning("aclose on cached user client failed", exc_info=True)
+        self._user_clients.clear()
 
     async def ping(self) -> str:
         """Return Seerr's version string. Raises APIError on failure."""
@@ -96,26 +114,51 @@ class SeerrClient:
         )
 
     async def _as_user(self, plex_token: str) -> httpx.AsyncClient:
-        """Return a fresh client authenticated as a Plex user.
+        """Return an authenticated user client, reusing a warm one if cached.
 
         Auth and subsequent calls happen on the SAME client so the session
         cookie jar persists naturally (transferring cookies across clients
         was unreliable).
 
-        Caller MUST aclose() the returned client.
+        Cache key is the Plex token. Entries expire after _USER_CLIENT_TTL_S
+        or LRU eviction at _USER_CLIENT_MAX. The cache owns each client's
+        lifecycle -- callers MUST NOT aclose() the returned client. Drained
+        by SeerrClient.close() at shutdown.
         """
-        user_client = httpx.AsyncClient(
+        now = time.monotonic()
+        entry = self._user_clients.get(plex_token)
+        if entry is not None:
+            client, expires = entry
+            if now < expires:
+                self._user_clients.move_to_end(plex_token)
+                return client
+            # Stale -- evict + close, then fall through to mint a new one.
+            self._user_clients.pop(plex_token, None)
+            try:
+                await client.aclose()
+            except Exception:
+                logger.warning("aclose on expired user client failed", exc_info=True)
+
+        new_client = httpx.AsyncClient(
             base_url=f"{self.base_url}/api/v1",
             headers={"Accept": "application/json"},
             timeout=15.0,
         )
         try:
-            await execute(user_client, "POST", "/auth/plex", service=_SERVICE,
+            await execute(new_client, "POST", "/auth/plex", service=_SERVICE,
                           json={"authToken": plex_token})
         except Exception:
-            await user_client.aclose()
+            await new_client.aclose()
             raise
-        return user_client
+        self._user_clients[plex_token] = (new_client, now + _USER_CLIENT_TTL_S)
+        self._user_clients.move_to_end(plex_token)
+        while len(self._user_clients) > _USER_CLIENT_MAX:
+            _, (evict_client, _) = self._user_clients.popitem(last=False)
+            try:
+                await evict_client.aclose()
+            except Exception:
+                logger.warning("aclose on LRU-evicted user client failed", exc_info=True)
+        return new_client
 
     async def search(self, query: str, limit: int = 5) -> list[MediaResult]:
         """Search Seerr for movies + TV shows matching the query."""
@@ -174,12 +217,9 @@ class SeerrClient:
         user (gets their visible issues only). Else returns all (admin view)."""
         if as_plex_token:
             client = await self._as_user(as_plex_token)
-            try:
-                r = await execute(client, "GET", "/issue", service=_SERVICE,
-                                  params={"filter": filter, "take": take})
-                data = r.json()
-            finally:
-                await client.aclose()
+            r = await execute(client, "GET", "/issue", service=_SERVICE,
+                              params={"filter": filter, "take": take})
+            data = r.json()
         else:
             r = await execute(self._client, "GET", "/issue", service=_SERVICE,
                               params={"filter": filter, "take": take})
@@ -210,11 +250,8 @@ class SeerrClient:
         """Fetch a single issue by id. Same shape as list_issues entries."""
         if as_plex_token:
             client = await self._as_user(as_plex_token)
-            try:
-                r = await execute(client, "GET", f"/issue/{issue_id}", service=_SERVICE)
-                d = r.json()
-            finally:
-                await client.aclose()
+            r = await execute(client, "GET", f"/issue/{issue_id}", service=_SERVICE)
+            d = r.json()
         else:
             r = await execute(self._client, "GET", f"/issue/{issue_id}", service=_SERVICE)
             d = r.json()
@@ -259,11 +296,8 @@ class SeerrClient:
     ) -> None:
         if as_plex_token:
             client = await self._as_user(as_plex_token)
-            try:
-                await execute(client, "POST", f"/issue/{issue_id}/comment",
-                              service=_SERVICE, json={"message": message})
-            finally:
-                await client.aclose()
+            await execute(client, "POST", f"/issue/{issue_id}/comment",
+                          service=_SERVICE, json={"message": message})
         else:
             await execute(self._client, "POST", f"/issue/{issue_id}/comment",
                           service=_SERVICE, json={"message": message})
@@ -276,11 +310,8 @@ class SeerrClient:
     ) -> None:
         if as_plex_token:
             client = await self._as_user(as_plex_token)
-            try:
-                await execute(client, "POST", f"/issue/{issue_id}/resolved",
-                              service=_SERVICE)
-            finally:
-                await client.aclose()
+            await execute(client, "POST", f"/issue/{issue_id}/resolved",
+                          service=_SERVICE)
         else:
             await execute(self._client, "POST", f"/issue/{issue_id}/resolved",
                           service=_SERVICE)
@@ -317,12 +348,9 @@ class SeerrClient:
             payload["problemEpisode"] = problem_episode
         if as_plex_token:
             client = await self._as_user(as_plex_token)
-            try:
-                r = await execute(client, "POST", "/issue", service=_SERVICE,
-                                  json=payload)
-                data = r.json()
-            finally:
-                await client.aclose()
+            r = await execute(client, "POST", "/issue", service=_SERVICE,
+                              json=payload)
+            data = r.json()
         else:
             r = await execute(self._client, "POST", "/issue", service=_SERVICE,
                               json=payload)

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.10] - 2026-05-30
+
+### Fixed
+- **Autofix poller no longer double-notifies on overlapping ticks** (audit CONC #8). New module-level `_inflight: set[int]` in `bot/autofix_poll.py` tracks fix IDs currently being processed; the next tick skips any ID still in flight. Fixes the "Sonarr is slow → tick stretches past 60s → next tick fires `_notify_complete` again before `mark_autofix_status('complete')` lands" failure mode.
+- **`/issue` search results carry a version tag** (audit CONC #10). Every fresh `_show_search_results` bumps `ctx.user_data["search_version"]` and embeds it in each result's `callback_data` (now `media:<version>:<media_type>:<tmdb_id>`). `issue_pick_media` verifies the version matches before resolving — rapid `/issue → A → /issue → B` reentry no longer causes the in-flight pick to pull the wrong item from the freshly-replaced `search_results` dict. The mismatching tap gets a clean "Search context changed (you started a new /issue search since this keyboard appeared). /issue to pick again." message.
+
+### Changed
+- **`SeerrClient._as_user` caches authenticated user clients per Plex token** (audit CONC #11). LRU + TTL (`_USER_CLIENT_MAX=32`, `_USER_CLIENT_TTL_S=300`). Under a webhook comment flood, repeated `add_issue_comment` / `resolve_issue` / `list_issues` / `create_issue` / `get_issue` calls as the same Plex user no longer pay the TCP-handshake + `/auth/plex` cost on every invocation. The cache owns each client's lifecycle; the per-call `try: ... finally: await client.aclose()` blocks in five caller sites have been removed. `SeerrClient.close()` drains the cache (closes every cached client) on shutdown.
+
+### Added
+- **`tests/test_autofix_poll_inflight.py`** — 2 cases. Overlapping ticks on the same fix.id dedupe (only the first invocation calls `_notify_complete`); sequential ticks both run cleanly.
+- **`tests/test_seerr_user_client_cache.py`** — 6 cases. Same token returns the same client instance; different tokens get different clients; TTL expiry closes the stale client and mints a fresh one; LRU eviction at the cap closes the dropped client; touching an entry promotes it (saves it from the next eviction); `close()` drains every cached client.
+- 160 tests total (was 152).
+
+### Notes
+- Closes the last three v0.11.x audit items: CONC #8 (poller dedup), CONC #10 (search-results versioning), CONC #11 (user-client cache). All explicitly deferred-from-v0.11.x audit items are now closed; only the v0.12-deferred SEC #9 (session rotation), SEC #16 (PBKDF2 auto-upgrade), and ERR #18 (Plex API logging hygiene — already substantially closed by v0.11.3) remain.
+- Callback_data format change: old `media:movie:42` is now `media:1:movie:42`. Any keyboard rendered by a pre-0.11.10 process whose pick lands after the upgrade will fall through to "Couldn't parse selection. /issue to start over." That's the correct behavior — those keyboards' search_results dicts don't survive the restart either.
+
 ## [0.11.9] - 2026-05-30
 
 ### Changed
