@@ -55,6 +55,13 @@ def attach_webhook(
     generates a secret at startup so this should not happen in practice).
     """
     recent: "OrderedDict[str, float]" = OrderedDict()
+    # Per-IP rejection counters for the 401 path. Botnets that probe
+    # /webhook/seerr without the right header would otherwise generate one
+    # WARN line per request indefinitely (audit ERR #8). We log the first
+    # rejection from each IP at WARN, then drop to DEBUG and only re-log
+    # once per UNAUTH_LOG_INTERVAL_S window per IP.
+    unauth_seen: dict[str, float] = {}
+    UNAUTH_LOG_INTERVAL_S = 300.0  # 5 min
 
     def _seen_recently(body_hash: str) -> bool:
         now = time.monotonic()
@@ -81,7 +88,17 @@ def attach_webhook(
 
         auth = request.headers.get("Authorization", "")
         if not hmac.compare_digest(auth.encode("utf-8"), secret.encode("utf-8")):
-            logger.warning("Webhook rejected: bad/missing Authorization header")
+            # Sample WARN per IP+window; otherwise DEBUG. Botnet probes don't
+            # fill the operational log; first probe from a new IP still surfaces.
+            client_ip = (request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+                         or request.remote or "-")
+            now = time.monotonic()
+            last = unauth_seen.get(client_ip)
+            if last is None or (now - last) > UNAUTH_LOG_INTERVAL_S:
+                unauth_seen[client_ip] = now
+                logger.warning("Webhook rejected: bad/missing Authorization (ip=%s)", client_ip)
+            else:
+                logger.debug("Webhook rejected: bad/missing Authorization (ip=%s, sampled)", client_ip)
             return web.Response(status=401, text="unauthorized")
 
         try:

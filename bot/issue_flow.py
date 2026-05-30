@@ -47,6 +47,7 @@ from bot.shared import (
     PICK_SEASON,
     PICK_TYPE,
     TITLE,
+    _format_media_label,
     _require_seerr,
 )
 from bot.tickets import _run_arr_action
@@ -529,12 +530,15 @@ async def _submit_issue(
         return ConversationHandler.END
 
     emoji, name = ISSUE_TYPES[issue_type]
-    label = media["title"] + (f" ({media['year']})" if media.get("year") else "")
-    if media["type"] == "tv":
-        label += (
-            f" — S{int(season):02d}E{int(episode):02d}"
-            if episode else f" — S{int(season):02d} (whole season)"
-        )
+    label = _format_media_label(
+        media["title"], media.get("year") or "",
+        season=season if media["type"] == "tv" else None,
+        episode=episode,
+    )
+    # The whole-season "(whole season)" hint is unique to this surface, so
+    # tack it on after the canonical label.
+    if media["type"] == "tv" and season and not episode:
+        label += " (whole season)"
 
     lines = [
         f"✅ Reported as issue #{created.id}",

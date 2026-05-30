@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.9] - 2026-05-30
+
+### Changed
+- **`_apply_fix` decomposed** (audit M4) into `_resolve_fix_context` + `_enqueue_fix_completion` + a thin policy core. New `_FixContext` dataclass carries the resolved issue + media + label between the helpers.
+- **`format_media_label(title, year, *, season, episode)` shared helper** (audit M5) replaces four sites that each rendered this independently: `cmd_tickets`, `_build_ticket_detail`, `_apply_fix`, `_submit_issue`. The display format is now uniform: `Title (Year) — S01E08`. (`/tickets` list previously rendered `Title (Year) S01E08` without the em-dash — minor cosmetic shift.)
+- **`PendingAutofix.is_complete(radarr, sonarr) -> tuple[bool, str]` method** (audit M7). The poller's inline movie-vs-episode-vs-season branching moves into the data type. Returns `(done, extra)` where `extra` is the `(present/total episodes)` suffix used by `_notify_complete`.
+- **Non-admin `/start` cleaned up.** Greeting + commands only — no connection diagnostics, no inline `/link` directive. Admin path keeps diagnostics.
+- **Startup admin DM now includes the version string** (`"👋 Bot is online (v0.11.9)."`).
+- **`_post_init` startup-DM failures classified** (audit ERR #15): distinct WARN per cause — "bot was blocked", "chat not found" (with the "must be a numeric ID from @userinfobot" hint), "user is deactivated" — instead of a catch-all "likely never started a conversation."
+
+### Fixed
+- **`cmd_link_didnt_work` clears `link_active_loop` explicitly on timeout and success** (audit ERR #19) so the conversation frees up immediately instead of waiting for the 30-min `_link_conversation` timeout.
+- **`format_age` logs WARN once per unparseable timestamp prefix** (audit ERR #20) instead of silently returning `"?"`. New module-level `_FORMAT_AGE_WARNED` set; first hit for each 20-char prefix surfaces, repeats are quiet.
+- **Webhook 401 logging sampled per IP** (audit ERR #8). First rejection from each IP logs at WARN; further rejections from the same IP within 5 minutes drop to DEBUG. Botnet probing no longer floods the operational log.
+- **Admin-only callback gate factored into `_require_admin(q, ctx, *, action_label)`** (audit SEC #15). `tk_close_menu`, `tk_close_direct`, `tk_close_with_comment_start`, `tk_fix`, `_apply_fix` migrated. Non-admin taps now get an "Admin only." toast and an `admin_callback_blocked` audit log entry (was: silent no-op).
+- **`on_error` clears known conversation `user_data` keys** (audit CONC #12). New `_CONVERSATION_USER_DATA_KEYS` tuple covers `tk_reply_id`, `tk_close_after`, `link_active_loop`, `media`, `search_results`, `seasons`, `season`, `episode`, `issue_type`, `description`, `autofix`, `research_parent`. A mid-conversation crash no longer leaks half-state into the next conversation.
+
+### Added
+- **`tests/test_format_media_label.py`** — 9 cases covering title-only, with year, season, episode, year-less + seasoned, empty title, two-digit zero-padding, season-zero behavior, and episode-falsy handling.
+- **`tests/test_pending_autofix_is_complete.py`** — 10 cases covering movie complete/pending/no-radarr/no-id, single-episode complete/pending, whole-season partial/complete/zero-expected, and error propagation.
+- **`tests/test_require_admin.py`** — 4 cases for admin pass-through (no toast), non-admin (toast + audit log + False return), missing admin_id (defensive block), anonymous user (no `from_user`).
+- **`tests/test_helpers.py`** — added `test_format_age_warns_once_per_prefix` regression.
+- 152 tests total (was 126).
+
+### Notes
+- Final audit-closure release in the v0.11.x line. **All Critical + High + Medium audit findings are now closed.**
+- Explicitly deferred to v0.12 (not blocking v1.0): SEC #9 (session rotation / jti), SEC #16 (PBKDF2 auto-upgrade), ERR #18 (Plex API logging hygiene -- substantially closed by v0.11.3's `execute()` body-in-APIError), CONC #8 (per-fix in-flight tracking), CONC #10 (search_results version tag), CONC #11 (`_as_user` client cache).
+- v1.0 gate per the briefing: closed audit ✓ + one week clean operational use (in progress) + non-trivial test coverage (handler-level tests are the natural next investment).
+
 ## [0.11.8] - 2026-05-30
 
 ### Fixed
