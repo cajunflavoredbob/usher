@@ -18,6 +18,13 @@ from const import AUTOFIX_TIMEOUT_HOURS
 
 logger = logging.getLogger("hermes")
 
+# Module-level set of fix IDs currently being processed by a tick. If a single
+# tick's await chain stretches past the next 60s mark (slow Sonarr/Radarr), the
+# next tick sees the ID still in-flight and skips it -- otherwise we'd
+# double-notify on a fix that completes mid-tick (audit CONC #8).
+_inflight: set[int] = set()
+
+
 async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Check on each pending auto-fix; notify when complete or timed out."""
     store: UserStore = ctx.bot_data["store"]
@@ -27,39 +34,43 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     logger.debug("Polling %d pending auto-fixes", len(pending))
 
     for fix in pending:
-        # Re-fetch the arr clients each iteration so a settings reload mid-tick
-        # picks up the new clients on the very next fix. Bound to locals so a
-        # swap during the single fix's awaits at most affects one iteration.
-        radarr: Optional[RadarrClient] = ctx.bot_data.get("radarr")
-        sonarr: Optional[SonarrClient] = ctx.bot_data.get("sonarr")
-
-        # Check timeout first
+        if fix.id in _inflight:
+            logger.debug("poll: fix %d still in-flight from prior tick; skipping", fix.id)
+            continue
+        _inflight.add(fix.id)
         try:
-            timeout_at = datetime.fromisoformat(fix.timeout_at.replace(" ", "T")).replace(tzinfo=timezone.utc)
-            if datetime.now(timezone.utc) >= timeout_at:
-                await _notify_timeout(ctx, fix)
-                await store.mark_autofix_status(fix.id, "timeout")
-                continue
-        except Exception:
-            logger.exception("timeout parse failed for fix %d", fix.id)
+            # Re-fetch the arr clients each iteration so a settings reload
+            # mid-tick picks up the new clients on the very next fix.
+            radarr: Optional[RadarrClient] = ctx.bot_data.get("radarr")
+            sonarr: Optional[SonarrClient] = ctx.bot_data.get("sonarr")
 
-        # Poll for completion (dispatch lives on PendingAutofix.is_complete)
-        try:
-            done, extra = await fix.is_complete(radarr, sonarr)
-            if done:
-                await _notify_complete(ctx, fix, extra)
-                await store.mark_autofix_status(fix.id, "complete")
-        except NotFoundAPIError:
-            # Media was deleted from Sonarr/Radarr between enqueue and poll.
-            # Mark failed and DM the user instead of polling forever.
-            logger.info("poll: media removed for fix %d; marking failed", fix.id)
-            await _notify_media_gone(ctx, fix)
-            await store.mark_autofix_status(fix.id, "failed")
-        except TransientAPIError:
-            # Service hiccup — keep polling next tick.
-            logger.debug("poll: transient error for fix %d; will retry next tick", fix.id)
-        except Exception:
-            logger.exception("poll failed for fix %d", fix.id)
+            # Check timeout first
+            try:
+                timeout_at = datetime.fromisoformat(fix.timeout_at.replace(" ", "T")).replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) >= timeout_at:
+                    await _notify_timeout(ctx, fix)
+                    await store.mark_autofix_status(fix.id, "timeout")
+                    continue
+            except Exception:
+                logger.exception("timeout parse failed for fix %d", fix.id)
+
+            # Poll for completion (dispatch lives on PendingAutofix.is_complete)
+            try:
+                done, extra = await fix.is_complete(radarr, sonarr)
+                if done:
+                    await _notify_complete(ctx, fix, extra)
+                    await store.mark_autofix_status(fix.id, "complete")
+            except NotFoundAPIError:
+                # Media was deleted from Sonarr/Radarr between enqueue and poll.
+                logger.info("poll: media removed for fix %d; marking failed", fix.id)
+                await _notify_media_gone(ctx, fix)
+                await store.mark_autofix_status(fix.id, "failed")
+            except TransientAPIError:
+                logger.debug("poll: transient error for fix %d; will retry next tick", fix.id)
+            except Exception:
+                logger.exception("poll failed for fix %d", fix.id)
+        finally:
+            _inflight.discard(fix.id)
 
 
 async def _notify_media_gone(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:

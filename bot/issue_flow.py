@@ -158,6 +158,12 @@ async def _show_search_results(
             line += f" ({r.year})"
         lines.append(line)
 
+    # Bump the search-results version. callback_data carries it so a rapid
+    # /issue reentry that overwrites search_results doesn't make the
+    # in-flight pick pull the wrong tmdb_id from the new dict (audit CONC #10).
+    version = (ctx.user_data.get("search_version") or 0) + 1
+    ctx.user_data["search_version"] = version
+
     # Build the keyboard: keycap-emoji buttons (1️⃣ 2️⃣ …), 3 per row max.
     # Three per row keeps each button wide enough to tap comfortably while
     # also keeping the keyboard compact (5 results → 3+2 grid).
@@ -166,7 +172,7 @@ async def _show_search_results(
     for i, r in enumerate(results):
         keycap = _KEYCAP_DIGITS[i] if i < len(_KEYCAP_DIGITS) else str(i + 1)
         btn_row.append(InlineKeyboardButton(
-            keycap, callback_data=f"{ISSUE_MEDIA}:{r.media_type}:{r.tmdb_id}",
+            keycap, callback_data=f"{ISSUE_MEDIA}:{version}:{r.media_type}:{r.tmdb_id}",
         ))
         if len(btn_row) == KB_BUTTONS_PER_ROW:
             rows.append(btn_row)
@@ -203,7 +209,10 @@ async def _show_search_results(
                 rows.append(last_partial_row)
             rows.append([cancel_btn])
 
-    ctx.user_data["search_results"] = {(r.media_type, r.tmdb_id): r for r in results}
+    ctx.user_data["search_results"] = {
+        "version": version,
+        "by_key": {(r.media_type, r.tmdb_id): r for r in results},
+    }
     await reply_method("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
     return PICK_MEDIA
 
@@ -228,12 +237,24 @@ async def issue_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
     q = update.callback_query
     await q.answer()
     try:
-        _, media_type, tmdb_id_s = q.data.split(":")
+        _, version_s, media_type, tmdb_id_s = q.data.split(":")
+        version = int(version_s)
         tmdb_id = int(tmdb_id_s)
     except (ValueError, AttributeError):
         await q.edit_message_text("Couldn't parse selection. /issue to start over.")
         return ConversationHandler.END
-    selected = ctx.user_data.get("search_results", {}).get((media_type, tmdb_id))
+    # Verify the embedded search version matches the current one. If the user
+    # kicked off a new /issue search since this keyboard was built (allow_reentry
+    # makes that easy), the in-flight pick mustn't resolve against the new
+    # search_results dict (audit CONC #10).
+    current = ctx.user_data.get("search_results") or {}
+    if current.get("version") != version:
+        await q.edit_message_text(
+            "Search context changed (you started a new /issue search since this "
+            "keyboard appeared). /issue to pick again."
+        )
+        return ConversationHandler.END
+    selected = (current.get("by_key") or {}).get((media_type, tmdb_id))
     if selected is None or selected.seerr_media_id is None:
         parent = ctx.user_data.get("research_parent")
         text = "That title isn't in Seerr's library yet (no Plex match / no prior request)."
