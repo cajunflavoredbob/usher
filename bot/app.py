@@ -6,8 +6,6 @@ import asyncio
 import logging
 import os
 from pathlib import Path
-from typing import Optional
-
 from aiohttp import web
 import telegram
 from telegram import Update

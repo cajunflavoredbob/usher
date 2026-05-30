@@ -37,7 +37,6 @@ from typing import Awaitable, Callable, Optional
 from aiohttp import web
 
 from auth_util import (
-    CSRF_COOKIE,
     CSRF_FORM_FIELD,
     LoginThrottle,
     attach_csrf_cookie,
@@ -53,6 +52,7 @@ from auth_util import (
 from backup_crypto import is_wrapped, unwrap, wrap
 from settings import (
     DEFAULT_DAILY_AUTOFIX_LIMIT,
+    PBKDF2_ITERATIONS,
     Settings,
     SettingsStore,
     hash_password,
@@ -622,6 +622,25 @@ async def login_post(request: web.Request) -> web.Response:
 
     _throttle.record_success(ip)
     audit("login_success", user=username, ip=ip)
+
+    # PBKDF2 auto-upgrade (audit SEC #16): if the stored hash uses a stale
+    # iteration count, rehash with the current count and persist. Hash
+    # format is "pbkdf2_sha256$<iters>$<salt_hex>$<hash_hex>".
+    try:
+        stored_iters = int(admin.password_hash.split("$")[1])
+    except (IndexError, ValueError):
+        stored_iters = 0
+    if stored_iters and stored_iters < PBKDF2_ITERATIONS:
+        try:
+            admin.password_hash = hash_password(password)
+            store.save()
+            audit("password_rehashed",
+                  user=username, ip=ip,
+                  from_iters=stored_iters, to_iters=PBKDF2_ITERATIONS)
+        except Exception:
+            # Login itself already succeeded; rehash failure is non-fatal.
+            logger.exception("PBKDF2 auto-upgrade rehash failed for %s", username)
+
     secure = request_is_secure(request)
     cookie = _make_session_cookie(request.app["session_secret"], username)
     resp = web.HTTPFound("/admin")

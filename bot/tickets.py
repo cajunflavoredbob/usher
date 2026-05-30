@@ -8,7 +8,6 @@ Public entry points:
   tk_reply_start, tk_close_with_comment_start, tk_reply_text  reply convo
   _ticket_conversation()                                      conversation
   _run_arr_action(action="fix" | "mark_failed")               arr orchestrator
-  _run_autofix / _run_mark_failed                             back-compat shims
 """
 from __future__ import annotations
 
@@ -50,7 +49,6 @@ from bot.callback_prefixes import (
 )
 from const import TICKET_REPLY_TIMEOUT_S
 from bot.shared import (
-    AUTOFIX_ELIGIBLE_TYPES,
     AWAIT_TICKET_REPLY,
     ISSUE_TYPES,
     _edit_or_send,
@@ -671,21 +669,5 @@ async def _run_arr_action(
         logger.exception("%s failed", op_label)
         return FixResult.failed(user_friendly_message(exc))
     return FixResult.failed("Unknown media type.")
-
-
-async def _run_autofix(
-    media: dict, season: Optional[int], episode: Optional[int],
-    radarr: Optional[RadarrClient], sonarr: Optional[SonarrClient],
-) -> FixResult:
-    """Back-compat shim: forwards to _run_arr_action(action="fix")."""
-    return await _run_arr_action(media, season, episode, radarr, sonarr, action="fix")
-
-
-async def _run_mark_failed(
-    media: dict, season: Optional[int], episode: Optional[int],
-    radarr: Optional[RadarrClient], sonarr: Optional[SonarrClient],
-) -> FixResult:
-    """Back-compat shim: forwards to _run_arr_action(action="mark_failed")."""
-    return await _run_arr_action(media, season, episode, radarr, sonarr, action="mark_failed")
 
 

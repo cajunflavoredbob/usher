@@ -31,7 +31,6 @@ from bot.callback_prefixes import LINK_CONSENT, LINK_HELP, LINK_PLATFORM
 from bot.shared import (
     AWAIT_LINK_CONSENT,
     AWAIT_PLATFORM_CHOICE,
-    _record_btn,
     _require_seerr,
 )
 from const import (

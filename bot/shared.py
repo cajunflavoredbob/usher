@@ -6,7 +6,6 @@ module can pull from it without circular imports.
 from __future__ import annotations
 
 import asyncio
-import html
 import logging
 import os
 import signal
