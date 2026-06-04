@@ -34,6 +34,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
+import httpx
 from aiohttp import web
 
 from auth_util import (
@@ -59,6 +60,10 @@ from settings import (
     validate_public_url,
     verify_password,
 )
+from http_util import user_friendly_message
+from radarr import RadarrClient
+from seerr import SeerrClient
+from sonarr import SonarrClient
 from _version import __version__ as HERMES_VERSION
 
 logger = logging.getLogger("hermes.webui")
@@ -235,6 +240,107 @@ code { background: #45475a; padding: 2px 6px; border-radius: 3px; font-size: 13p
   padding: 10px 12px; font-family: ui-monospace, Menlo, monospace; font-size: 13px;
   color: #a6e3a1; word-break: break-all;
 }
+
+/* Test buttons + generate/copy row */
+.btn-row { display: flex; align-items: center; gap: 10px;
+           margin-top: 16px; flex-wrap: wrap; }
+.btn-row button { margin-top: 0; }
+button.secondary { background: #585b70; color: #cdd6f4; }
+button.secondary:hover { background: #6c7086; }
+.test-btn { position: relative; overflow: hidden;
+            background: #585b70; color: #cdd6f4; }
+.test-btn:hover { background: #6c7086; }
+.test-btn:disabled { cursor: default; opacity: 0.9; }
+.test-overlay {
+  position: absolute; inset: 0; display: flex; align-items: center;
+  justify-content: center; gap: 6px; font-weight: 700; pointer-events: none;
+  background: #585b70; color: #cdd6f4; border-radius: 4px;
+}
+.test-overlay.pass { background: #a6e3a1; color: #1e1e2e; }
+.test-overlay.fail { background: #f38ba8; color: #1e1e2e; }
+.test-overlay.show { animation: test-fade 5s ease-out forwards; }
+@keyframes test-fade { 0%, 80% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }
+.test-detail { font-size: 13px; color: #a6adc8; }
+.copied-note { font-size: 13px; color: #a6e3a1; opacity: 0; transition: opacity .2s; }
+.copied-note.show { opacity: 1; }
+"""
+
+
+# Vanilla JS for the settings page: connection-test buttons (POST each form's
+# values to /admin/test/<which>, render a PASS/FAIL overlay that fades after
+# 5s) and the webhook Generate/Copy helpers. Guards on element existence so it
+# is harmless on the login/setup/restore pages that reuse _page().
+SCRIPT = """
+<script>
+(function () {
+  function showResult(btn, ok, fade) {
+    var old = btn.querySelector('.test-overlay');
+    if (old) old.remove();
+    var ov = document.createElement('span');
+    ov.className = 'test-overlay' + (ok === null ? '' : (ok ? ' pass' : ' fail'))
+                 + (fade ? ' show' : '');
+    ov.textContent = ok === null ? 'Testing\\u2026' : (ok ? 'PASS \\u2713' : 'FAIL \\u2717');
+    btn.appendChild(ov);
+    if (fade) setTimeout(function () { if (ov.parentNode) ov.remove(); }, 5000);
+  }
+  document.querySelectorAll('.test-btn').forEach(function (btn) {
+    btn.addEventListener('click', async function () {
+      var which = btn.dataset.test;
+      var form = document.getElementById(btn.dataset.form);
+      var detail = document.querySelector('[data-detail="' + which + '"]');
+      if (detail) detail.textContent = '';
+      btn.disabled = true;
+      showResult(btn, null, false);
+      try {
+        var resp = await fetch('/admin/test/' + which,
+                               { method: 'POST', body: new FormData(form) });
+        var data = await resp.json();
+        showResult(btn, !!data.ok, true);
+        if (detail) detail.textContent = data.detail || '';
+      } catch (e) {
+        showResult(btn, false, true);
+        if (detail) detail.textContent = 'Request failed.';
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+  var show = document.getElementById('wh-show');
+  if (show) show.addEventListener('click', function () {
+    var inp = document.getElementById('webhook_secret');
+    var hidden = inp.type === 'password';
+    inp.type = hidden ? 'text' : 'password';
+    show.textContent = hidden ? 'Hide' : 'Show';
+  });
+  var gen = document.getElementById('wh-generate');
+  if (gen) gen.addEventListener('click', function () {
+    var inp = document.getElementById('webhook_secret');
+    var bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    var b64 = btoa(String.fromCharCode.apply(null, bytes))
+                .replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');
+    inp.value = b64;
+    inp.type = 'text';
+    if (show) show.textContent = 'Hide';
+  });
+  var copy = document.getElementById('wh-copy');
+  if (copy) copy.addEventListener('click', async function () {
+    var inp = document.getElementById('webhook_secret');
+    if (!inp.value) return;
+    try {
+      await navigator.clipboard.writeText(inp.value);
+    } catch (e) {
+      inp.type = 'text'; inp.select();
+      try { document.execCommand('copy'); } catch (e2) {}
+    }
+    var note = document.getElementById('wh-copied');
+    if (note) {
+      note.classList.add('show');
+      setTimeout(function () { note.classList.remove('show'); }, 2000);
+    }
+  });
+})();
+</script>
 """
 
 
@@ -244,7 +350,7 @@ def _page(title: str, body: str) -> str:
         f"<html><head><meta charset=\"utf-8\"><title>{_esc(title)} - Hermes</title>"
         f"<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
         f"<style>{CSS}</style></head><body><div class=\"container\">{body}"
-        "</div></body></html>"
+        f"</div>{SCRIPT}</body></html>"
     )
 
 
@@ -293,37 +399,45 @@ def _settings_page(
         return ""
 
     telegram_form = f"""
-<form method="POST" action="/admin/telegram">
+<form id="telegram-form" method="POST" action="/admin/telegram">
   {csrf}
   <h2>Telegram</h2>
   <div class="note">Changes to the bot token or admin user ID restart the container so the new identity takes effect.</div>
   <label>Bot Token <span class="note">(from @BotFather)</span></label>
-  <input type="password" name="telegram_bot_token" value="{_esc(s.telegram_bot_token)}" required>
+  <input type="password" name="telegram_bot_token" value="{_esc(s.telegram_bot_token)}" autocomplete="off" required>
   <label>Admin Telegram User ID <span class="note">(DM @userinfobot)</span></label>
   <input type="text" name="admin_telegram_id" value="{_esc(admin_tg_val)}" inputmode="numeric" pattern="[0-9]+" required>
   <label>Hermes Admin UI URL <span class="note">(optional)</span></label>
   <input type="text" name="hermes_public_url" value="{_esc(s.hermes_public_url)}" placeholder="http://192.168.1.15:8765 or https://hermes.example.com">
   <div class="note">Used in the bot's startup DM to point you back here. Leave blank to fall back to a generic placeholder.</div>
-  <button type="submit">Save</button>{marker("telegram")}
+  <div class="btn-row">
+    <button type="button" class="test-btn" data-test="telegram" data-form="telegram-form">Test</button>
+    <button type="submit">Save</button>{marker("telegram")}
+    <span class="test-detail" data-detail="telegram"></span>
+  </div>
 </form>
 """
 
     seerr_form = f"""
-<form method="POST" action="/admin/seerr">
+<form id="seerr-form" method="POST" action="/admin/seerr">
   {csrf}
   <h2>Seerr</h2>
   <label>Seerr URL</label>
   <input type="text" name="seerr_url" value="{_esc(s.seerr_url)}" placeholder="http://192.168.1.10:5056" required>
   <label>Seerr API Key</label>
-  <input type="password" name="seerr_api_key" value="{_esc(s.seerr_api_key)}" required>
+  <input type="password" name="seerr_api_key" value="{_esc(s.seerr_api_key)}" autocomplete="off" required>
   <label>Seerr Public URL <span class="note">(optional, for reverse-proxy links sent to users)</span></label>
   <input type="text" name="seerr_public_url" value="{_esc(s.seerr_public_url)}" placeholder="https://seerr.example.com">
-  <button type="submit">Save</button>{marker("seerr")}
+  <div class="btn-row">
+    <button type="button" class="test-btn" data-test="seerr" data-form="seerr-form">Test</button>
+    <button type="submit">Save</button>{marker("seerr")}
+    <span class="test-detail" data-detail="seerr"></span>
+  </div>
 </form>
 """
 
     autofix_form = f"""
-<form method="POST" action="/admin/autofix">
+<form id="autofix-form" method="POST" action="/admin/autofix">
   {csrf}
   <h2>Auto-fix (Radarr / Sonarr)</h2>
   <p class="intro">When a user reports a Video, Audio, or Subtitle issue, Hermes can ask Radarr or Sonarr to delete the current file and trigger a new search. Configure the URLs and API keys below, then list the Telegram users allowed to use it. The admin always bypasses the per-day limit.</p>
@@ -331,12 +445,12 @@ def _settings_page(
   <label>Radarr URL <span class="note">(optional)</span></label>
   <input type="text" name="radarr_url" value="{_esc(s.radarr_url)}" placeholder="http://192.168.1.10:7878">
   <label>Radarr API Key</label>
-  <input type="password" name="radarr_api_key" value="{_esc(s.radarr_api_key)}">
+  <input type="password" name="radarr_api_key" value="{_esc(s.radarr_api_key)}" autocomplete="off">
 
   <label>Sonarr URL <span class="note">(optional)</span></label>
   <input type="text" name="sonarr_url" value="{_esc(s.sonarr_url)}" placeholder="http://192.168.1.10:8989">
   <label>Sonarr API Key</label>
-  <input type="password" name="sonarr_api_key" value="{_esc(s.sonarr_api_key)}">
+  <input type="password" name="sonarr_api_key" value="{_esc(s.sonarr_api_key)}" autocomplete="off">
 
   <label>Allowed Telegram User IDs</label>
   <input type="text" name="allowed_autofix_telegram_ids" value="{_esc(ids_str)}" placeholder="123456,789012">
@@ -346,23 +460,37 @@ def _settings_page(
   <input type="text" name="daily_autofix_limit" value="{_esc(s.daily_autofix_limit)}" inputmode="numeric" pattern="[0-9]+" required>
   <div class="note">Number of auto-fix runs each non-admin user gets per 24 hours. Default {DEFAULT_DAILY_AUTOFIX_LIMIT}.</div>
 
-  <button type="submit">Save</button>{marker("autofix")}
+  <div class="btn-row">
+    <button type="button" class="test-btn" data-test="autofix" data-form="autofix-form">Test</button>
+    <button type="submit">Save</button>{marker("autofix")}
+    <span class="test-detail" data-detail="autofix"></span>
+  </div>
 </form>
 """
 
     webhook_form = f"""
-<form method="POST" action="/admin/webhook">
+<form id="webhook-form" method="POST" action="/admin/webhook">
   {csrf}
   <h2>Webhook</h2>
   <p>Hermes receives webhook events from Seerr on this URL:</p>
   <div class="url-box">{_esc(webhook_url)}</div>
   <div class="note">Configure in Seerr: Settings → Notifications → Webhook. Set the URL above and enable the <strong>Issue Comment</strong> event.</div>
 
-  <label>Webhook Secret <span class="note">(optional)</span></label>
-  <input type="password" name="webhook_secret" value="{_esc(s.webhook_secret)}">
-  <div class="note">If set, paste the same value into Seerr's Webhook <code>Authorization Header</code> field. Hermes rejects requests without a matching header.</div>
+  <label>Webhook Secret</label>
+  <input type="password" id="webhook_secret" name="webhook_secret" value="{_esc(s.webhook_secret)}" autocomplete="off">
+  <div class="note">Paste the same value into Seerr's Webhook <code>Authorization Header</code> field. Hermes rejects requests without a matching header. <strong>Test</strong> sends a synthetic event to the URL above using the currently <em>saved</em> secret, so Generate &rarr; Save &rarr; Test.</div>
+  <div class="btn-row">
+    <button type="button" class="secondary" id="wh-show">Show</button>
+    <button type="button" class="secondary" id="wh-generate">Generate</button>
+    <button type="button" class="secondary" id="wh-copy">Copy</button>
+    <span class="copied-note" id="wh-copied">Copied &#10003;</span>
+  </div>
 
-  <button type="submit">Save</button>{marker("webhook")}
+  <div class="btn-row">
+    <button type="button" class="test-btn" data-test="webhook" data-form="webhook-form">Test</button>
+    <button type="submit">Save</button>{marker("webhook")}
+    <span class="test-detail" data-detail="webhook"></span>
+  </div>
 </form>
 """
 
@@ -1043,6 +1171,126 @@ async def restore_upload(request: web.Request) -> web.Response:
     return web.Response(text=body, content_type="text/html")
 
 
+# --- Connection tests -------------------------------------------------------
+
+def _test_json(ok: bool, detail: str, status: int = 200) -> web.Response:
+    return web.json_response({"ok": ok, "detail": detail}, status=status)
+
+
+async def _test_csrf_guard(request: web.Request, form) -> Optional[web.Response]:
+    """CSRF gate for the JSON test endpoints. Returns a JSON 403 or None."""
+    if not validate_csrf(request, form.get(CSRF_FORM_FIELD)):
+        audit("admin_csrf_fail", user=_current_user(request) or "-",
+              ip=client_ip(request), path=request.path)
+        return _test_json(False, "CSRF token mismatch.", status=403)
+    return None
+
+
+async def test_telegram(request: web.Request) -> web.Response:
+    """Validate the posted bot token against Telegram's getMe. Tests the
+    typed (unsaved) value so you can verify before saving."""
+    form = await request.post()
+    guard = await _test_csrf_guard(request, form)
+    if guard is not None:
+        return guard
+    token = (form.get("telegram_bot_token") or "").strip()
+    if not token:
+        return _test_json(False, "No bot token provided.")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.get(f"https://api.telegram.org/bot{token}/getMe")
+        data = r.json()
+        if r.status_code == 200 and data.get("ok"):
+            return _test_json(True, f"Connected as @{data['result'].get('username', '?')}")
+        return _test_json(False, data.get("description") or f"HTTP {r.status_code}")
+    except Exception as exc:
+        return _test_json(False, user_friendly_message(exc))
+
+
+async def test_seerr(request: web.Request) -> web.Response:
+    """Ping Seerr with the typed (unsaved) URL + API key."""
+    form = await request.post()
+    guard = await _test_csrf_guard(request, form)
+    if guard is not None:
+        return guard
+    url = (form.get("seerr_url") or "").strip()
+    key = (form.get("seerr_api_key") or "").strip()
+    if not url or not key:
+        return _test_json(False, "Seerr URL and API key are required.")
+    client = SeerrClient(url, key)
+    try:
+        version = await client.ping()
+        return _test_json(True, f"Connected (Seerr v{version})")
+    except Exception as exc:
+        return _test_json(False, user_friendly_message(exc))
+    finally:
+        await client.close()
+
+
+async def test_autofix(request: web.Request) -> web.Response:
+    """Ping whichever of Radarr/Sonarr have a URL filled in. PASS only if
+    every configured client succeeds."""
+    form = await request.post()
+    guard = await _test_csrf_guard(request, form)
+    if guard is not None:
+        return guard
+    targets = (
+        ("Radarr", RadarrClient, form.get("radarr_url"), form.get("radarr_api_key")),
+        ("Sonarr", SonarrClient, form.get("sonarr_url"), form.get("sonarr_api_key")),
+    )
+    results: list[str] = []
+    ok_all = True
+    any_configured = False
+    for name, cls, url, key in targets:
+        url = (url or "").strip()
+        key = (key or "").strip()
+        if not url:
+            continue
+        any_configured = True
+        if not key:
+            ok_all = False
+            results.append(f"{name}: API key missing")
+            continue
+        client = cls(url, key)
+        try:
+            version = await client.ping()
+            results.append(f"{name}: v{version}")
+        except Exception as exc:
+            ok_all = False
+            results.append(f"{name}: {user_friendly_message(exc)}")
+        finally:
+            await client.close()
+    if not any_configured:
+        return _test_json(False, "Neither Radarr nor Sonarr is configured.")
+    return _test_json(ok_all, " · ".join(results))
+
+
+async def test_webhook(request: web.Request) -> web.Response:
+    """Self-POST a synthetic TEST_NOTIFICATION to the live webhook URL using
+    the SAVED secret (the receiver only knows the saved value), confirming the
+    receiver is reachable and the secret round-trips."""
+    form = await request.post()
+    guard = await _test_csrf_guard(request, form)
+    if guard is not None:
+        return guard
+    store: SettingsStore = request.app["settings_store"]
+    secret = (store.settings.webhook_secret or "").strip()
+    if not secret:
+        return _test_json(False, "No saved secret. Generate, Save, then Test.")
+    url = _webhook_url_from_request(request)
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.post(url, headers={"Authorization": secret},
+                             json={"notification_type": "TEST_NOTIFICATION"})
+        if r.status_code == 200:
+            return _test_json(True, "Receiver accepted the test event.")
+        if r.status_code == 401:
+            return _test_json(False, "Receiver rejected the secret (401). Save first?")
+        return _test_json(False, f"Receiver returned HTTP {r.status_code}.")
+    except Exception as exc:
+        return _test_json(False, user_friendly_message(exc))
+
+
 # --- Auth middleware --------------------------------------------------------
 
 PUBLIC_ADMIN_PATHS = {"/admin/setup", "/admin/login"}
@@ -1093,6 +1341,10 @@ def attach_webui(
     app.router.add_post("/admin/seerr", seerr_post)
     app.router.add_post("/admin/autofix", autofix_post)
     app.router.add_post("/admin/webhook", webhook_post)
+    app.router.add_post("/admin/test/telegram", test_telegram)
+    app.router.add_post("/admin/test/seerr", test_seerr)
+    app.router.add_post("/admin/test/autofix", test_autofix)
+    app.router.add_post("/admin/test/webhook", test_webhook)
     app.router.add_post("/admin/password", change_password)
     app.router.add_post("/admin/backup", backup_download)
     app.router.add_post("/admin/restore", restore_upload)

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.13] - 2026-06-03
+
+### Added
+- **Connection-test buttons on the Telegram, Seerr, Auto-fix, and Webhook tabs.** Each sits to the left of Save. Clicking POSTs the form's values to a new JSON endpoint (`/admin/test/<which>`), then overlays the button: green **PASS ✓** or red **FAIL ✗**, with a one-line detail (bot username / service version / error) beside it. The overlay fades out after 5 seconds and the button returns to neutral.
+  - Telegram: validates the typed token against `getMe`.
+  - Seerr: pings with the typed URL + API key.
+  - Auto-fix: pings whichever of Radarr/Sonarr have a URL filled; PASS only if every configured client succeeds (per-service detail).
+  - Webhook: self-POSTs a synthetic `TEST_NOTIFICATION` to the live webhook URL using the **saved** secret, confirming the receiver is reachable and the secret round-trips (so the flow is Generate → Save → Test).
+- **Webhook Secret Show / Generate / Copy controls.** The secret is mandatory and auto-generated (it's the value you copy into Seerr's `Authorization Header`), but it was rendered as an unreadable masked field. **Show** toggles reveal/mask, **Generate** rolls a fresh `token_urlsafe`-shaped value and reveals it, **Copy** puts it on the clipboard (with an `execCommand` fallback).
+- `tests/test_admin_connection_tests.py` — 15 cases exercising the four endpoints end to end (forged session + CSRF, outbound clients/httpx mocked): pass/fail/missing-input per service, auth-required redirect, and CSRF rejection.
+
+### Fixed
+- **`autocomplete="off"` on all config-secret fields** (Telegram token, Seerr/Radarr/Sonarr API keys, Webhook secret). Stops the browser password manager from silently overwriting these `type="password"` fields with the saved admin login password — which could have clobbered the working secret on the next Save.
+
 ## [0.11.12] - 2026-05-30
 
 ### Added
