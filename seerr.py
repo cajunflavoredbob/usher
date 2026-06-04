@@ -329,8 +329,10 @@ class SeerrClient:
     ) -> CreatedIssue:
         """Create an issue. issue_type: 1=Video, 2=Audio, 3=Subtitle, 4=Other.
 
-        Seerr attributes the issue to the API key's owner; we can't override.
-        Caller should prefix `message` with reporter identity for visibility.
+        When `as_plex_token` is given, the request is made on an authenticated
+        per-user client, so Seerr attributes the issue to that user (the real
+        reporter) -- no message prefixing needed. Without a token it falls back
+        to the API-key client, which attributes the issue to the key's owner.
 
         NOTE: `mediaId` is Seerr's INTERNAL media.id, NOT a TMDb ID. Pass the
         `seerr_media_id` field from a MediaResult. If the media isn't in

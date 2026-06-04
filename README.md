@@ -1,54 +1,71 @@
 # Hermes
 
-A Telegram bot that lets your users report media issues to [Seerr](https://seerr.dev/) and optionally trigger Radarr/Sonarr to auto-fix the problem by deleting the file and re-downloading.
+A Telegram bot that lets your users report media issues to [Seerr](https://seerr.dev/) and optionally trigger Radarr/Sonarr to auto-fix the problem by deleting the file and re-downloading. Users sign in with Plex, so every issue is filed in Seerr as the actual reporter. Configuration is done through a built-in web admin UI.
 
 ## Features
 
-- `/issue` conversation walks the user through: pick media → (for TV) pick season + episode → pick issue type (Video / Audio / Subtitles / Other) → describe the problem
-- Issues are POSTed to Seerr with reporter identity preserved in the message body
-- Optional **auto-fix** for Video / Audio / Subtitles issues: the bot tells Radarr (movies) or Sonarr (TV) to delete the current file and trigger a new search
-- Auto-fix gated by:
+- **`/issue` flow**: pick media → (for TV) pick season + episode → pick issue type (Video / Audio / Subtitles / Other) → describe the problem. The issue is created in Seerr **as the linked user**, not your admin account.
+- **Plex sign-in linking**: `/link` runs a Plex OAuth flow (no usernames or passwords typed into Telegram). The user's Plex token is encrypted at rest and used to authenticate to Seerr on their behalf.
+- **`/tickets`**: users list and follow up on their own open issues; the admin sees everyone's. Replies post back to Seerr as comments, and issues can be resolved from Telegram.
+- **Webhook-driven updates**: Seerr posts to Hermes at `/webhook/seerr`, so new comments on a user's issue are delivered to them in Telegram and the resolve flow stays in sync.
+- **Optional auto-fix** for Video / Audio / Subtitles: Hermes tells Radarr (movies) or Sonarr (TV) to delete the current file and trigger a new search, then polls for completion and notifies the user. Gated by:
   - **Allowlist** of Telegram user IDs (defaults to admin only)
-  - **Daily limit** of 3 per user per 24 hours
-  - **Explicit confirmation** prompt before any destructive action
-- Works in DMs or in any Telegram group the bot is added to (per-user conversation state)
-- Admin gets a `/status` command and a welcome wizard summarizing connection health
+  - **Configurable daily limit** per user (default 3 per 24h)
+  - **Explicit confirmation** before any destructive action
+- **Admin web UI** at `/admin`: first-run setup wizard, settings tabs (Telegram / Seerr / Auto-fix / Webhook / Account), connection **Test** buttons, encrypted backups, and restore.
+- Works in DMs or any Telegram group the bot is added to (per-user conversation state).
+- Admin gets `/status` for connection diagnostics and a startup health DM.
+
+## How it works
+
+Hermes runs two things in one container:
+
+1. A **Telegram bot** (python-telegram-bot, long-polling — no inbound Telegram URL needed).
+2. An **HTTP server** (aiohttp) on port **8765** that serves the `/admin` web UI and receives Seerr webhooks at `/webhook/seerr`.
+
+All configuration lives in `/data/settings.json`, managed through the web UI. On first run — before an admin account and the required fields exist — Hermes starts in **setup-only mode** (just the web UI), then restarts into full mode once setup is complete.
 
 ## Install (Unraid Community Applications)
 
-1. Search Community Apps for **Hermes** and install
-2. Fill in the required fields in the template:
+1. Search Community Apps for **Hermes** and install.
+2. Set **App Data** (e.g. `/mnt/user/appdata/hermes`) and the **Web UI / Webhook Port** (default `8765`). Start the container.
+3. Grab the first-run setup token from the logs:
+   ```sh
+   docker logs hermes | grep "setup token"
+   ```
+4. Open `http://<your-server>:8765/admin`, enter the setup token, and complete the wizard:
    - **Telegram bot token** (from `@BotFather`)
-   - **Seerr URL** (e.g. `http://192.168.1.10:5056`)
-   - **Seerr API key** (Seerr → Settings → General)
-   - **Admin Telegram user ID** (DM `@userinfobot` on Telegram)
-3. Optionally fill in:
-   - Radarr URL + API key (enables movie auto-fix)
-   - Sonarr URL + API key (enables TV auto-fix)
-   - Allowlist of additional Telegram user IDs for auto-fix
-4. Start the container
-5. Configure your bot in Telegram → `@BotFather` → `/setprivacy` → select your bot → **Disable** (lets the bot see `/issue` commands in group chats)
-6. DM your bot `/start` to see the welcome wizard
+   - **Admin Telegram user ID** (DM `@userinfobot`)
+   - **Seerr URL** + **API key** (Seerr → Settings → General)
+   - Optionally Radarr/Sonarr URLs + API keys for auto-fix
+
+   The container restarts into full mode when setup finishes.
+5. In `@BotFather` → `/setprivacy` → select your bot → **Disable** (lets the bot see `/issue` in group chats).
+6. Configure the Seerr webhook (see [Webhook setup](#webhook-setup)).
 
 ## Install (docker compose)
 
 ```sh
 git clone https://github.com/cajunflavoredbob/hermes.git
 cd hermes
-cp .env.example .env
-# edit .env with your tokens
 docker compose up -d
+docker compose logs | grep "setup token"
+# open http://localhost:8765/admin, enter the token, finish setup
 ```
+
+You can pre-seed first-run values via environment variables (see [Configuration](#configuration)), but the web UI is the source of truth after that.
 
 ## Linking users
 
-Each user DMs the bot once:
+Each user DMs the bot once and signs in with Plex — there are no Seerr or Plex usernames to type:
 
 ```
-/link <their seerr or plex username>
+/link
 ```
 
-The bot verifies the username exists in Seerr and stores the mapping in `./data/mappings.sqlite`. After that, `/issue` works in DM or any group the bot is in.
+The bot walks them through a Plex authorization (desktop opens the auth page; mobile copies an auth link to paste into a browser, with a `plex.tv/link` code fallback). Once approved, Hermes signs the user into Seerr with their Plex token and stores the (encrypted) mapping in `/data/mappings.sqlite`. After that, `/issue` and `/tickets` work in DM or any group the bot is in.
+
+The user's Plex account must be shared into your Seerr instance. If it isn't, the bot says so and asks them to have the admin invite them. `/unlink` removes the stored token at any time.
 
 ## Example conversation
 
@@ -82,75 +99,82 @@ bot:  ✅ Reported as issue #14
       View: http://seerr.example.com/issues/14
 ```
 
-## Configuration reference
+## Webhook setup
 
-| Variable | Required? | Description |
+Hermes receives events from Seerr so issue comments and resolutions reach the user in Telegram.
+
+1. In `/admin` → **Webhook** tab, copy the webhook URL and the secret (use **Show**/**Copy**; **Generate** rolls a new one). A secret is mandatory and auto-generated on first run — Hermes rejects unauthenticated webhook POSTs.
+2. In Seerr → Settings → Notifications → **Webhook**: set the URL, paste the secret into the **Authorization Header** field, and enable the **Issue Comment** event.
+3. Use the Webhook tab's **Test** button to confirm the round-trip.
+
+Seerr reaches Hermes on its LAN address and port — no public URL is required, but Seerr must be able to reach the Hermes port.
+
+## Configuration
+
+Configuration is managed in the `/admin` web UI and persisted to `/data/settings.json`. Environment variables only **seed the first run** (and migrate legacy installs); after that the web UI wins.
+
+| Setting (env seed) | Required? | Description |
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | yes | Bot token from `@BotFather` |
-| `SEERR_URL` | yes | Base URL of your Seerr instance (e.g. `http://192.168.1.10:5056`) |
-| `SEERR_API_KEY` | yes | Seerr → Settings → General → API Key |
 | `ADMIN_TELEGRAM_ID` | yes | Your numeric Telegram user ID (DM `@userinfobot`) |
-| `RADARR_URL` | no | Radarr base URL — enables movie auto-fix when set with API key |
-| `RADARR_API_KEY` | no | Radarr → Settings → General → API Key |
-| `SONARR_URL` | no | Sonarr base URL — enables TV auto-fix when set with API key |
-| `SONARR_API_KEY` | no | Sonarr → Settings → General → API Key |
-| `ALLOWED_AUTOFIX_TELEGRAM_IDS` | no | Comma-separated Telegram user IDs allowed to trigger auto-fix. Defaults to admin only. |
+| `SEERR_URL` | yes | Base URL of your Seerr instance |
+| `SEERR_API_KEY` | yes | Seerr → Settings → General → API Key |
+| `SEERR_PUBLIC_URL` | no | Public/reverse-proxy URL used in links sent to users (falls back to `SEERR_URL`) |
+| `HERMES_PUBLIC_URL` | no | URL the startup DM uses to point the admin back to `/admin` |
+| `RADARR_URL` / `RADARR_API_KEY` | no | Enables movie auto-fix when both set |
+| `SONARR_URL` / `SONARR_API_KEY` | no | Enables TV auto-fix when both set |
+| `ALLOWED_AUTOFIX_TELEGRAM_IDS` | no | Comma-separated Telegram IDs allowed to auto-fix. Defaults to admin only. |
+| `HERMES_WEBHOOK_SECRET` | no | Auto-generated on first run if unset; copy it into Seerr's webhook Authorization header |
+| `HERMES_ENCRYPTION_KEY` | no | Fernet key for encrypting stored Plex tokens. Auto-generated to `/data/encryption.key` if unset |
 
-Internal:
-| Variable | Default | Description |
-|---|---|---|
-| `STORE_PATH` | `/data/mappings.sqlite` | SQLite file for user mappings and auto-fix audit log |
+Runtime/path overrides: `DATA_DIR` (default `/data`), `STORE_PATH` (mappings DB), `WEBHOOK_PORT` (default `8765`), `WEBHOOK_BIND` (default `0.0.0.0`).
 
 ## How user attribution works
 
-Seerr's API does **not** allow setting the `userId` of a created issue — issues are always attributed to the user whose API key was used (typically your admin user). To preserve the actual reporter's identity, the bot prefixes every issue's message body with:
-
-```
-[from Telegram: <telegram name> ↔ <linked seerr display name>]
-
-<the user's actual description>
-```
-
-That way you can always see in Seerr's UI who reported what.
+Because users sign in with Plex, Hermes authenticates to Seerr **as the user** (via their Plex token) when creating issues, posting comments, and listing tickets. Issues are therefore attributed to the real reporter in Seerr's UI — no admin-account workaround or message prefixing. The encrypted Plex token never leaves your stack.
 
 ## Auto-fix details
 
-- Only offered for issue types **Video / Audio / Subtitles** (where a re-download might help)
-- Only offered to Telegram user IDs in `ALLOWED_AUTOFIX_TELEGRAM_IDS` (defaults to just the admin)
-- Hard limit: **3 per user per 24 hours**
-- Explicit confirmation required before deletion
-- For TV: per-episode auto-fix OR "whole season" (deletes ALL episode files in that season + season-wide search)
-- If the media isn't being managed by Radarr/Sonarr, the bot reports "not in Radarr/Sonarr" without affecting the issue
-- All auto-fix events are recorded in the `autofix_events` SQLite table
+- Offered only for issue types **Video / Audio / Subtitles** (where a re-download might help).
+- Offered only to Telegram IDs in the allowlist (defaults to just the admin).
+- **Per-user daily limit** (default 3 per 24h), configurable in the Auto-fix tab. The admin bypasses it.
+- Explicit confirmation required before deletion.
+- For TV: per-episode auto-fix **or** "whole season" (deletes all episode files in that season + a season-wide search).
+- Hermes polls the *arr after triggering and DMs the user when the new file lands (or on timeout).
+- If the media isn't managed by Radarr/Sonarr, Hermes reports "not in Radarr/Sonarr" without touching the issue.
+- All auto-fix events are recorded in the `autofix_events` SQLite table.
 
 ## Files
 
-- `bot.py` — main, conversation handlers
-- `seerr.py` — Seerr API client
-- `radarr.py` — Radarr API client
-- `sonarr.py` — Sonarr API client
-- `store.py` — SQLite store (user mappings + auto-fix audit)
-- `Dockerfile`, `docker-compose.yml`, `.env.example`
-- `unraid-template.xml` — Unraid Community Applications template
-- `.github/workflows/release.yml` — builds and publishes the container image to GHCR and Docker Hub on tag
+- `bot/` — the Telegram application package (entry point `python -m bot`): app wiring, issue/link/resolve flows, ticket management, webhook handlers, auto-fix poller.
+- `webui.py` — aiohttp admin web UI (`/admin`): setup, settings tabs, connection tests, backup/restore.
+- `webhook.py` — Seerr webhook receiver (`/webhook/seerr`).
+- `seerr.py`, `radarr.py`, `sonarr.py`, `plex.py` — API clients.
+- `store.py` — SQLite store (encrypted Plex tokens, user mappings, auto-fix audit).
+- `settings.py`, `const.py` — settings model/persistence and named constants.
+- `http_util.py`, `fix_result.py` — API error contracts + retry, auto-fix result types.
+- `auth_util.py`, `backup_crypto.py` — admin auth/CSRF/throttle, passphrase-wrapped backups.
+- `Dockerfile`, `docker-compose.yml`, `.env.example`, `unraid-template.xml`
+- `.github/workflows/` — tests gate releases; images publish to GHCR and Docker Hub on tag.
 
 ## Privacy
 
-- The bot uses Telegram long-polling. No public URL required.
-- All data stays between your Telegram, your Seerr, and your *arr stack.
-- User mappings live in the local SQLite file (`./data/mappings.sqlite`).
-- The bot does not send anything to any third party other than the Telegram API and the URLs you configure.
+- The Telegram side uses long-polling — no public URL required.
+- Seerr reaches Hermes over your LAN for webhooks; nothing needs to be exposed publicly.
+- Plex tokens are encrypted at rest (Fernet) in the local SQLite DB.
+- Hermes talks only to the Telegram API, your Seerr, your *arr stack, and Plex's auth API — nothing else.
 
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
+| Can't reach `/admin` | Check the container is up and port `8765` is mapped/reachable; first run prints a setup token in the logs |
 | Bot doesn't respond in groups | `@BotFather` → `/setprivacy` → select bot → **Disable** |
-| `/link` says "no user matched" | Use Plex username, or the display name as it appears in Seerr |
-| Auto-fix not offered | Either your Telegram ID isn't in the allowlist, issue type is "Other", or you've hit today's limit |
-| Auto-fix says "not in Radarr/Sonarr" | The media isn't being managed by *arr. Add it there first. |
-| TV auto-fix says "couldn't find TVDb ID" | Seerr's TV details endpoint didn't return a TVDb mapping for that show — rare |
-| `/status` shows ❌ for Seerr | Check `SEERR_URL` is reachable from inside the container (bridge networking; use IP not "localhost") |
+| `/link` fails after Plex approval | The user's Plex account isn't shared in Seerr — invite them in Seerr first |
+| Webhook events not arriving | Secret mismatch (copy it from the Webhook tab into Seerr's Authorization header), or Seerr can't reach the Hermes port; use the Webhook **Test** button |
+| Auto-fix not offered | Telegram ID not in the allowlist, issue type is "Other", or today's limit is hit |
+| Auto-fix says "not in Radarr/Sonarr" | The media isn't managed by *arr — add it there first |
+| `/status` shows ❌ for a service | Check the URL is reachable from inside the container (use an IP, not `localhost`) |
 
 ## License
 
