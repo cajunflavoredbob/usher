@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.14] - 2026-06-03
+
+### Fixed
+- **`test_autofix_poll_inflight` date bomb.** The fixtures hardcoded `timeout_at="2026-05-30 23:59:59"`; once that wall-clock time passed, the poller's timeout branch fired in both tests (tick 1 hit `continue` before ever parking in `is_complete`, so `_inflight` was empty; tick 2 emitted a spurious timeout notification). This failed CI on 2026-06-04 (Python 3.12) and **blocked the v0.11.13 image from publishing** — Docker Hub stayed at v0.11.12. Fixtures now build timestamps relative to `now` (`now + 1h`), and the overlap test waits on an explicit "parked inside `is_complete`" event instead of `sleep(0.01)`, making it deterministic. No source-code changes; this release carries all of v0.11.13's features to Docker Hub.
+
 ## [0.11.13] - 2026-06-03
 
 ### Added

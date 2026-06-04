@@ -4,8 +4,8 @@ doesn't double-notify on the same fix."""
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -14,22 +14,29 @@ from store import PendingAutofix
 
 
 def _make_fix(fix_id: int = 1) -> PendingAutofix:
+    # Timestamps are relative to now so the poller's timeout branch never fires
+    # in these tests (a hardcoded date here would become a time bomb once that
+    # date passes).
+    now = datetime.now(timezone.utc)
     return PendingAutofix(
         id=fix_id, chat_id=100, user_id=42,
         media_type="movie", radarr_movie_id=555,
         sonarr_series_id=None, sonarr_episode_id=None,
         sonarr_season=None, expected_episode_ids=[],
         label="Test Movie", issue_id=fix_id, issue_url="http://x/issues/1",
-        started_at="2026-05-30 00:00:00",
-        timeout_at="2026-05-30 23:59:59",
+        started_at=now.strftime("%Y-%m-%d %H:%M:%S"),
+        timeout_at=(now + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S"),
     )
 
 
 def _make_ctx(fix: PendingAutofix, *,
               is_complete_event: asyncio.Event,
-              is_complete_return: tuple[bool, str] = (True, "")):
-    """Build a ctx whose store returns `fix` and whose radarr.movie_has_file
-    waits on `is_complete_event` before returning. Used to simulate a slow
+              is_complete_return: tuple[bool, str] = (True, ""),
+              entered_event: asyncio.Event | None = None):
+    """Build a ctx whose store returns `fix` and whose is_complete waits on
+    `is_complete_event` before returning. `entered_event`, if given, is set the
+    instant is_complete is reached -- letting a test deterministically know the
+    tick has parked there (no sleep-based racing). Used to simulate a slow
     is_complete during which the next tick can fire."""
     notified: list[int] = []
     marked: list[tuple[int, str]] = []
@@ -41,6 +48,8 @@ def _make_ctx(fix: PendingAutofix, *,
         marked.append((fix_id, status))
 
     async def is_complete_slow(radarr, sonarr):
+        if entered_event is not None:
+            entered_event.set()
         await is_complete_event.wait()
         return is_complete_return
 
@@ -79,13 +88,16 @@ async def test_overlapping_ticks_dedupe_on_same_fix():
     fires."""
     fix = _make_fix(fix_id=42)
     gate = asyncio.Event()
+    entered = asyncio.Event()
     ctx, notified, marked = _make_ctx(fix, is_complete_event=gate,
-                                       is_complete_return=(True, ""))
+                                       is_complete_return=(True, ""),
+                                       entered_event=entered)
 
     # Tick 1: kick it off but don't let it finish yet.
     tick1 = asyncio.create_task(autofix_poll.poll_pending_autofixes(ctx))
-    # Yield to let tick1 add fix.id to _inflight + park in is_complete.
-    await asyncio.sleep(0.01)
+    # Wait until tick1 has actually parked inside is_complete (deterministic --
+    # no sleep-based racing) so we know fix.id is in _inflight.
+    await entered.wait()
     assert 42 in autofix_poll._inflight
     # Tick 2 starts while tick1 is still parked: should see _inflight + skip.
     await autofix_poll.poll_pending_autofixes(ctx)
