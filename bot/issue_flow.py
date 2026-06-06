@@ -426,6 +426,7 @@ async def issue_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     # reload can't shift the eligibility check to a stale set between this
     # read and the await on store.count_autofix_24h below.
     allowlist_snapshot: frozenset[int] = frozenset(ctx.bot_data.get("allowlist") or ())
+    allow_all = bool(ctx.bot_data.get("autofix_allow_all"))
     store: UserStore = ctx.bot_data["store"]
     tg_id = update.effective_user.id
     media = ctx.user_data.get("media", {})
@@ -435,7 +436,7 @@ async def issue_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     is_whole_season = media.get("type") == "tv" and not episode
     eligible = (
         issue_type in AUTOFIX_ELIGIBLE_TYPES
-        and tg_id in allowlist_snapshot
+        and (allow_all or tg_id in allowlist_snapshot)
         and _has_arr_for_media(ctx)
         and not is_whole_season
     )
@@ -445,15 +446,19 @@ async def issue_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     is_admin = tg_id == ctx.bot_data.get("admin_id")
     if not is_admin:
         settings_store: SettingsStore = ctx.bot_data["settings_store"]
-        daily_limit = settings_store.settings.daily_autofix_limit
-        used = await store.count_autofix_24h(tg_id)
-        if used >= daily_limit:
-            await update.effective_message.reply_text(
-                f"(You've used your {daily_limit} auto-fixes today; "
-                f"submitting issue without auto-fix.)"
-            )
-            return await _submit_issue(update, ctx, autofix=False)
-        remaining_msg = f"\n(Auto-fixes remaining today: {daily_limit - used})"
+        s = settings_store.settings
+        if s.daily_autofix_unlimited:
+            remaining_msg = ""
+        else:
+            daily_limit = s.daily_autofix_limit
+            used = await store.count_autofix_24h(tg_id)
+            if used >= daily_limit:
+                await update.effective_message.reply_text(
+                    f"(You've used your {daily_limit} auto-fixes today; "
+                    f"submitting issue without auto-fix.)"
+                )
+                return await _submit_issue(update, ctx, autofix=False)
+            remaining_msg = f"\n(Auto-fixes remaining today: {daily_limit - used})"
     else:
         remaining_msg = ""
     rows = [[

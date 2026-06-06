@@ -50,7 +50,13 @@ class Settings:
     sonarr_url: str = ""
     sonarr_api_key: str = ""
     allowed_autofix_telegram_ids: list[int] = field(default_factory=list)
+    # When True, every linked user may auto-fix regardless of the allowlist
+    # (the admin is always allowed). The list above is retained either way.
+    autofix_allow_all: bool = False
     daily_autofix_limit: int = DEFAULT_DAILY_AUTOFIX_LIMIT
+    # When True, the per-user daily cap is not enforced. The numeric limit
+    # above is retained for when this is turned back off.
+    daily_autofix_unlimited: bool = False
     webhook_secret: str = ""
     admin: AdminAccount = field(default_factory=AdminAccount)
 
@@ -86,7 +92,9 @@ class Settings:
             sonarr_url=data.get("sonarr_url", "") or "",
             sonarr_api_key=data.get("sonarr_api_key", "") or "",
             allowed_autofix_telegram_ids=list(data.get("allowed_autofix_telegram_ids") or []),
+            autofix_allow_all=bool(data.get("autofix_allow_all")),
             daily_autofix_limit=daily_limit,
+            daily_autofix_unlimited=bool(data.get("daily_autofix_unlimited")),
             webhook_secret=data.get("webhook_secret", "") or "",
             admin=AdminAccount(
                 username=admin_data.get("username", "") or "",

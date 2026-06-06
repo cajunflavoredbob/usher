@@ -263,6 +263,13 @@ button.secondary:hover { background: #6c7086; }
 .test-detail { font-size: 13px; color: #a6adc8; }
 .copied-note { font-size: 13px; color: #a6e3a1; opacity: 0; transition: opacity .2s; }
 .copied-note.show { opacity: 1; }
+
+/* Inline checkbox toggles (allow-all / unlimited) */
+.inline-check { display: flex; align-items: center; gap: 8px;
+                margin: 12px 0 4px; font-weight: 400; color: #cdd6f4;
+                cursor: pointer; }
+.inline-check input[type="checkbox"] { width: auto; margin: 0; cursor: pointer; }
+input.locked { opacity: 0.5; background: #181825; cursor: not-allowed; }
 """
 
 
@@ -323,6 +330,21 @@ SCRIPT = """
     inp.type = 'text';
     if (show) show.textContent = 'Hide';
   });
+  // Allow-all / Unlimited toggles: a checked box makes its paired input
+  // readonly + dimmed (value retained, still submitted) and back on un-check.
+  function bindLock(cbId, inputId) {
+    var cb = document.getElementById(cbId);
+    var inp = document.getElementById(inputId);
+    if (!cb || !inp) return;
+    function sync() {
+      inp.readOnly = cb.checked;
+      inp.classList.toggle('locked', cb.checked);
+    }
+    cb.addEventListener('change', sync);
+    sync();
+  }
+  bindLock('autofix-allow-all', 'allowed-ids');
+  bindLock('daily-unlimited', 'daily-limit');
   var copy = document.getElementById('wh-copy');
   if (copy) copy.addEventListener('click', async function () {
     var inp = document.getElementById('webhook_secret');
@@ -381,6 +403,15 @@ def _settings_page(
     ids_str = ",".join(str(i) for i in s.allowed_autofix_telegram_ids)
     admin_tg_val = str(s.admin_telegram_id) if s.admin_telegram_id else ""
     csrf = _csrf_input(csrf_token)
+
+    # Auto-fix allow-all / unlimited toggles. The checkbox reflects the saved
+    # flag; the paired input is rendered readonly+dimmed when the flag is set
+    # (JS keeps it in sync on toggle). readonly -- not disabled -- so the
+    # retained list/number still posts and survives a later un-check.
+    allow_all_chk = " checked" if s.autofix_allow_all else ""
+    unlimited_chk = " checked" if s.daily_autofix_unlimited else ""
+    ids_lock = ' readonly class="locked"' if s.autofix_allow_all else ""
+    limit_lock = ' readonly class="locked"' if s.daily_autofix_unlimited else ""
 
     # Inline marker next to the relevant form's Save button. marker_target
     # defaults to the active tab so the obvious case Just Works.
@@ -453,12 +484,20 @@ def _settings_page(
   <input type="password" name="sonarr_api_key" value="{_esc(s.sonarr_api_key)}" autocomplete="off">
 
   <label>Allowed Telegram User IDs</label>
-  <input type="text" name="allowed_autofix_telegram_ids" value="{_esc(ids_str)}" placeholder="123456,789012">
-  <div class="note">Comma-separated. Leave empty for admin-only.</div>
+  <label class="inline-check" for="autofix-allow-all">
+    <input type="checkbox" id="autofix-allow-all" name="autofix_allow_all"{allow_all_chk}>
+    Allow all linked users
+  </label>
+  <input type="text" id="allowed-ids" name="allowed_autofix_telegram_ids" value="{_esc(ids_str)}" placeholder="123456,789012"{ids_lock}>
+  <div class="note">Comma-separated. Leave empty for admin-only. "Allow all" lets every linked user auto-fix; your list is kept for when you uncheck it.</div>
 
   <label>Per-user daily limit</label>
-  <input type="text" name="daily_autofix_limit" value="{_esc(s.daily_autofix_limit)}" inputmode="numeric" pattern="[0-9]+" required>
-  <div class="note">Number of auto-fix runs each non-admin user gets per 24 hours. Default {DEFAULT_DAILY_AUTOFIX_LIMIT}.</div>
+  <label class="inline-check" for="daily-unlimited">
+    <input type="checkbox" id="daily-unlimited" name="daily_autofix_unlimited"{unlimited_chk}>
+    Unlimited
+  </label>
+  <input type="text" id="daily-limit" name="daily_autofix_limit" value="{_esc(s.daily_autofix_limit)}" inputmode="numeric" pattern="[0-9]+" required{limit_lock}>
+  <div class="note">Auto-fix runs per non-admin user per 24 hours. Default {DEFAULT_DAILY_AUTOFIX_LIMIT}. "Unlimited" removes the cap; your number is kept for when you uncheck it.</div>
 
   <div class="btn-row">
     <button type="button" class="test-btn" data-test="autofix" data-form="autofix-form">Test</button>
@@ -931,20 +970,31 @@ async def autofix_post(request: web.Request) -> web.Response:
         chunk = chunk.strip()
         if chunk.isdigit():
             parsed_ids.append(int(chunk))
+    # The allowlist is always retained even when "Allow all" is on, so an
+    # un-check later restores exactly the IDs that were entered.
     s.allowed_autofix_telegram_ids = parsed_ids
+    s.autofix_allow_all = form.get("autofix_allow_all") is not None
+    unlimited = form.get("daily_autofix_unlimited") is not None
+    s.daily_autofix_unlimited = unlimited
     limit_raw = (form.get("daily_autofix_limit") or "").strip()
     try:
         limit = int(limit_raw)
         if limit < 1:
             raise ValueError
     except ValueError:
-        return web.Response(
-            text=_settings_page(s, error="Per-user daily limit must be a positive integer.",
-                                active_tab="autofix",
-                                webhook_url=_webhook_url_from_request(request),
-                                csrf_token=csrf_for_request(request)),
-            content_type="text/html", status=400,
-        )
+        # When unlimited, the numeric box is readonly and just being retained;
+        # a missing/odd value shouldn't block the save -- keep the prior limit
+        # (or the default) so it's there if unlimited is turned back off.
+        if unlimited:
+            limit = s.daily_autofix_limit or DEFAULT_DAILY_AUTOFIX_LIMIT
+        else:
+            return web.Response(
+                text=_settings_page(s, error="Per-user daily limit must be a positive integer.",
+                                    active_tab="autofix",
+                                    webhook_url=_webhook_url_from_request(request),
+                                    csrf_token=csrf_for_request(request)),
+                content_type="text/html", status=400,
+            )
     s.daily_autofix_limit = limit
     return await _save_and_render(request, active_tab="autofix")
 
