@@ -48,6 +48,33 @@ def test_from_dict_handles_empty_input():
     assert s.admin.username == ""
 
 
+def test_autofix_flags_default_false():
+    s = Settings.from_dict({})
+    assert s.autofix_allow_all is False
+    assert s.daily_autofix_unlimited is False
+
+
+def test_autofix_flags_roundtrip_when_set():
+    s = Settings(
+        allowed_autofix_telegram_ids=[10, 20],
+        autofix_allow_all=True,
+        daily_autofix_limit=7,
+        daily_autofix_unlimited=True,
+    )
+    s2 = Settings.from_dict(s.to_dict())
+    assert s2.autofix_allow_all is True
+    assert s2.daily_autofix_unlimited is True
+    # The list and number are retained even with the override flags on.
+    assert s2.allowed_autofix_telegram_ids == [10, 20]
+    assert s2.daily_autofix_limit == 7
+
+
+def test_autofix_flags_coerce_truthy_values():
+    s = Settings.from_dict({"autofix_allow_all": 1, "daily_autofix_unlimited": "yes"})
+    assert s.autofix_allow_all is True
+    assert s.daily_autofix_unlimited is True
+
+
 def test_from_dict_invalid_admin_id_becomes_zero():
     s = Settings.from_dict({"admin_telegram_id": "not-an-int"})
     assert s.admin_telegram_id == 0

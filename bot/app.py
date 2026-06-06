@@ -113,6 +113,7 @@ def _build_clients_from_settings(app: Application) -> None:
     app.bot_data["radarr"] = radarr
     app.bot_data["sonarr"] = sonarr
     app.bot_data["allowlist"] = allowlist
+    app.bot_data["autofix_allow_all"] = s.autofix_allow_all
 
     if old_clients:
         async def _close_old() -> None:

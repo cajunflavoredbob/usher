@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.15] - 2026-06-05
+
+### Added
+- **Auto-fix tab: "Allow all linked users" toggle.** A checkbox above the allowlist input. When checked, every linked user may auto-fix (the admin is always allowed); when unchecked, the existing allowlist applies. New setting `autofix_allow_all` (default `false`); enforcement in `bot/issue_flow.py` is now `allow_all OR tg_id in allowlist`.
+- **Auto-fix tab: "Unlimited" toggle for the per-user daily limit.** A checkbox above the limit input. When checked, the per-user daily cap is not enforced and the offer message drops the "remaining today" line. New setting `daily_autofix_unlimited` (default `false`).
+- Both toggles render their paired input **readonly + dimmed** while checked (not `disabled`), so the underlying allowlist / number still posts and is **retained** in `settings.json` — un-checking later restores exactly what was entered. Live toggle via a small `bindLock` helper in the page script.
+- Tests: settings round-trip + truthy-coercion for the two new flags (`tests/test_settings.py`); `/admin/autofix` POST parsing/retention incl. the unlimited-with-blank-limit path and the still-validated non-unlimited path (`tests/test_autofix_post.py`). 212 tests total (was 204).
+
 ## [0.11.14] - 2026-06-03
 
 ### Fixed
