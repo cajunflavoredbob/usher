@@ -245,6 +245,8 @@ code { background: #45475a; padding: 2px 6px; border-radius: 3px; font-size: 13p
 .btn-row { display: flex; align-items: center; gap: 10px;
            margin-top: 16px; flex-wrap: wrap; }
 .btn-row button { margin-top: 0; }
+.btn-row.divided { border-top: 1px solid #45475a;
+                   margin-top: 20px; padding-top: 20px; }
 button.secondary { background: #585b70; color: #cdd6f4; }
 button.secondary:hover { background: #6c7086; }
 .test-btn { position: relative; overflow: hidden;
@@ -441,7 +443,7 @@ def _settings_page(
   <label>Hermes Admin UI URL <span class="note">(optional)</span></label>
   <input type="text" name="hermes_public_url" value="{_esc(s.hermes_public_url)}" placeholder="http://192.168.1.15:8765 or https://hermes.example.com">
   <div class="note">Used in the bot's startup DM to point you back here. Leave blank to fall back to a generic placeholder.</div>
-  <div class="btn-row">
+  <div class="btn-row divided">
     <button type="button" class="test-btn" data-test="telegram" data-form="telegram-form">Test</button>
     <button type="submit">Save</button>{marker("telegram")}
     <span class="test-detail" data-detail="telegram"></span>
@@ -459,7 +461,7 @@ def _settings_page(
   <input type="password" name="seerr_api_key" value="{_esc(s.seerr_api_key)}" autocomplete="off" required>
   <label>Seerr Public URL <span class="note">(optional, for reverse-proxy links sent to users)</span></label>
   <input type="text" name="seerr_public_url" value="{_esc(s.seerr_public_url)}" placeholder="https://seerr.example.com">
-  <div class="btn-row">
+  <div class="btn-row divided">
     <button type="button" class="test-btn" data-test="seerr" data-form="seerr-form">Test</button>
     <button type="submit">Save</button>{marker("seerr")}
     <span class="test-detail" data-detail="seerr"></span>
@@ -470,7 +472,7 @@ def _settings_page(
     autofix_form = f"""
 <form id="autofix-form" method="POST" action="/admin/autofix">
   {csrf}
-  <h2>Auto-fix (Radarr / Sonarr)</h2>
+  <h2>Auto-fix</h2>
   <p class="intro">When a user reports a Video, Audio, or Subtitle issue, Hermes can ask Radarr or Sonarr to delete the current file and trigger a new search. Configure the URLs and API keys below, then list the Telegram users allowed to use it. The admin always bypasses the per-day limit.</p>
 
   <label>Radarr URL <span class="note">(optional)</span></label>
@@ -486,10 +488,10 @@ def _settings_page(
   <label>Allowed Telegram User IDs</label>
   <label class="inline-check" for="autofix-allow-all">
     <input type="checkbox" id="autofix-allow-all" name="autofix_allow_all"{allow_all_chk}>
-    Allow all linked users
+    Allow all users
   </label>
   <input type="text" id="allowed-ids" name="allowed_autofix_telegram_ids" value="{_esc(ids_str)}" placeholder="123456,789012"{ids_lock}>
-  <div class="note">Comma-separated. Leave empty for admin-only. "Allow all" lets every linked user auto-fix; your list is kept for when you uncheck it.</div>
+  <div class="note">Comma-separated. Leave empty for admin-only. "Allow all" lets every signed-in user auto-fix.</div>
 
   <label>Per-user daily limit</label>
   <label class="inline-check" for="daily-unlimited">
@@ -497,9 +499,9 @@ def _settings_page(
     Unlimited
   </label>
   <input type="text" id="daily-limit" name="daily_autofix_limit" value="{_esc(s.daily_autofix_limit)}" inputmode="numeric" pattern="[0-9]+" required{limit_lock}>
-  <div class="note">Auto-fix runs per non-admin user per 24 hours. Default {DEFAULT_DAILY_AUTOFIX_LIMIT}. "Unlimited" removes the cap; your number is kept for when you uncheck it.</div>
+  <div class="note">Auto-fix runs per non-admin user per 24 hours. Default {DEFAULT_DAILY_AUTOFIX_LIMIT}. "Unlimited" removes the cap for all users.</div>
 
-  <div class="btn-row">
+  <div class="btn-row divided">
     <button type="button" class="test-btn" data-test="autofix" data-form="autofix-form">Test</button>
     <button type="submit">Save</button>{marker("autofix")}
     <span class="test-detail" data-detail="autofix"></span>
@@ -525,7 +527,7 @@ def _settings_page(
     <span class="copied-note" id="wh-copied">Copied &#10003;</span>
   </div>
 
-  <div class="btn-row">
+  <div class="btn-row divided">
     <button type="button" class="test-btn" data-test="webhook" data-form="webhook-form">Test</button>
     <button type="submit">Save</button>{marker("webhook")}
     <span class="test-detail" data-detail="webhook"></span>
@@ -549,7 +551,7 @@ def _settings_page(
 <form method="POST" action="/admin/backup">
   {csrf}
   <h2>Download Backup</h2>
-  <div class="note">Downloads a ZIP containing settings.json, the mappings database, and the encryption key. Treat this file as secret. Optionally wrap it with a passphrase (PBKDF2 + AES-GCM).</div>
+  <div class="note">Downloads a ZIP containing settings.json, the mappings database, and the encryption key. Treat this file as secret. Optionally wrap it with a passphrase.</div>
   <label>Passphrase <span class="note">(optional)</span></label>
   <input type="password" name="passphrase" placeholder="Leave blank for plain ZIP">
   <button type="submit">Download Backup</button>
@@ -561,7 +563,7 @@ def _settings_page(
   <input type="file" name="backup" accept=".zip,.hermes-backup" required>
   <label>Passphrase <span class="note">(required only if the backup was wrapped)</span></label>
   <input type="password" name="passphrase" placeholder="Leave blank for plain ZIP">
-  <div class="note">Overwrites settings, mappings DB, and encryption key after validating them. Current files are copied to <code>/data/pre-restore-TIMESTAMP/</code> first. The container restarts.</div>
+  <div class="note">Overwrites settings, mappings DB, and encryption key after validating. A backup is created before restoring.</div>
   <button type="submit" class="danger">Restore</button>{marker("restore")}
 </form>
 """
