@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.16] - 2026-06-05
+
+### Changed
+- **Admin UI copy + layout polish** (no behavior changes):
+  - Auto-fix tab: "Allow all linked users" → **"Allow all users"**; allowlist note reworded to `… "Allow all" lets every signed-in user auto-fix.`; daily-limit note reworded to `… "Unlimited" removes the cap for all users.`; tab heading "Auto-fix (Radarr / Sonarr)" → **"Auto-fix"**.
+  - A divider now separates each tab's **Test / Save** action row from the fields above it (Telegram, Seerr, Auto-fix, Webhook). On the Webhook tab this also separates Test/Save from the Show / Generate / Copy secret controls.
+  - Account tab: dropped "(PBKDF2 + AES-GCM)" from the backup note; restore note shortened to "Overwrites settings, mappings DB, and encryption key after validating. A backup is created before restoring." (the pre-restore snapshot + container restart behavior is unchanged).
+
 ## [0.11.15] - 2026-06-05
 
 ### Added
