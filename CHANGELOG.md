@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.17] - 2026-06-08
+
+### Fixed
+- **A new command now abandons any in-progress flow ("most recent command wins").** Previously a half-finished `/issue` left its conversation armed in the title/description text state; if the user then started a ticket reply and typed it, the parked `/issue` (registered first) intercepted the text and ran a Seerr search on it — the user saw `No matches for "<their reply>"` and the reply never reached the ticket. New group=-2 `reset_stale_flows` gate ends every in-progress conversation (issue / ticket / link / resolve) the moment a top-level command arrives, before any following text is processed, so nothing the user types gets swallowed. `/cancel` is exempt so each conversation's own cancel fallback still fires. Mirrors the existing button gate's "newest wins" behavior.
+- 7 new tests (`tests/test_flow_reset.py`): command-name parsing (incl. `@botname` stripping), conversation end + timeout-job cancellation + marker clearing on command, plain text left intact, `/cancel` exemption, and no-active-conversation no-op. 219 tests total (was 212).
+
 ## [0.11.16] - 2026-06-05
 
 ### Changed

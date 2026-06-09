@@ -45,6 +45,7 @@ from bot.resolve_flow import _resolve_conversation
 from bot.shared import (
     _format_status,
     _global_btn_gate,
+    _reset_stale_flows,
     _schedule_clean_exit,
 )
 from bot.tickets import (
@@ -250,18 +251,28 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
 
     _build_clients_from_settings(app)
 
+    # Flow reset gate: "most recent command wins". Group -2 so it ends any
+    # in-progress conversation BEFORE the new command (and any text that
+    # follows) is processed. See bot.shared.reset_stale_flows.
+    link_conv = _link_conversation()
+    issue_conv = _issue_conversation()
+    resolve_conv = _resolve_conversation()
+    ticket_conv = _ticket_conversation()
+    app.bot_data["flow_convs"] = [link_conv, issue_conv, resolve_conv, ticket_conv]
+    app.add_handler(TypeHandler(Update, _reset_stale_flows), group=-2)
+
     # Global gate: drop callbacks from stale button-bearing messages. Group -1
     # so it fires before any normal handler.
     app.add_handler(TypeHandler(Update, _global_btn_gate), group=-1)
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(_link_conversation())
+    app.add_handler(link_conv)
     app.add_handler(CommandHandler("unlink", cmd_unlink))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("tickets", cmd_tickets))
-    app.add_handler(_issue_conversation())
-    app.add_handler(_resolve_conversation())
+    app.add_handler(issue_conv)
+    app.add_handler(resolve_conv)
     # Ticket-management callbacks (must be registered before the conversation
     # so the non-conversation taps -- open / close-menu / close-direct -- work
     # even when no conversation is active)
@@ -272,7 +283,7 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CallbackQueryHandler(tk_fix_redownload, pattern=fr"^{TK_FIX_REDOWNLOAD}:\d+$"))
     app.add_handler(CallbackQueryHandler(tk_fix_mark_failed, pattern=fr"^{TK_FIX_MARK_FAILED}:\d+$"))
     app.add_handler(CallbackQueryHandler(tk_back, pattern=fr"^{TK_BACK}:\d+$"))
-    app.add_handler(_ticket_conversation())
+    app.add_handler(ticket_conv)
     app.add_handler(CallbackQueryHandler(cmd_link_didnt_work, pattern=fr"^{LINK_HELP}$"))
     app.add_error_handler(on_error)
 

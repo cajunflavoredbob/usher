@@ -13,8 +13,8 @@ from datetime import datetime, timezone
 from typing import Final, Optional
 
 import telegram
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import ApplicationHandlerStop, ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity, Update
+from telegram.ext import ApplicationHandlerStop, ContextTypes, ConversationHandler
 
 from seerr import SeerrClient
 from store import UserStore
@@ -329,6 +329,56 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     raise ApplicationHandlerStop
 
 
+# --- "Most recent command wins" flow reset ---------------------------------
+
+# Commands that must NOT abandon an in-progress flow. /cancel is handled by each
+# conversation's own fallback (which sends a "Cancelled." reply), so the gate
+# has to leave the conversation alive for that fallback to run.
+FLOW_RESET_EXEMPT_COMMANDS: Final = frozenset({"cancel"})
+
+
+def command_name(msg) -> Optional[str]:
+    """Return the bot-command at the start of `msg` (lowercased, without the
+    leading slash or a trailing @botname), or None if it isn't a command."""
+    if msg is None or not msg.text:
+        return None
+    for ent in (msg.entities or ()):
+        if ent.type == MessageEntity.BOT_COMMAND and ent.offset == 0:
+            return msg.text[1:ent.length].split("@", 1)[0].lower()
+    return None
+
+
+async def reset_stale_flows(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """TypeHandler at group=-2: "most recent command wins".
+
+    When the user sends a top-level command, abandon any in-progress
+    conversation flow so a half-finished /issue (etc.) can't later intercept
+    free text meant for the new flow. The conversation is ended here -- at
+    command time, before any colliding message arrives -- so nothing the user
+    types next gets swallowed. Mirrors the button gate's "newest wins".
+
+    Uses ConversationHandler internals (_get_key / _update_state / timeout_jobs)
+    because PTB exposes no public API to end another handler's conversation.
+    """
+    cmd = command_name(update.effective_message)
+    if cmd is None or cmd in FLOW_RESET_EXEMPT_COMMANDS:
+        return
+    for conv in ctx.application.bot_data.get("flow_convs", ()):
+        try:
+            key = conv._get_key(update)
+        except Exception:
+            continue
+        if key in conv._conversations:
+            conv._update_state(ConversationHandler.END, key)
+            job = conv.timeout_jobs.pop(key, None)
+            if job is not None:
+                job.schedule_removal()
+    # Drop free-text flow markers so a pending ticket reply / close-comment is
+    # abandoned too (its conversation was just ended above).
+    for marker in ("tk_reply_id", "tk_close_after"):
+        ctx.user_data.pop(marker, None)
+
+
 # --- Ticket detail keyboard ------------------------------------------------
 
 def ticket_detail_kb(issue_id: int, is_admin: bool) -> InlineKeyboardMarkup:
@@ -355,6 +405,7 @@ _edit_or_send = edit_or_send
 _token_for = token_for
 _record_btn = record_btn
 _global_btn_gate = global_btn_gate
+_reset_stale_flows = reset_stale_flows
 _ticket_detail_kb = ticket_detail_kb
 _format_media_title_line = format_media_title_line
 _format_se_suffix = format_se_suffix
