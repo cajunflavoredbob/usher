@@ -146,6 +146,7 @@ def make_ctx(*, admin_id: int = 999, user_data: Optional[dict] = None,
         add_issue_comment=AsyncMock(),
         resolve_issue=AsyncMock(),
         search=AsyncMock(return_value=[]),
+        public_url="http://seerr.example",
     )
     radarr = SimpleNamespace(
         auto_fix=AsyncMock(),

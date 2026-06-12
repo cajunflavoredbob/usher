@@ -65,6 +65,8 @@ async def test_movie_redownload_happy_path_enqueues_poller():
     assert kwargs["media_type"] == "movie"
     assert kwargs["radarr_movie_id"] == 555
     assert kwargs["issue_id"] == 42
+    # issue_url populated (the poller DMs render "Original issue: <url>")
+    assert kwargs["issue_url"] == "http://seerr.example/issues/42"
 
     # log_autofix called
     ctx.bot_data["store"].log_autofix.assert_called_once()
@@ -152,6 +154,24 @@ async def test_partial_success_still_enqueues_poller():
     # Message uses the partial prefix
     text = upd.callback_query.edits[0]["text"]
     assert "⚠️ Mark Failed for #42" in text
+
+
+# --- partial without search: logged but not enqueued ---
+
+
+async def test_partial_without_search_logs_but_does_not_enqueue():
+    """The autofix event is logged for every ok/partial result (mirrors
+    _submit_issue); the poller is only enqueued when a search ran."""
+    upd = make_update(callback_data="tkfm:42", user_id=999)
+    ctx = make_ctx(admin_id=999)
+    ctx.bot_data["seerr"].get_issue.return_value = _issue(media_type="movie")
+    ctx.bot_data["radarr"].mark_failed.return_value = FixResult.partial(
+        "Blocklisted release but search failed: <transient>",
+        steps_done=["blocklist", "delete"],
+    )
+    await _apply_fix(upd, ctx, strategy="mark_failed")
+    ctx.bot_data["store"].log_autofix.assert_called_once()
+    ctx.bot_data["store"].add_pending_autofix.assert_not_called()
 
 
 # --- failed: arr returns failure ---
