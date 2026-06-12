@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.19] - 2026-06-12
+
+Fixes from the 2026-06-12 backend audit: the post-autofix resolve chain was broken end to end.
+
+### Fixed
+- **The poller's "Did this resolve the problem?" buttons now work.** The auto-fix completion and timeout DMs were the one remaining keyboard sender that never called `record_btn` (the v0.11.18 bug class), so the button gate rejected every tap with the stale-menu toast for exactly the users who get autofix DMs - the resolve follow-up flow was unreachable in normal operation. Both sends are now recorded for the receiving user.
+- **Autofix DMs no longer vanish on titles with Markdown metacharacters.** The poller built its DMs with legacy `parse_mode="Markdown"` and raw media titles; a title with an unbalanced `*`/`_`/`[` (e.g. M\*A\*S\*H) made Telegram reject the whole message, the error was swallowed, and the fix was marked complete anyway - the user was never notified. The poller now uses HTML with `html.escape`, matching the webhook handlers.
+- **Status is marked before notifying.** Previously a failed `mark_autofix_status` write after a successful completion/timeout DM left the row pending, re-sending the same DM every 60s tick until the write succeeded. The poller now writes the status first and prefers losing one notification over spamming (same policy as the webhook dedupe).
+- **Unlinked users can no longer act with the admin API key.** `resolve_start`/`resolve_comment` (the Yes/No buttons on autofix DMs) and `tk_back` fell through to `as_plex_token=None` - the bare admin-key client - when the tapping user had no usable Plex token, closing/commenting/fetching with admin attribution. All three now apply the same gate as the rest of tickets.py: decrypt-failed users are told to re-link, unlinked users to /link first. The identity is re-checked at comment submit time too, in case the link vanished mid-conversation.
+- **The resolve conversation now times out (10 min) like every other flow.** It was the only ConversationHandler without `conversation_timeout`, so an abandoned "add a comment" prompt swallowed the user's next plain-text DM - days later - as a comment on the stale issue. Timeout handler clears `awaiting_comment_for`; the key is also covered by `on_error`'s half-state cleanup now.
+- **Admin Fix DMs no longer render a dangling "Original issue:" label.** The admin /tickets fix path enqueued pending autofixes with `issue_url=""` (the user /issue path sets the real URL); it now builds the URL from Seerr's public URL, and the poller omits the line entirely for legacy empty-URL rows. The autofix analytics event is also logged for ok/partial results whose search step failed, matching the user path.
+- 19 new tests (`tests/test_resolve_flow.py`, `tests/test_autofix_notify.py`, additions to `tests/test_apply_fix.py`). 242 tests total (was 223).
+
 ## [0.11.18] - 2026-06-11
 
 ### Fixed

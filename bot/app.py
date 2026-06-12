@@ -453,6 +453,7 @@ _CONVERSATION_USER_DATA_KEYS = (
     "media", "search_results", "seasons", "season",
     "episode", "issue_type", "description", "autofix",
     "research_parent",
+    "awaiting_comment_for",
 )
 
 

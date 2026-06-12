@@ -258,7 +258,18 @@ async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     except (ValueError, IndexError):
         return
     tg_id = update.effective_user.id
-    is_admin, token, _decrypt_failed = await _token_for(ctx, tg_id)
+    is_admin, token, decrypt_failed = await _token_for(ctx, tg_id)
+    # Same gate as tk_open: a non-admin without a usable token must not fall
+    # through to _build_ticket_detail's admin-key fetch.
+    if not is_admin and decrypt_failed:
+        await q.message.reply_text(
+            "Your Plex link can't be decrypted (the encryption key may have rotated). "
+            "Run /unlink then /link to reconnect."
+        )
+        return
+    if not is_admin and token is None:
+        await q.message.reply_text("DM me /link first so I can act on tickets as you.")
+        return
     text, kb = await _build_ticket_detail(ctx, issue_id, is_admin, token)
     try:
         await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
@@ -384,10 +395,10 @@ async def _resolve_fix_context(
 
 async def _enqueue_fix_completion(
     store: UserStore, *, fix: _FixContext, result: FixResult,
-    chat_id: int, user_id: int,
+    chat_id: int, user_id: int, issue_url: str,
 ) -> None:
-    """Build the pending_autofix row from result.poll_info, log the autofix
-    event. Raises on enqueue failure -- caller decides what to tell the user."""
+    """Build the pending_autofix row from result.poll_info. Raises on enqueue
+    failure -- caller decides what to tell the user."""
     poll_info = result.poll_info or {}
     kwargs: dict = {
         "chat_id": chat_id,
@@ -395,7 +406,7 @@ async def _enqueue_fix_completion(
         "media_type": fix.media["type"],
         "label": fix.label or f"#{fix.issue_id}",
         "issue_id": fix.issue_id,
-        "issue_url": "",
+        "issue_url": issue_url,
     }
     if fix.media["type"] == "movie":
         kwargs["radarr_movie_id"] = poll_info.get("movie_id")
@@ -405,8 +416,6 @@ async def _enqueue_fix_completion(
         kwargs["sonarr_season"] = poll_info.get("season")
         kwargs["expected_episode_ids"] = poll_info.get("expected_episode_ids") or []
     await store.add_pending_autofix(**kwargs)
-    await store.log_autofix(user_id, fix.media["type"], fix.media["tmdb_id"],
-                            season=fix.season, episode=fix.episode)
 
 
 async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy: str) -> None:
@@ -440,13 +449,19 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
         await _edit_or_send(q, f"⚠️ {action_name} for #{issue_id} didn't run: {result.message}")
         return
 
-    # ok or partial: enqueue completion poller iff search ran
+    # ok or partial: always log the autofix event (mirrors _submit_issue,
+    # which logs even when no search ran); enqueue the completion poller
+    # iff search ran.
+    await store.log_autofix(update.effective_user.id, fix.media["type"],
+                            fix.media["tmdb_id"],
+                            season=fix.season, episode=fix.episode)
     if result.should_poll:
         try:
             await _enqueue_fix_completion(
                 store, fix=fix, result=result,
                 chat_id=q.message.chat_id,
                 user_id=update.effective_user.id,
+                issue_url=f"{seerr.public_url}/issues/{issue_id}",
             )
         except Exception:
             logger.exception("failed to enqueue pending autofix for #%d", issue_id)
