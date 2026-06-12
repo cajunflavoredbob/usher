@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.18] - 2026-06-11
+
+### Fixed
+- **/issue and /link menus no longer die with the "Use the most recent message" toast.** The global button gate (v0.11.6) only admits callbacks from a user's last 3 *recorded* button messages, but only ticket and webhook messages were ever recorded - the `/issue` and `/link` flows never registered their inline keyboards. The gate is fail-open while a user's history is empty, so this stayed hidden until a user received their first webhook ticket DM; from then on every tap on a flow menu (even a freshly sent one) was rejected as stale and the flow stalled. Reported in the field on 2026-06-11: `/issue` -> title -> tap result produced the stale-menu toast and stopped the sequence. Every button-bearing send/edit in `bot/issue_flow.py` and `bot/link_flow.py` now calls `record_btn`.
+- `record_btn` now dedupes: re-recording an already-tracked message (a flow step editing its menu in place) refreshes its timestamp and moves it to the newest history slot instead of appending a duplicate, so a multi-step flow can't evict itself out of its own 3-slot history. It also ignores non-Message returns (the bare `True` an inline-message edit yields) instead of crashing.
+- Test harness `reply_text` / `edit_message_text` fakes now return Message objects like real PTB, so handlers that record their send/edit results are testable.
+- 4 new tests: `record_btn` dedupe + non-Message guard (`tests/test_btn_gate.py`); end-to-end regression for the `/issue` search menu and `/link` consent prompt being recorded and admitted by the gate for a user with pre-existing button history (`tests/test_flow_btn_recording.py`). 223 tests total (was 219).
+
 ## [0.11.17] - 2026-06-08
 
 ### Fixed

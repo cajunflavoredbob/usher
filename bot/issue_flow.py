@@ -49,6 +49,7 @@ from bot.shared import (
     TITLE,
     _format_media_label,
     _require_seerr,
+    record_btn,
 )
 from bot.tickets import _run_arr_action
 from const import ISSUE_FLOW_TIMEOUT_S, KB_BUTTONS_PER_ROW, SEARCH_RESULT_LIMIT
@@ -131,12 +132,15 @@ async def _show_search_results(
     reply_method,
     ctx: ContextTypes.DEFAULT_TYPE,
     query: str,
+    *,
+    user_id: int,
 ) -> int:
     """Run a Seerr search for `query`, render the results as a list of
     title-buttons, and append a parent-show re-search button if no result
     is in Seerr's library. `reply_method` is an awaitable accepting
     (text, reply_markup=...) -- usually `message.reply_text` for new
-    messages or `query.edit_message_text` for edits."""
+    messages or `query.edit_message_text` for edits. `user_id` is needed
+    to record the menu in the button gate's history."""
     seerr: SeerrClient = ctx.bot_data["seerr"]
     try:
         results = await seerr.search(query, limit=SEARCH_RESULT_LIMIT)
@@ -213,13 +217,19 @@ async def _show_search_results(
         "version": version,
         "by_key": {(r.media_type, r.tmdb_id): r for r in results},
     }
-    await reply_method("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
+    # Record the menu with the button gate, or it rejects every tap as stale
+    # for any user who already has recorded button messages (e.g. ticket DMs).
+    sent = await reply_method("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
+    record_btn(ctx.application, user_id, sent)
     return PICK_MEDIA
 
 
 async def issue_title(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.effective_message.text.strip()
-    return await _show_search_results(update.effective_message.reply_text, ctx, query)
+    return await _show_search_results(
+        update.effective_message.reply_text, ctx, query,
+        user_id=update.effective_user.id,
+    )
 
 
 async def issue_research_parent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
@@ -230,7 +240,10 @@ async def issue_research_parent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) 
     if not parent:
         await q.edit_message_text("Lost search context. /issue to start over.")
         return ConversationHandler.END
-    return await _show_search_results(q.edit_message_text, ctx, parent)
+    return await _show_search_results(
+        q.edit_message_text, ctx, parent,
+        user_id=update.effective_user.id,
+    )
 
 
 async def issue_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
@@ -269,10 +282,13 @@ async def issue_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
                 callback_data=ISSUE_RESEARCH_PARENT,
             )])
         text += "\n\nOr /issue to start over."
-        await q.edit_message_text(
+        sent = await q.edit_message_text(
             text,
             reply_markup=InlineKeyboardMarkup(rows) if rows else None,
         )
+        if rows:
+            # Keep the re-search button live in the gate's history.
+            record_btn(ctx.application, update.effective_user.id, sent)
         return PICK_MEDIA if parent else ConversationHandler.END
     ctx.user_data["media"] = {
         "type": media_type,
@@ -315,11 +331,14 @@ async def _show_season_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     label = ctx.user_data["media"]["title"]
     if ctx.user_data["media"]["year"]:
         label += f" ({ctx.user_data['media']['year']})"
-    await q.edit_message_text(
+    # Re-record each flow step's edit so the menu stays in the newest slot of
+    # the gate's history (a webhook DM burst mid-flow could otherwise evict it).
+    sent = await q.edit_message_text(
         f"Selected: *{label}*\n\nWhich season?",
         reply_markup=InlineKeyboardMarkup(rows),
         parse_mode="Markdown",
     )
+    record_btn(ctx.application, update.effective_user.id, sent)
     return PICK_SEASON
 
 
@@ -346,10 +365,11 @@ async def issue_pick_season(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
         rows.append(row)
     rows.append([InlineKeyboardButton("📦 Whole season", callback_data=f"{ISSUE_EPISODE}:0")])
     rows.append([InlineKeyboardButton("Cancel", callback_data=ISSUE_CANCEL)])
-    await q.edit_message_text(
+    sent = await q.edit_message_text(
         f"Season {season} — which episode?",
         reply_markup=InlineKeyboardMarkup(rows),
     )
+    record_btn(ctx.application, update.effective_user.id, sent)
     return PICK_EPISODE
 
 
@@ -384,11 +404,12 @@ async def _show_type_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
             label += f" — S{season} (whole season)"
         else:
             label += f" — S{season}E{ep}"
-    await q.edit_message_text(
+    sent = await q.edit_message_text(
         f"Selected: *{label}*\n\nWhat kind of issue?",
         reply_markup=InlineKeyboardMarkup(rows),
         parse_mode="Markdown",
     )
+    record_btn(ctx.application, update.effective_user.id, sent)
     return PICK_TYPE
 
 
@@ -465,10 +486,11 @@ async def issue_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
         InlineKeyboardButton("✅ Try auto-fix", callback_data=f"{ISSUE_AUTOFIX_OFFER}:yes"),
         InlineKeyboardButton("📨 Just report", callback_data=f"{ISSUE_AUTOFIX_OFFER}:no"),
     ]]
-    await update.effective_message.reply_text(
+    sent = await update.effective_message.reply_text(
         f"Try to auto-fix? This will delete the file and trigger a new search.{remaining_msg}",
         reply_markup=InlineKeyboardMarkup(rows),
     )
+    record_btn(ctx.application, update.effective_user.id, sent)
     return OFFER_AUTOFIX
 
 
@@ -492,11 +514,12 @@ async def issue_offer_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         InlineKeyboardButton("⚠️ Yes, delete & re-search", callback_data=f"{ISSUE_AUTOFIX_CONFIRM}:yes"),
         InlineKeyboardButton("No, just report", callback_data=f"{ISSUE_AUTOFIX_CONFIRM}:no"),
     ]]
-    await q.edit_message_text(
+    sent = await q.edit_message_text(
         "⚠️ This will *delete the current file* from disk and trigger a new download. Confirm?",
         reply_markup=InlineKeyboardMarkup(rows),
         parse_mode="Markdown",
     )
+    record_btn(ctx.application, update.effective_user.id, sent)
     return CONFIRM_AUTOFIX
 
 

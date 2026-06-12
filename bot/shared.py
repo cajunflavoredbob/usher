@@ -265,8 +265,15 @@ BTN_HISTORY_MAX = 3
 def record_btn(app, user_id: int, message) -> None:
     """Record `message` as a button-bearing bot message for `user_id`. The
     global button gate admits callbacks whose source message matches any of
-    the last BTN_HISTORY_MAX entries (FIFO eviction)."""
-    if message is None:
+    the last BTN_HISTORY_MAX entries (FIFO eviction).
+
+    `message` may be whatever the send/edit call returned: anything without
+    a message_id (None, or the bare `True` an inline-message edit returns)
+    is ignored. Re-recording an already-tracked message (a flow step that
+    edits its menu in place) refreshes its timestamp and moves it to the
+    newest slot instead of duplicating it, so a long multi-step flow can't
+    evict itself out of its own history."""
+    if message is None or getattr(message, "message_id", None) is None:
         return
     history: dict = app.bot_data.setdefault("btn_msgs", {})
     entry = {
@@ -275,6 +282,11 @@ def record_btn(app, user_id: int, message) -> None:
         "sent_at": datetime.now(timezone.utc).isoformat(),
     }
     user_entries: list = history.setdefault(user_id, [])
+    user_entries[:] = [
+        e for e in user_entries
+        if (e.get("chat_id"), e.get("message_id"))
+        != (entry["chat_id"], entry["message_id"])
+    ]
     user_entries.append(entry)
     while len(user_entries) > BTN_HISTORY_MAX:
         user_entries.pop(0)
@@ -282,7 +294,7 @@ def record_btn(app, user_id: int, message) -> None:
 
 async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """TypeHandler at group=-1. Runs before any callback handler. The gate
-    snapshots the per-user button history once at entry, then decides — so a
+    snapshots the per-user button history once at entry, then decides, so a
     concurrent webhook that appends a fresh entry mid-await can't shift the
     decision out from under us. A callback is admitted iff its source message
     matches one of the recent BTN_HISTORY_MAX entries AND is younger than
@@ -317,7 +329,7 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     if latest.get("message_id") == msg_id:
         reason = "This menu has expired. Run the command again."
     else:
-        reason = "Use the most recent message — this menu is from an older one."
+        reason = "Use the most recent message - this menu is from an older one."
     try:
         await q.answer(reason, show_alert=False)
     except Exception:

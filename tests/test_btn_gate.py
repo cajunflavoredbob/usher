@@ -83,6 +83,26 @@ def test_record_btn_skips_none_message():
     assert "btn_msgs" not in app.bot_data or app.bot_data["btn_msgs"].get(42) is None
 
 
+def test_record_btn_ignores_non_message_returns():
+    """Inline-message edits return bare True; anything without a message_id
+    must be ignored, not crash or pollute the history."""
+    app = _make_app()
+    record_btn(app, 42, True)
+    record_btn(app, 42, SimpleNamespace())
+    assert "btn_msgs" not in app.bot_data or app.bot_data["btn_msgs"].get(42) is None
+
+
+def test_record_btn_refreshes_existing_entry():
+    """Re-recording an already-tracked message (a flow step that edits its
+    menu in place) moves it to the newest slot instead of duplicating it."""
+    app = _make_app()
+    record_btn(app, 42, _make_message(1001))
+    record_btn(app, 42, _make_message(1002))
+    record_btn(app, 42, _make_message(1001))
+    entries = app.bot_data["btn_msgs"][42]
+    assert [e["message_id"] for e in entries] == [1002, 1001]
+
+
 # --- global_btn_gate ---
 
 

@@ -32,6 +32,7 @@ from bot.shared import (
     AWAIT_LINK_CONSENT,
     AWAIT_PLATFORM_CHOICE,
     _require_seerr,
+    record_btn,
 )
 from const import (
     LINK_FLOW_TIMEOUT_S,
@@ -80,12 +81,15 @@ async def cmd_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         InlineKeyboardButton("✅ Yes, continue", callback_data=f"{LINK_CONSENT}:yes"),
         InlineKeyboardButton("🛑 Cancel", callback_data=f"{LINK_CONSENT}:no"),
     ]]
-    await msg.reply_text(
+    # Record with the button gate, or it rejects every tap as stale for any
+    # user who already has recorded button messages (e.g. ticket DMs).
+    sent = await msg.reply_text(
         "Sign in with Plex so issues you submit are tagged as you.\n\n"
         "You can use /unlink anytime to remove access.\n\n"
         "Continue?",
         reply_markup=InlineKeyboardMarkup(rows),
     )
+    record_btn(ctx.application, update.effective_user.id, sent)
     return AWAIT_LINK_CONSENT
 
 
@@ -100,10 +104,11 @@ async def cmd_link_consent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
         InlineKeyboardButton("💻 Desktop", callback_data=f"{LINK_PLATFORM}:desktop"),
         InlineKeyboardButton("📱 iOS / Android", callback_data=f"{LINK_PLATFORM}:mobile"),
     ]])
-    await q.edit_message_text(
+    sent = await q.edit_message_text(
         "Where are you using Telegram?",
         reply_markup=kb,
     )
+    record_btn(ctx.application, update.effective_user.id, sent)
     return AWAIT_PLATFORM_CHOICE
 
 
@@ -234,7 +239,11 @@ async def cmd_link_platform(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
         ])
         text = "Tap to copy the auth link, then paste it into a browser."
 
-    await q.edit_message_text(text, reply_markup=kb)
+    sent = await q.edit_message_text(text, reply_markup=kb)
+    # Re-record so the "Having trouble?" / "Didn't work?" fallback button
+    # stays in the newest slot of the gate's history through the long
+    # (up-to-28-min) auth wait.
+    record_btn(ctx.application, update.effective_user.id, sent)
 
     # Strong PIN window: under the 30-min lifetime; see const.py.
     auth_token = await _poll_with_cancel(plex, pin.id,
