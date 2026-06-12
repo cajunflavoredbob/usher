@@ -24,25 +24,34 @@ from store import Mapping
 # --- Telegram object fakes --------------------------------------------------
 
 def make_message(text: str = "", message_id: int = 100, chat_id: int = 100):
-    """Fake telegram.Message. Records reply_text + edit_message_text calls."""
+    """Fake telegram.Message. Records reply_text + edit_message_text calls.
+    Like real PTB, reply_text returns the newly sent Message (a fresh fake
+    with its own message_id) and edit_message_text returns the edited
+    message itself, so handlers that record the result (button-gate
+    bookkeeping) see realistic objects."""
     reply_calls: list[dict] = []
     edit_calls: list[dict] = []
 
     async def reply_text(text, **kwargs):
         reply_calls.append({"text": text, **kwargs})
+        return make_message(message_id=message_id + len(reply_calls),
+                            chat_id=chat_id)
 
-    async def edit_message_text(text, **kwargs):
-        edit_calls.append({"text": text, **kwargs})
-
-    return SimpleNamespace(
+    msg = SimpleNamespace(
         text=text,
         message_id=message_id,
         chat_id=chat_id,
         reply_text=reply_text,
-        edit_message_text=edit_message_text,
         reply_calls=reply_calls,
         edit_calls=edit_calls,
     )
+
+    async def edit_message_text(text, **kwargs):
+        edit_calls.append({"text": text, **kwargs})
+        return msg
+
+    msg.edit_message_text = edit_message_text
+    return msg
 
 
 def make_callback_query(data: str, *, user_id: int, chat_id: int = 100,
@@ -56,13 +65,15 @@ def make_callback_query(data: str, *, user_id: int, chat_id: int = 100,
     async def answer(text: str = "", show_alert: bool = False):
         answers.append((text, show_alert))
 
+    msg = make_message(message_id=message_id, chat_id=chat_id)
+
     async def edit_message_text(text, **kwargs):
         edits.append({"text": text, **kwargs})
+        # Real PTB returns the edited Message (same id as the source).
+        return msg
 
     async def edit_message_reply_markup(reply_markup=None, **kwargs):
         markup_edits.append(reply_markup)
-
-    msg = make_message(message_id=message_id, chat_id=chat_id)
     return SimpleNamespace(
         data=data,
         from_user=SimpleNamespace(id=user_id),
