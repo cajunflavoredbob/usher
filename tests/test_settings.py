@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -175,6 +176,120 @@ def test_store_save_roundtrip(tmp_settings_path: Path, monkeypatch):
     store.save()
     reread = SettingsStore(tmp_settings_path)
     assert reread.settings.telegram_bot_token == "new-token"
+
+
+# --- crash-safe write + corrupt-file preservation (v0.11.20) ---
+
+
+def _quiet_env(monkeypatch):
+    for var in ("HERMES_WEBHOOK_SECRET", "TELEGRAM_BOT_TOKEN", "ADMIN_TELEGRAM_ID"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_write_calls_fsync_and_atomic_replace(tmp_settings_path: Path, monkeypatch):
+    """_write must fsync the temp file before an atomic os.replace, and fsync
+    the parent dir after -- otherwise an unsafe shutdown can truncate the file."""
+    _quiet_env(monkeypatch)
+    import settings as settings_mod
+
+    fsynced_fds: list = []
+    real_fsync = os.fsync
+    monkeypatch.setattr(
+        settings_mod.os, "fsync", lambda fd: (fsynced_fds.append(fd), real_fsync(fd))[1]
+    )
+    replaced: list = []
+    real_replace = os.replace
+    monkeypatch.setattr(
+        settings_mod.os, "replace",
+        lambda src, dst: (replaced.append((str(src), str(dst))), real_replace(src, dst))[1],
+    )
+
+    store = SettingsStore(tmp_settings_path)  # seed triggers a _write
+    store.settings.telegram_bot_token = "tok"
+    fsynced_fds.clear()
+    replaced.clear()
+    store.save()
+
+    # At least two fsyncs: the temp file fd and the parent directory fd.
+    assert len(fsynced_fds) >= 2
+    # The final landing is an atomic replace onto the real path.
+    assert any(dst == str(tmp_settings_path) for _, dst in replaced)
+    assert json.loads(tmp_settings_path.read_text())["telegram_bot_token"] == "tok"
+    # No leftover temp file.
+    assert not tmp_settings_path.with_suffix(".tmp").exists()
+
+
+def test_write_survives_dir_fsync_unsupported(tmp_settings_path: Path, monkeypatch):
+    """Parent-dir fsync is best-effort; an OSError there must not break save()."""
+    _quiet_env(monkeypatch)
+    import settings as settings_mod
+
+    store = SettingsStore(tmp_settings_path)
+
+    def boom(path, *a, **k):
+        raise OSError("no dir fd here")
+
+    monkeypatch.setattr(settings_mod.os, "open", boom)
+    store.settings.telegram_bot_token = "still-works"
+    store.save()  # must not raise
+    assert json.loads(tmp_settings_path.read_text())["telegram_bot_token"] == "still-works"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["", "   ", "{not valid json", '{"admin_telegram_id":', "\x00\x00\x00"],
+)
+def test_corrupt_file_is_preserved_not_destroyed(tmp_settings_path: Path, monkeypatch, bad):
+    """A corrupt/truncated settings.json is moved to a .corrupt.N sidecar and a
+    fresh config seeded -- the original bytes are never silently overwritten."""
+    _quiet_env(monkeypatch)
+    tmp_settings_path.write_text(bad)
+
+    store = SettingsStore(tmp_settings_path)
+
+    sidecar = tmp_settings_path.parent / f"{tmp_settings_path.name}.corrupt.1"
+    assert sidecar.exists()
+    assert sidecar.read_text() == bad  # original bytes preserved verbatim
+    # The live file is now valid, freshly seeded JSON.
+    reloaded = json.loads(tmp_settings_path.read_text())
+    assert "webhook_secret" in reloaded
+    assert store.settings.webhook_secret
+
+
+def test_repeated_corruption_keeps_numbered_backups(tmp_settings_path: Path, monkeypatch):
+    """The same bad file reappearing must not clobber an earlier rescue copy."""
+    _quiet_env(monkeypatch)
+
+    tmp_settings_path.write_text("{corrupt-one")
+    SettingsStore(tmp_settings_path)
+    tmp_settings_path.write_text("{corrupt-two")
+    SettingsStore(tmp_settings_path)
+
+    base = tmp_settings_path.parent
+    assert (base / f"{tmp_settings_path.name}.corrupt.1").read_text() == "{corrupt-one"
+    assert (base / f"{tmp_settings_path.name}.corrupt.2").read_text() == "{corrupt-two"
+
+
+def test_missing_file_seeds_silently_no_sidecar(tmp_settings_path: Path, monkeypatch):
+    """A genuinely absent file is a legitimate fresh install: seed, no .corrupt."""
+    _quiet_env(monkeypatch)
+    assert not tmp_settings_path.exists()
+
+    store = SettingsStore(tmp_settings_path)
+    assert store.settings.webhook_secret
+    assert not (tmp_settings_path.parent / f"{tmp_settings_path.name}.corrupt.1").exists()
+
+
+def test_valid_file_loads_unchanged(tmp_settings_path: Path, monkeypatch):
+    """A valid existing file is loaded as-is, with no corrupt sidecar created."""
+    _quiet_env(monkeypatch)
+    secret = "keep-this-secret"
+    tmp_settings_path.write_text(json.dumps({"webhook_secret": secret, "telegram_bot_token": "t"}))
+
+    store = SettingsStore(tmp_settings_path)
+    assert store.settings.webhook_secret == secret
+    assert store.settings.telegram_bot_token == "t"
+    assert not (tmp_settings_path.parent / f"{tmp_settings_path.name}.corrupt.1").exists()
 
 
 # --- session secret ---
