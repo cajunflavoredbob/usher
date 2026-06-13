@@ -6,11 +6,11 @@ import httpx
 import pytest
 
 from http_util import (
-    APIError,
     NotFoundAPIError,
     PermanentAPIError,
     TransientAPIError,
     classify_response,
+    execute,
     user_friendly_message,
     with_retry,
 )
@@ -18,6 +18,26 @@ from http_util import (
 
 def _response(status: int, body: bytes = b"", content_type: str = "application/json") -> httpx.Response:
     return httpx.Response(status, content=body, headers={"Content-Type": content_type})
+
+
+class _FakeClient:
+    """Minimal httpx.AsyncClient stand-in for execute() tests. Each call to
+    request() yields the next item from `script`; an Exception is raised, an
+    httpx.Response is returned. The last item repeats once the script runs out."""
+
+    def __init__(self, script: list):
+        self.script = script
+        self.calls = 0
+
+    async def request(self, method: str, url: str, **kwargs) -> httpx.Response:
+        item = self.script[min(self.calls, len(self.script) - 1)]
+        self.calls += 1
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
+_FAST = {"backoff_base": 0.001, "backoff_cap": 0.01}
 
 
 # --- classify_response ---
@@ -41,10 +61,29 @@ def test_classify_429_is_transient():
         classify_response(_response(429, b'{"message": "slow down"}'), service="Seerr")
 
 
-@pytest.mark.parametrize("code", [502, 503, 504, 408])
+@pytest.mark.parametrize("code", [500, 502, 503, 504, 408])
 def test_classify_5xx_subset_transient(code):
     with pytest.raises(TransientAPIError):
         classify_response(_response(code), service="X")
+
+
+def test_classify_501_is_permanent():
+    """501 Not Implemented is a permanent 'endpoint doesn't exist', not a
+    transient server blip -- it must not be retried."""
+    with pytest.raises(PermanentAPIError) as ei:
+        classify_response(_response(501), service="X")
+    assert not isinstance(ei.value, TransientAPIError)
+
+
+@pytest.mark.parametrize("code", [301, 302, 307, 308])
+def test_classify_3xx_is_permanent_redirect(code):
+    """Clients don't follow redirects; a 3xx is a misconfiguration surfaced
+    as an error, not a pass-through 'success'."""
+    with pytest.raises(PermanentAPIError) as ei:
+        classify_response(_response(code), service="X")
+    assert ei.value.status_code == code
+    assert "redirect" in ei.value.user_message.lower()
+    assert not isinstance(ei.value, TransientAPIError)
 
 
 @pytest.mark.parametrize("code", [400, 401, 403, 422])
@@ -171,6 +210,127 @@ async def test_with_retry_wraps_timeout():
         await with_retry(fn, retries=1, backoff_base=0.001, backoff_cap=0.01)
     assert "TimeoutException" in str(ei.value)
     assert calls["n"] == 2
+
+
+async def test_with_retry_idempotent_retries_read_error():
+    """ReadError/WriteError were previously uncaught and bypassed retry +
+    friendly wrapping. For an idempotent call they should now retry."""
+    calls = {"n": 0}
+
+    async def fn():
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise httpx.ReadError("connection reset")
+        return "recovered"
+
+    result = await with_retry(fn, retries=3, **_FAST)
+    assert result == "recovered"
+    assert calls["n"] == 2
+
+
+# --- with_retry: idempotency-aware (non-idempotent must not duplicate) ---
+
+
+async def test_non_idempotent_does_not_retry_5xx():
+    """A 5xx on a POST may mean the server processed it then failed to reply;
+    retrying could double the side effect, so it raises immediately."""
+    calls = {"n": 0}
+
+    async def fn():
+        calls["n"] += 1
+        raise TransientAPIError("server error", status_code=503, service="Seerr")
+
+    with pytest.raises(TransientAPIError):
+        await with_retry(fn, retries=5, idempotent=False, **_FAST)
+    assert calls["n"] == 1
+
+
+async def test_non_idempotent_does_not_retry_post_send_error():
+    """A read timeout means the request was already in flight -- don't retry
+    a non-idempotent call."""
+    calls = {"n": 0}
+
+    async def fn():
+        calls["n"] += 1
+        raise httpx.ReadTimeout("slow")
+
+    with pytest.raises(TransientAPIError):
+        await with_retry(fn, retries=5, idempotent=False, **_FAST)
+    assert calls["n"] == 1
+
+
+async def test_non_idempotent_retries_pre_send_connect_error():
+    """A connect error means the server never saw the request -- safe to retry
+    even for a non-idempotent call."""
+    calls = {"n": 0}
+
+    async def fn():
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise httpx.ConnectError("dns broke")
+        return "ok"
+
+    result = await with_retry(fn, retries=5, idempotent=False, **_FAST)
+    assert result == "ok"
+    assert calls["n"] == 2
+
+
+async def test_non_idempotent_retries_429():
+    """429 is an explicit 'rejected, not processed' -- safe to retry even for
+    a non-idempotent call."""
+    calls = {"n": 0}
+
+    async def fn():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise TransientAPIError("slow down", status_code=429, service="Seerr")
+        return "ok"
+
+    result = await with_retry(fn, retries=5, idempotent=False, **_FAST)
+    assert result == "ok"
+    assert calls["n"] == 3
+
+
+# --- execute: retry safety derived from HTTP method ---
+
+
+async def test_execute_get_retries_transient():
+    client = _FakeClient([_response(503), _response(200, b'{"ok": true}')])
+    r = await execute(client, "GET", "/thing", service="X", **_FAST)
+    assert r.status_code == 200
+    assert client.calls == 2
+
+
+async def test_execute_post_does_not_retry_transient():
+    """The core fix: a POST that 503s is not retried, so no duplicate ticket."""
+    client = _FakeClient([_response(503), _response(200)])
+    with pytest.raises(TransientAPIError):
+        await execute(client, "POST", "/issue", service="Seerr", **_FAST)
+    assert client.calls == 1
+
+
+async def test_execute_post_retries_pre_send_connect_error():
+    client = _FakeClient([httpx.ConnectError("dns"), _response(200)])
+    r = await execute(client, "POST", "/issue", service="Seerr", **_FAST)
+    assert r.status_code == 200
+    assert client.calls == 2
+
+
+async def test_execute_post_idempotent_override_retries():
+    """An explicit idempotent=True override restores retry-on-transient for a
+    POST the server treats idempotently."""
+    client = _FakeClient([_response(503), _response(200)])
+    r = await execute(client, "POST", "/x", service="X", idempotent=True, **_FAST)
+    assert r.status_code == 200
+    assert client.calls == 2
+
+
+async def test_execute_delete_retries_transient():
+    """DELETE is idempotent -- still retries."""
+    client = _FakeClient([_response(503), _response(200)])
+    r = await execute(client, "DELETE", "/moviefile/5", service="Radarr", **_FAST)
+    assert r.status_code == 200
+    assert client.calls == 2
 
 
 # --- user_friendly_message ---
