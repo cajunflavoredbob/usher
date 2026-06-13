@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.21] - 2026-06-13
+
+HTTP idempotency & retry-correctness cluster from the 2026-06-12 backend audit. The retry layer treated every request as safe to retry, so a flaky network could silently duplicate side effects.
+
+### Fixed
+- **Non-idempotent requests (POST/PATCH) are no longer blindly retried.** `execute()` wrapped every method in `with_retry`, so a `create_issue` / `add_issue_comment` / `resolve_issue` POST that hit a timeout or 5xx after the server had already processed it got retried - posting a duplicate ticket or comment. Retry safety is now derived from the HTTP method (`IDEMPOTENT_METHODS`): GET/HEAD/PUT/DELETE retry on any transient failure as before; POST/PATCH retry **only** when the request provably never reached the server (a pre-send connect error) or was rejected before processing (429). A post-send timeout or a 5xx on a non-idempotent call now raises instead of risking a duplicate. Callers can override with `execute(..., idempotent=True/False)`.
+- **`with_retry` now catches `httpx.ReadError` / `WriteError`.** Connection resets mid-response previously slipped past the retry/wrapping layer and surfaced as a raw httpx error with no friendly message; they're now handled like other transport failures (retried for idempotent calls, surfaced cleanly for non-idempotent ones).
+- **A 3xx response is treated as an error, not success.** The clients don't follow redirects, so `classify_response`'s `< 400` check passed a 3xx through as if it carried a usable body; an unexpected redirect (e.g. an http->https bounce from a misconfigured base URL) now raises a permanent error naming the status.
+- **500 is retryable; 501 is not.** `RETRYABLE_STATUSES` omitted 500 despite the comment claiming the standard 5xx transients. 500/502/503/504 (and 408/429) now retry for idempotent calls; 501 Not Implemented stays permanent.
+- 16 new tests in `tests/test_http_util.py` (idempotency-aware retry, method derivation via a fake client, 3xx/500/501 classification, ReadError handling). 268 tests total (was 252).
+
 ## [0.11.20] - 2026-06-13
 
 Settings-durability cluster from the 2026-06-12 backend audit: an unsafe shutdown on server1 could silently wipe the admin config.
