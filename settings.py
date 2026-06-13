@@ -118,7 +118,18 @@ class SettingsStore:
                 logger.info("Loaded settings from %s", self.path)
                 s = Settings.from_dict(data)
             except Exception:
-                logger.exception("Failed to load %s; seeding fresh from env", self.path)
+                # An existing-but-unreadable file is an anomaly, not a fresh
+                # install: it usually means an unsafe shutdown truncated the
+                # last write (see _write). Preserve the corrupt bytes -- never
+                # silently destroy the admin password hash / webhook secret /
+                # autofix allowlist -- before reseeding from env. Loud ERROR so
+                # the operator can recover values from the sidecar.
+                backup = self._preserve_corrupt_file()
+                logger.error(
+                    "Could not parse %s; preserved corrupt file at %s and "
+                    "seeding fresh from env. Recover values from the backup if needed.",
+                    self.path, backup,
+                )
                 s = self._seed_from_env()
                 self._write(s)
                 logger.info("Seeded settings from env vars -> %s", self.path)
@@ -171,14 +182,54 @@ class SettingsStore:
             admin=AdminAccount(),  # always unset on first run
         )
 
+    def _preserve_corrupt_file(self) -> Optional[Path]:
+        """Move the unparseable settings file aside to a numbered sidecar so
+        its contents survive the reseed. Numbered (.corrupt.1, .corrupt.2, ...)
+        so a bad file that reappears boot-after-boot never clobbers an earlier
+        rescue copy. Returns the sidecar path, or None if it could not be
+        preserved (in which case the caller's reseed overwrites in place)."""
+        for n in range(1, 1000):
+            candidate = self.path.parent / f"{self.path.name}.corrupt.{n}"
+            if not candidate.exists():
+                try:
+                    os.replace(self.path, candidate)
+                    return candidate
+                except OSError:
+                    logger.exception("Failed to preserve corrupt %s", self.path)
+                    return None
+        return None
+
+    def _fsync_parent_dir(self) -> None:
+        """fsync the containing directory so a rename is itself durable.
+        Best-effort: some platforms/filesystems can't open a dir for fsync."""
+        try:
+            dir_fd = os.open(self.path.parent, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
+
     def _write(self, s: Settings) -> None:
+        # Crash-safe write: flush + fsync the temp file's contents to disk
+        # BEFORE the atomic rename, then fsync the parent directory so the
+        # rename is durable too. Without this, an unsafe shutdown (server1
+        # loses power mid-write) can land the rename before the data, leaving a
+        # truncated settings.json -- which _load_or_seed would then have to
+        # preserve-and-reseed, locking the admin out. POSIX rename is already
+        # atomic; durability is what we add here.
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(s.to_dict(), indent=2))
-        tmp.replace(self.path)
+        with open(tmp, "w") as f:
+            f.write(json.dumps(s.to_dict(), indent=2))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, self.path)
         try:
             os.chmod(self.path, 0o600)
         except OSError:
             pass
+        self._fsync_parent_dir()
 
     def save(self) -> None:
         self._write(self.settings)

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.20] - 2026-06-13
+
+Settings-durability cluster from the 2026-06-12 backend audit: an unsafe shutdown on server1 could silently wipe the admin config.
+
+### Fixed
+- **`settings.json` writes are now crash-safe.** `_write` previously wrote a temp file and atomically renamed it, but never `fsync`'d the data before the rename or the parent directory after. On an unsafe shutdown (server1 losing power mid-write) the rename could reach disk before the contents, leaving a truncated `settings.json`. The temp file's contents are now flushed and fsync'd before the atomic `os.replace`, and the parent directory is fsync'd after (best-effort) so the rename itself is durable.
+- **A corrupt `settings.json` is preserved, not silently overwritten.** `_load_or_seed` caught any parse error and immediately reseeded from env defaults, destroying the admin password hash, webhook secret, and autofix allowlist with no backup - so a truncated file from the bug above turned into a full config wipe and admin lockout on the next boot. The unreadable file is now moved aside to a numbered `settings.json.corrupt.N` sidecar (numbered so a bad file reappearing boot-after-boot never clobbers an earlier rescue copy) and logged at ERROR before reseeding. A genuinely missing file is still treated as a normal fresh install and seeds silently.
+
 ## [0.11.19] - 2026-06-12
 
 Fixes from the 2026-06-12 backend audit: the post-autofix resolve chain was broken end to end.
