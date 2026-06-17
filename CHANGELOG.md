@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.23] - 2026-06-16
+
+The ticket detail view showed only the original submission - no replies.
+
+### Fixed
+- **Tapping a ticket now shows the full reply thread.** `get_issue` parsed the issue's `comments` array but kept only `comments[0]` (the original report, used as the description) and discarded every later comment, so the detail view had no thread to render. `get_issue` now splits the array: `comments[0]` stays the description, and the rest is parsed into a new `IssueListItem.comments` list (author, message, timestamp). The detail view renders these under a "Replies:" section, oldest-first, each line showing the commenter and relative age. The thread is capped at the 20 most recent comments (with a "last 20 of N" note) so a long conversation can't push the message past Telegram's ~4096-char limit. No new Seerr request - same `get_issue` call, previously-discarded data.
+- 10 new tests: `tests/test_seerr_get_issue.py` (thread parsing - description/thread split, author fallbacks, empty/whitespace handling) and `tests/test_ticket_detail_thread.py` (render order, cap note, HTML escaping). 288 tests total (was 278).
+
 ## [0.11.22] - 2026-06-16
 
 Two issue-conversation bugs reported from production: a reporter's follow-up comment never reached the admin, and tapping Reply destroyed the issue announcement it was attached to.
