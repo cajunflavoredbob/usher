@@ -62,6 +62,10 @@ from bot.shared import (
 
 logger = logging.getLogger("hermes")
 
+# Cap the reply thread rendered in a ticket detail view so a long-running
+# conversation can't push the message past Telegram's ~4096-char limit.
+MAX_THREAD_COMMENTS = 20
+
 
 async def _require_admin(
     q, ctx: ContextTypes.DEFAULT_TYPE, *, action_label: str,
@@ -214,12 +218,14 @@ async def _build_ticket_detail(
     reporter = ""
     age = ""
     description = ""
+    comments: list = []
     try:
         issue = await seerr.get_issue(issue_id, as_plex_token=None if is_admin else token)
         type_emoji, type_name = ISSUE_TYPES.get(issue.issue_type, ("❓", "Other"))
         reporter = issue.created_by or ""
         age = _format_age(issue.created_at) if issue.created_at else ""
         description = (issue.description or "").strip()
+        comments = issue.comments or []
         if issue.media_type in ("movie", "tv") and issue.tmdb_id:
             try:
                 title, year = await seerr.get_media_title(issue.media_type, issue.tmdb_id)
@@ -246,6 +252,19 @@ async def _build_ticket_detail(
         lines.append("")
         lines.append("<b>Description:</b>")
         lines.append(f"<i>\"{html.escape(description)}\"</i>")
+    if comments:
+        lines.append("")
+        shown = comments[-MAX_THREAD_COMMENTS:]
+        if len(comments) > MAX_THREAD_COMMENTS:
+            lines.append(f"<b>Replies</b> (last {MAX_THREAD_COMMENTS} of {len(comments)}):")
+        else:
+            lines.append("<b>Replies:</b>")
+        for c in shown:
+            age_c = _format_age(c.created_at) if c.created_at else ""
+            head = f"<b>{html.escape(c.author or '?')}</b>"
+            if age_c:
+                head += f" · {age_c}"
+            lines.append(f"{head}: <i>\"{html.escape(c.message)}\"</i>")
     return "\n".join(lines), _ticket_detail_kb(issue_id, is_admin)
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import httpx
@@ -48,6 +48,14 @@ class TvSeason:
 
 
 @dataclass
+class IssueComment:
+    """One reply in an issue's comment thread (after the original report)."""
+    author: str                # displayName / plexUsername of the commenter
+    message: str
+    created_at: str = ""       # ISO 8601
+
+
+@dataclass
 class IssueListItem:
     id: int
     issue_type: int            # 1=Video, 2=Audio, 3=Subtitle, 4=Other
@@ -62,6 +70,9 @@ class IssueListItem:
                                # as the first entry in the issue's comments array). May be
                                # empty for IssueListItems returned by list_issues, which
                                # doesn't include comments.
+    comments: list = field(default_factory=list)  # Reply thread AFTER the original report
+                               # (list of IssueComment); populated only by get_issue, empty
+                               # for list_issues entries.
 
 
 class SeerrClient:
@@ -257,13 +268,24 @@ class SeerrClient:
             d = r.json()
         media = d.get("media") or {}
         created_by = d.get("createdBy") or {}
-        # The original report text is stored as the first comment in the
-        # issue's comments array (Seerr posts the description there at creation).
+        # Seerr posts the original report as comments[0] at creation; everything
+        # after it is the reply thread.
         description = ""
-        comments = d.get("comments") or []
-        if comments:
-            first = comments[0] or {}
-            description = (first.get("message") or "").strip()
+        thread: list = []
+        for idx, c in enumerate(d.get("comments") or []):
+            c = c or {}
+            msg = (c.get("message") or "").strip()
+            if idx == 0:
+                description = msg
+                continue
+            if not msg:
+                continue
+            user = c.get("user") or {}
+            thread.append(IssueComment(
+                author=user.get("displayName") or user.get("plexUsername") or "?",
+                message=msg,
+                created_at=c.get("createdAt", ""),
+            ))
         return IssueListItem(
             id=d["id"],
             issue_type=d.get("issueType", 4),
@@ -275,6 +297,7 @@ class SeerrClient:
             problem_episode=d.get("problemEpisode"),
             created_by=created_by.get("displayName") or created_by.get("plexUsername") or "?",
             description=description,
+            comments=thread,
         )
 
     async def get_media_title(self, media_type: str, tmdb_id: int) -> tuple[str, str]:
