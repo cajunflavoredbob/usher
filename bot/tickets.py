@@ -522,7 +522,13 @@ async def tk_reply_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
     ctx.user_data["tk_reply_id"] = issue_id
     ctx.user_data["tk_close_after"] = False
-    await q.edit_message_text(
+    # Strip the inline buttons but keep the original issue-announcement text,
+    # then prompt for the reply text in a separate message.
+    try:
+        await q.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        logger.debug("Couldn't clear buttons on ticket #%d message", issue_id)
+    await q.message.reply_text(
         f"Send the reply text for ticket #{issue_id} (or /cancel)."
     )
     return AWAIT_TICKET_REPLY
@@ -540,7 +546,13 @@ async def tk_close_with_comment_start(update: Update, ctx: ContextTypes.DEFAULT_
         return ConversationHandler.END
     ctx.user_data["tk_reply_id"] = issue_id
     ctx.user_data["tk_close_after"] = True
-    await q.edit_message_text(
+    # Strip the inline buttons but keep the original issue-announcement text,
+    # then prompt for the closing comment in a separate message.
+    try:
+        await q.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        logger.debug("Couldn't clear buttons on ticket #%d message", issue_id)
+    await q.message.reply_text(
         f"Send the closing comment for ticket #{issue_id} (or /cancel)."
     )
     return AWAIT_TICKET_REPLY

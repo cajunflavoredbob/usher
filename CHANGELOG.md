@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.22] - 2026-06-16
+
+Two issue-conversation bugs reported from production: a reporter's follow-up comment never reached the admin, and tapping Reply destroyed the issue announcement it was attached to.
+
+### Fixed
+- **A reporter's follow-up comment now notifies the admin.** `handle_seerr_comment` only ever DMed the reporter and bailed out entirely when the commenter *was* the reporter (`commenter == reporter -> skip`), so when a user replied to the admin's reply on their own ticket, nobody was notified - the admin never saw the follow-up. The handler now routes to the *other* party in the conversation: the reporter is notified when someone else comments (unchanged), and the admin is notified when the reporter (or a third party) comments. Whoever wrote the comment is never notified about their own comment, and when the admin is also the reporter they're DMed once, not twice. The Reply button still appears only while the ticket is OPEN.
+- **Tapping Reply no longer erases the issue announcement.** `tk_reply_start` and `tk_close_with_comment_start` called `edit_message_text`, overwriting the entire message (issue title, type, reporter, description) with the "Send the reply text..." prompt. They now strip only the inline buttons (`edit_message_reply_markup(None)`, the same call the button gate uses) and send the prompt as a separate message, so the announcement stays on screen for context while you type.
+- 10 new tests: `tests/test_webhook_handlers_comment.py` (comment notification routing - the first handler-level coverage for `webhook_handlers.py`) and `tests/test_tk_reply_start.py` (Reply/close-with-comment keep the announcement text). 278 tests total (was 268).
+
 ## [0.11.21] - 2026-06-13
 
 HTTP idempotency & retry-correctness cluster from the 2026-06-12 backend audit. The retry layer treated every request as safe to retry, so a flaky network could silently duplicate side effects.

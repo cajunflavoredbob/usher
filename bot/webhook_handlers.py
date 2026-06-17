@@ -24,7 +24,10 @@ logger = logging.getLogger("hermes")
 
 
 async def handle_seerr_comment(app: Application, payload: dict) -> None:
-    """Process an ISSUE_COMMENT webhook from Seerr and DM the reporter."""
+    """Process an ISSUE_COMMENT webhook and notify the other party in the
+    conversation: the reporter when someone else comments, and the admin when
+    the reporter (or a third party) comments. Whoever wrote the comment is
+    never notified about their own comment."""
     issue = payload.get("issue") or {}
     comment = payload.get("comment") or {}
     media = payload.get("media") or {}
@@ -42,22 +45,25 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
     if not reporter_username:
         logger.info("Webhook comment on issue #%d: no reporter username; dropping", issue_id)
         return
-    if commenter_username and commenter_username.lower() == reporter_username.lower():
-        # Don't echo the user's own comment back at them.
-        logger.info("Webhook comment on issue #%d: commenter == reporter; skipping", issue_id)
-        return
     if not comment_text:
         logger.info("Webhook comment on issue #%d: empty comment; dropping", issue_id)
         return
 
     store: UserStore = app.bot_data["store"]
-    mapping = await store.find_by_plex_username(reporter_username)
-    if mapping is None:
-        logger.info(
-            "Webhook comment on issue #%d: reporter '%s' not linked in Hermes; dropping",
-            issue_id, reporter_username,
-        )
-        return
+    admin_id = app.bot_data.get("admin_id")
+
+    # Resolve the admin's Plex username so we can tell whether the admin wrote
+    # this comment (and must therefore not be notified about it).
+    admin_mapping = await store.get(admin_id) if admin_id else None
+    admin_plex = (admin_mapping.plex_username if admin_mapping else "") or ""
+    commenter_is_admin = bool(
+        commenter_username and admin_plex
+        and commenter_username.lower() == admin_plex.lower()
+    )
+    commenter_is_reporter = bool(
+        commenter_username
+        and commenter_username.lower() == reporter_username.lower()
+    )
 
     seerr: Optional[SeerrClient] = app.bot_data.get("seerr")
     title_line = await format_media_title_line(
@@ -78,34 +84,54 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
     lines.append("")
     lines.append("<b>Comment:</b>")
     lines.append(f"<i>\"{safe_comment}\"</i>")
+    text = "\n".join(lines)
 
     # Offer an inline Reply button when the ticket is still open
     issue_status = (issue.get("issue_status") or "").upper()
-    reply_kb = None
-    if issue_status == "OPEN":
-        reply_kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton("💬 Reply", callback_data=f"{TK_REPLY}:{issue_id}"),
-        ]])
 
-    try:
-        sent = await app.bot.send_message(
-            chat_id=mapping.telegram_id,
-            text="\n".join(lines),
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-            reply_markup=reply_kb,
-        )
-        if reply_kb is not None:
-            record_btn(app, mapping.telegram_id, sent)
-        logger.info(
-            "Notified telegram_id=%d of comment on issue #%d from '%s'",
-            mapping.telegram_id, issue_id, commenter_username,
-        )
-    except Exception:
-        logger.exception(
-            "Failed to DM telegram_id=%d about issue #%d comment",
-            mapping.telegram_id, issue_id,
-        )
+    async def _notify(chat_id: int, who: str) -> None:
+        reply_kb = None
+        if issue_status == "OPEN":
+            reply_kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("💬 Reply", callback_data=f"{TK_REPLY}:{issue_id}"),
+            ]])
+        try:
+            sent = await app.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                reply_markup=reply_kb,
+            )
+            if reply_kb is not None:
+                record_btn(app, chat_id, sent)
+            logger.info(
+                "Notified %s telegram_id=%d of comment on issue #%d from '%s'",
+                who, chat_id, issue_id, commenter_username,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to DM %s telegram_id=%d about issue #%d comment",
+                who, chat_id, issue_id,
+            )
+
+    # Notify the reporter unless they wrote the comment.
+    reporter_tid = None
+    if not commenter_is_reporter:
+        mapping = await store.find_by_plex_username(reporter_username)
+        if mapping is None:
+            logger.info(
+                "Webhook comment on issue #%d: reporter '%s' not linked; "
+                "skipping reporter notify", issue_id, reporter_username,
+            )
+        else:
+            reporter_tid = mapping.telegram_id
+            await _notify(mapping.telegram_id, "reporter")
+
+    # Notify the admin unless they wrote the comment or are the reporter
+    # (already notified just above).
+    if admin_id and not commenter_is_admin and admin_id != reporter_tid:
+        await _notify(admin_id, "admin")
 
 
 async def handle_seerr_resolved(app: Application, payload: dict) -> None:
