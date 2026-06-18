@@ -12,11 +12,12 @@ from telegram.ext import Application
 from seerr import SeerrClient
 from store import UserStore
 
-from bot.callback_prefixes import TK_CLOSE, TK_FIX, TK_REPLY
+from bot.callback_prefixes import TK_CLOSE, TK_FIX, TK_OPEN, TK_REPLY
 from bot.shared import (
     ISSUE_TYPE_LABELS,
+    extract_affected_se,
     format_media_title_line,
-    format_se_suffix,
+    format_scope_label,
     record_btn,
 )
 
@@ -66,11 +67,9 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
     )
 
     seerr: Optional[SeerrClient] = app.bot_data.get("seerr")
-    title_line = await format_media_title_line(
-        seerr, media,
-        problem_season=issue.get("problemSeason"),
-        problem_episode=issue.get("problemEpisode"),
-    )
+    title_line = await format_media_title_line(seerr, media)
+    season, episode = extract_affected_se(payload)
+    scope_label = format_scope_label(media.get("media_type"), season, episode)
 
     safe_comment = html.escape(comment_text)
     safe_commenter = html.escape(commenter_username or "Seerr")
@@ -79,6 +78,8 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
     lines = [f"💬 New comment on issue #{issue_id}"]
     if safe_title:
         lines.append(safe_title)
+    if scope_label:
+        lines.append(html.escape(scope_label))
     lines.append("")
     lines.append(f"<b>From:</b> {safe_commenter}")
     lines.append("")
@@ -86,15 +87,15 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
     lines.append(f"<i>\"{safe_comment}\"</i>")
     text = "\n".join(lines)
 
-    # Offer an inline Reply button when the ticket is still open
+    # Always offer History (the full comment chain); add Reply while open.
     issue_status = (issue.get("issue_status") or "").upper()
+    row = []
+    if issue_status == "OPEN":
+        row.append(InlineKeyboardButton("💬 Reply", callback_data=f"{TK_REPLY}:{issue_id}"))
+    row.append(InlineKeyboardButton("📜 History", callback_data=f"{TK_OPEN}:{issue_id}"))
+    reply_kb = InlineKeyboardMarkup([row])
 
     async def _notify(chat_id: int, who: str) -> None:
-        reply_kb = None
-        if issue_status == "OPEN":
-            reply_kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("💬 Reply", callback_data=f"{TK_REPLY}:{issue_id}"),
-            ]])
         try:
             sent = await app.bot.send_message(
                 chat_id=chat_id,
@@ -103,8 +104,7 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
                 disable_web_page_preview=True,
                 reply_markup=reply_kb,
             )
-            if reply_kb is not None:
-                record_btn(app, chat_id, sent)
+            record_btn(app, chat_id, sent)
             logger.info(
                 "Notified %s telegram_id=%d of comment on issue #%d from '%s'",
                 who, chat_id, issue_id, commenter_username,
@@ -160,13 +160,12 @@ async def handle_seerr_resolved(app: Application, payload: dict) -> None:
         )
 
     seerr: Optional[SeerrClient] = app.bot_data.get("seerr")
-    title_line = await format_media_title_line(
-        seerr, media,
-        problem_season=issue.get("problemSeason"),
-        problem_episode=issue.get("problemEpisode"),
-    )
+    title_line = await format_media_title_line(seerr, media)
+    season, episode = extract_affected_se(payload)
+    scope_label = format_scope_label(media.get("media_type"), season, episode)
 
     safe_title = html.escape(title_line) if title_line else ""
+    safe_scope = html.escape(scope_label) if scope_label else ""
     safe_reporter = html.escape(reporter_username)
     admin_id = app.bot_data.get("admin_id")
 
@@ -175,6 +174,8 @@ async def handle_seerr_resolved(app: Application, payload: dict) -> None:
         reporter_lines = [f"✅ Your issue #{issue_id} was resolved."]
         if safe_title:
             reporter_lines.append(safe_title)
+        if safe_scope:
+            reporter_lines.append(safe_scope)
         try:
             await app.bot.send_message(
                 chat_id=mapping.telegram_id,
@@ -195,6 +196,8 @@ async def handle_seerr_resolved(app: Application, payload: dict) -> None:
         admin_lines = [f"✅ Issue #{issue_id} resolved"]
         if safe_title:
             admin_lines.append(safe_title)
+        if safe_scope:
+            admin_lines.append(safe_scope)
         admin_lines.append(f"<b>Reported by:</b> {safe_reporter}")
         try:
             await app.bot.send_message(
@@ -240,13 +243,9 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
         return
 
     seerr: Optional[SeerrClient] = app.bot_data.get("seerr")
-    # The reported flow shows just the media title; S/E suffix appended below
-    # so the unconditional season-bit join in the legacy code is preserved.
-    base_title = await format_media_title_line(seerr, media)
-    se_suffix = format_se_suffix(issue.get("problemSeason"), issue.get("problemEpisode"))
-    title_line = base_title
-    if base_title and se_suffix:
-        title_line = f"{base_title} — {se_suffix}"
+    title_line = await format_media_title_line(seerr, media)
+    season, episode = extract_affected_se(payload)
+    scope_label = format_scope_label(media.get("media_type"), season, episode)
 
     issue_type_str = (issue.get("issue_type") or "OTHER").upper()
     type_emoji, type_label = ISSUE_TYPE_LABELS.get(issue_type_str, ("❓", "Other"))
@@ -259,6 +258,10 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
         f"🆕 New issue <b>#{issue_id}</b>",
         "",
         safe_title,
+    ]
+    if scope_label:
+        lines.append(html.escape(scope_label))
+    lines += [
         "",
         f"<b>Issue type:</b> {type_emoji} {type_label}",
         f"<b>Reported by:</b> {safe_reporter}",
@@ -268,11 +271,14 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
         f"<i>\"{safe_desc}\"</i>",
     ]
 
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("💬 Reply", callback_data=f"{TK_REPLY}:{issue_id}"),
-        InlineKeyboardButton("🔧 Fix", callback_data=f"{TK_FIX}:{issue_id}"),
-        InlineKeyboardButton("✅ Close", callback_data=f"{TK_CLOSE}:{issue_id}"),
-    ]])
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("💬 Reply", callback_data=f"{TK_REPLY}:{issue_id}"),
+            InlineKeyboardButton("🔧 Fix", callback_data=f"{TK_FIX}:{issue_id}"),
+            InlineKeyboardButton("✅ Close", callback_data=f"{TK_CLOSE}:{issue_id}"),
+        ],
+        [InlineKeyboardButton("📜 History", callback_data=f"{TK_OPEN}:{issue_id}")],
+    ])
 
     try:
         sent = await app.bot.send_message(

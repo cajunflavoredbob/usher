@@ -158,6 +158,67 @@ def format_se_suffix(problem_season, problem_episode) -> str:
     return f"S{s:02d}E{e:02d}" if e else f"S{s:02d}"
 
 
+def _se_to_int(v):
+    """Coerce a season/episode value (int / str / None / "") to int, or None."""
+    if v in (None, ""):
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+# One-time guard so we log the raw webhook `extra` shape exactly once per
+# process -- enough to verify the affected-season/episode field names against a
+# live Seerr payload without spamming the log on every webhook.
+_EXTRA_SHAPE_LOGGED = False
+
+
+def extract_affected_se(payload: dict):
+    """Pull the affected (season, episode) as ints from a Seerr webhook payload.
+
+    Seerr's default webhook delivers these in the top-level `extra` array as
+    `{"name": "Affected Season", "value": "1"}` / `"Affected Episode"`; a custom
+    webhook template may instead set problemSeason/problemEpisode on the issue
+    object. Tolerant of both; returns (None, None) when neither is present.
+    """
+    global _EXTRA_SHAPE_LOGGED
+    issue = payload.get("issue") or {}
+    season = issue.get("problemSeason")
+    episode = issue.get("problemEpisode")
+    extra = payload.get("extra") or []
+    for item in extra:
+        if not isinstance(item, dict):
+            continue
+        name = (item.get("name") or "").lower()
+        if "season" in name and season in (None, ""):
+            season = item.get("value")
+        elif "episode" in name and episode in (None, ""):
+            episode = item.get("value")
+    if not _EXTRA_SHAPE_LOGGED and (issue.get("media") or payload.get("media")):
+        _EXTRA_SHAPE_LOGGED = True
+        logger.info(
+            "Seerr webhook `extra` shape (first seen): %r; parsed season=%r episode=%r",
+            [i.get("name") for i in extra if isinstance(i, dict)], season, episode,
+        )
+    return _se_to_int(season), _se_to_int(episode)
+
+
+def format_scope_label(media_type, season, episode) -> str:
+    """Human-readable affected scope for a TV issue:
+    'Season 1, Episode 5' / 'Season 1' / 'All seasons'. Empty for movies.
+
+    Seerr uses season 0 (and absence) to mean a whole-series / all-seasons
+    issue, so a falsy season renders as 'All seasons'."""
+    if (media_type or "").lower() != "tv":
+        return ""
+    if not season:
+        return "All seasons"
+    if episode:
+        return f"Season {season}, Episode {episode}"
+    return f"Season {season}"
+
+
 async def format_media_title_line(
     seerr: Optional[SeerrClient],
     media: dict,

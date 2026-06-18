@@ -1,8 +1,8 @@
 """HTTP routes that receive Seerr webhook events.
 
 Seerr -> Settings -> Notifications -> Webhook delivers JSON POSTs to
-/webhook/seerr. The default Overseerr/Jellyseerr JSON template is what
-this handler expects; no customization needed by the user.
+/webhook/seerr. The default Seerr JSON template is what this handler
+expects; no customization needed by the user.
 
 The webhook secret is read from app state on every request so that
 runtime updates via the webui take effect without a restart.

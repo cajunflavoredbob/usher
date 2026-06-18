@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.24] - 2026-06-17
+
+Three issue-notification improvements from a live TV-issue thread.
+
+### Fixed
+- **TV notifications now show the affected season/episode (or "All seasons").** The new-issue, comment, and resolved DMs read `issue.problemSeason`/`problemEpisode` - but those are *REST API* field names; the Seerr *webhook* delivers the affected season/episode in the top-level `extra` array (`Affected Season` / `Affected Episode`). No handler read `extra`, so the scope silently dropped and a TV issue looked identical whether it was one episode or the whole series. A new `extract_affected_se` parses the `extra` array (falling back to `problemSeason`/`problemEpisode` for custom webhook templates), and `format_scope_label` renders a human-readable line under the title: `Season 1, Episode 5` / `Season 1` / `All seasons` (Seerr's season 0 / absent = whole series). Movies show no scope line. The raw `extra` shape is logged once per process so the field names can be verified against a live payload.
+
+### Added
+- **📜 History button on new-issue and comment notifications.** A comment DM showed a single comment in isolation; if a reply arrived later, buried in chat history, there was no way to see the conversation. Both the new-issue and comment messages now carry a History button that opens the full ticket detail (with the reply thread added in v0.11.23). The comment DM shows History always and Reply only while the ticket is open.
+
+### Changed
+- **Clearer auto-fix description.** The `(Auto-fix triggered by reporter.)` line appended to an auto-fix issue now explains what auto-fix does: that the current file was removed and a fresh download started automatically, and that it can take a while to finish and reappear in Plex.
+- 16 new tests (`test_affected_scope.py`, `test_webhook_handlers_reported.py`, additions to `test_webhook_handlers_comment.py`). 304 tests total (was 288).
+
 ## [0.11.23] - 2026-06-16
 
 The ticket detail view showed only the original submission - no replies.
