@@ -560,7 +560,11 @@ async def _submit_issue(
 
     full_message = description
     if autofix:
-        full_message += "\n\n(Auto-fix triggered by reporter.)"
+        full_message += (
+            "\n\n(Auto-fix requested by reporter: the current file was removed and a "
+            "fresh download was started automatically. This can take a while to finish "
+            "and reappear in Plex.)"
+        )
 
     # 1. Create issue in Seerr first
     try:

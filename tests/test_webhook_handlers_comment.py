@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from bot.webhook_handlers import handle_seerr_comment
-from bot.callback_prefixes import TK_REPLY
+from bot.callback_prefixes import TK_OPEN, TK_REPLY
 from tests._handler_harness import make_ctx, make_mapping
 
 
@@ -104,29 +104,57 @@ async def test_admin_is_reporter_no_double_dm():
     assert ids == [999], "admin/reporter is the same chat -- notify once, not twice"
 
 
-# --- reply button only when OPEN --------------------------------------------
+# --- buttons: Reply only when OPEN, History always --------------------------
 
 
-async def test_reply_button_present_when_open():
+def _callbacks(kb):
+    return [b.callback_data for row in kb.inline_keyboard for b in row]
+
+
+async def test_reply_and_history_present_when_open():
     admin = make_mapping(telegram_id=999, plex_username="kennyplex")
     reporter = make_mapping(telegram_id=111, plex_username="nathan")
     app = _app(admin_id=999, admin_mapping=admin, reporter_mapping=reporter)
 
     await handle_seerr_comment(app, _payload(commenter="nathan", status="OPEN"))
 
-    kb = app.bot.send_message.call_args.kwargs["reply_markup"]
-    assert kb is not None
-    assert kb.inline_keyboard[0][0].callback_data == f"{TK_REPLY}:42"
+    cbs = _callbacks(app.bot.send_message.call_args.kwargs["reply_markup"])
+    assert f"{TK_REPLY}:42" in cbs
+    assert f"{TK_OPEN}:42" in cbs
 
 
-async def test_no_reply_button_when_resolved():
+async def test_history_present_no_reply_when_resolved():
     admin = make_mapping(telegram_id=999, plex_username="kennyplex")
     reporter = make_mapping(telegram_id=111, plex_username="nathan")
     app = _app(admin_id=999, admin_mapping=admin, reporter_mapping=reporter)
 
     await handle_seerr_comment(app, _payload(commenter="nathan", status="RESOLVED"))
 
-    assert app.bot.send_message.call_args.kwargs["reply_markup"] is None
+    cbs = _callbacks(app.bot.send_message.call_args.kwargs["reply_markup"])
+    assert cbs == [f"{TK_OPEN}:42"]   # History only, no Reply on a resolved ticket
+
+
+# --- affected season/episode scope line -------------------------------------
+
+
+async def test_scope_line_from_extra_array():
+    admin = make_mapping(telegram_id=999, plex_username="kennyplex")
+    reporter = make_mapping(telegram_id=111, plex_username="nathan")
+    app = _app(admin_id=999, admin_mapping=admin, reporter_mapping=reporter)
+    # get_media_title is mocked to ("Movie Title", "2026") in the harness.
+    payload = {
+        "notification_type": "ISSUE_COMMENT",
+        "issue": {"issue_id": 42, "reportedBy_username": "nathan", "issue_status": "OPEN"},
+        "comment": {"commentedBy_username": "nathan", "comment_message": "still broken"},
+        "media": {"media_type": "tv", "tmdbId": 555},
+        "extra": [
+            {"name": "Affected Season", "value": "1"},
+            {"name": "Affected Episode", "value": "5"},
+        ],
+    }
+    await handle_seerr_comment(app, payload)
+    text = app.bot.send_message.call_args.kwargs["text"]
+    assert "Season 1, Episode 5" in text
 
 
 # --- guards -----------------------------------------------------------------
