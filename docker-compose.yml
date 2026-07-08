@@ -1,0 +1,16 @@
+services:
+  hermes:
+    # For local development: build .
+    # For published image: image: cajunflavoredbob/hermes:latest
+    build: .
+    container_name: hermes
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./data:/data
+    # No environment variables required. After first start, open
+    # http://<host>:8765/admin to finish setup. Advanced users can pin
+    # the Plex-token encryption key here (otherwise auto-generated):
+    #   environment:
+    #     HERMES_ENCRYPTION_KEY: ${HERMES_ENCRYPTION_KEY}

@@ -1,0 +1,60 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>hermes</Name>
+  <Repository>cajunflavoredbob/hermes:latest</Repository>
+  <Registry>https://hub.docker.com/r/cajunflavoredbob/hermes</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/cajunflavoredbob/hermes/issues</Support>
+  <Project>https://github.com/cajunflavoredbob/hermes</Project>
+  <Overview>A Telegram bot that lets your users report media issues to Seerr (the unified Overseerr/Jellyseerr successor), with optional self-service auto-fix that tells Radarr or Sonarr to delete the file and re-search. All configuration happens in a built-in admin web UI -- no environment variables required.</Overview>
+  <Category>MediaApp:Other</Category>
+  <WebUI>http://[IP]:[PORT:8765]/admin</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/cajunflavoredbob/hermes/main/unraid-template.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/cajunflavoredbob/hermes/main/icon.png</Icon>
+  <Date>2026-05-25</Date>
+  <Changes>### v0.8.0&#xD;
+- All settings moved to the admin web UI. No environment variables required to install -- start the container, open the web UI, finish setup.&#xD;
+&#xD;
+### v0.7.0&#xD;
+- Slim admin web UI at /admin (settings, backup/restore, password change)&#xD;
+&#xD;
+### v0.6.0&#xD;
+- Comment-reply notifications via Seerr webhook</Changes>
+  <Requires/>
+  <DonateText/>
+  <DonateLink/>
+  <Description>A Telegram bot that lets your users report media issues to [Seerr](https://seerr.dev/), with optional self-service auto-fix.&#xD;
+&#xD;
+**Setup**&#xD;
+1. Install the container (no environment variables needed)&#xD;
+2. Click the **WebUI** button on the container card (or open `http://&lt;unraid-ip&gt;:8765/admin`)&#xD;
+3. The first-run page collects: admin username + password, Telegram bot token (from @BotFather), your Telegram user ID (DM @userinfobot to get yours), and Seerr URL + API key&#xD;
+4. Save -- the container restarts and the bot comes online&#xD;
+5. Log in and configure Radarr/Sonarr, auto-fix allowlist, webhook secret, etc.&#xD;
+6. In Telegram, DM `/setprivacy` to @BotFather, select your bot, choose **Disable** (lets the bot see commands in group chats)&#xD;
+7. DM the bot `/link` to authorize with Plex&#xD;
+&#xD;
+**Web UI features**&#xD;
+- Edit any setting with hot reload (Telegram bot token + admin ID changes restart the container automatically)&#xD;
+- Download an encrypted backup ZIP (settings + mappings DB + encryption key)&#xD;
+- Restore from backup (container restarts automatically)&#xD;
+- Change admin password&#xD;
+&#xD;
+**Enable comment-reply notifications (optional)**&#xD;
+1. In Seerr, go to Settings → Notifications → Webhook&#xD;
+2. Webhook URL: `http://&lt;unraid-ip&gt;:8765/webhook/seerr`&#xD;
+3. Authorization Header: paste the Webhook Secret from the Hermes web UI (leave blank if no secret)&#xD;
+4. Enable the **Issue Comment** notification type&#xD;
+5. Click "Test" to confirm Hermes receives it&#xD;
+&#xD;
+See the [project page](https://github.com/cajunflavoredbob/hermes) for full docs.</Description>
+
+  <Config Name="App Data" Target="/data" Default="/mnt/user/appdata/hermes" Mode="rw" Description="Stores settings.json, user mappings DB, encryption key, session secret." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/hermes</Config>
+
+  <Config Name="Web UI / Webhook Port" Target="8765" Default="8765" Mode="tcp" Description="Port for both the admin web UI (/admin) and Seerr webhook receiver (/webhook/seerr)." Type="Port" Display="always" Required="true" Mask="false">8765</Config>
+
+  <Config Name="Encryption Key (advanced)" Target="HERMES_ENCRYPTION_KEY" Default="" Mode="" Description="Fernet key used to encrypt stored Plex tokens at rest. Leave blank for normal use -- Hermes generates one on first run and persists it to /data/encryption.key. Set this only if you need to control the key explicitly (e.g. migrating from another install). Generate with: python -c &quot;from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())&quot;" Type="Variable" Display="advanced" Required="false" Mask="true"/>
+</Container>
