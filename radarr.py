@@ -84,12 +84,16 @@ class RadarrClient:
         blocklisted = False
         if blocklist:
             try:
+                # /history/movie is the per-movie endpoint (bare array, newest
+                # first). The paginated /history endpoint has no singular
+                # `movieId` filter -- Radarr silently ignores unknown params,
+                # which made this query return library-wide history and could
+                # blocklist a different movie's grab.
                 r = await execute(
-                    self._client, "GET", "/history", service=_SERVICE,
-                    params={"movieId": movie.id, "page": 1, "pageSize": 20,
-                            "sortKey": "date", "sortDirection": "descending"},
+                    self._client, "GET", "/history/movie", service=_SERVICE,
+                    params={"movieId": movie.id},
                 )
-                records = r.json().get("records") or []
+                records = r.json() or []
                 grab = next((rec for rec in records if rec.get("eventType") == "grabbed"), None)
                 if grab is not None:
                     await execute(self._client, "POST", f"/history/failed/{grab['id']}",

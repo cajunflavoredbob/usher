@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.25] - 2026-07-12
+
+### Fixed
+- **Mark Failed now blocklists the right movie's grab.** The Radarr client
+  filtered history with `movieId=` on the paginated `/history` endpoint - a
+  param Radarr silently ignores (its filter is `movieIds`, plural) - so it
+  actually fetched the newest 20 events across the whole library and marked
+  the most recent grab it found there as failed, whichever movie it belonged
+  to. Meanwhile the target movie's release was never blocklisted, so the
+  triggered re-search re-grabbed the exact same file. Now uses the per-movie
+  `/history/movie?movieId=` endpoint, which also finds grabs older than the
+  newest 20 events. Sonarr was unaffected (`episodeId` is a real filter
+  there). Added wire-level regression tests (`tests/test_radarr_client.py`)
+  that drive the real client over a mock transport, since client-level mocks
+  had baked in the wrong param.
+
 ## [0.11.24] - 2026-06-17
 
 Three issue-notification improvements from a live TV-issue thread.
