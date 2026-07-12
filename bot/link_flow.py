@@ -27,7 +27,7 @@ from plex import PlexClient
 from seerr import SeerrClient
 from store import UserStore
 
-from bot.callback_prefixes import LINK_CONSENT, LINK_HELP, LINK_PLATFORM
+from bot.callback_prefixes import LINK_CONSENT, LINK_HELP, LINK_PLATFORM, RELINK
 from bot.shared import (
     AWAIT_LINK_CONSENT,
     AWAIT_PLATFORM_CHOICE,
@@ -54,7 +54,11 @@ async def _link_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 def _link_conversation() -> ConversationHandler:
     return ConversationHandler(
-        entry_points=[CommandHandler("link", cmd_link)],
+        entry_points=[
+            CommandHandler("link", cmd_link),
+            # Revoked-token recovery button (bot.shared.prompt_plex_relink)
+            CallbackQueryHandler(cmd_relink, pattern=fr"^{RELINK}$"),
+        ],
         states={
             AWAIT_LINK_CONSENT: [CallbackQueryHandler(cmd_link_consent, pattern=fr"^{LINK_CONSENT}:")],
             AWAIT_PLATFORM_CHOICE: [CallbackQueryHandler(cmd_link_platform, pattern=fr"^{LINK_PLATFORM}:")],
@@ -91,6 +95,29 @@ async def cmd_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     )
     record_btn(ctx.application, update.effective_user.id, sent)
     return AWAIT_LINK_CONSENT
+
+
+async def cmd_relink(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """'Unlink & sign in again' tap (revoked-token recovery): clear the dead
+    token and drop straight into the platform-choice step. The consent step
+    is skipped -- tapping the recovery button IS the consent."""
+    q = update.callback_query
+    await q.answer()
+    if await _require_seerr(update, ctx) is None:
+        return ConversationHandler.END
+    store: UserStore = ctx.bot_data["store"]
+    await store.unlink(update.effective_user.id)
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("💻 Desktop", callback_data=f"{LINK_PLATFORM}:desktop"),
+        InlineKeyboardButton("📱 iOS / Android", callback_data=f"{LINK_PLATFORM}:mobile"),
+    ]])
+    sent = await q.edit_message_text(
+        "🔓 Old Plex session cleared.\n\n"
+        "Now let's get you signed back in. Where are you using Telegram?",
+        reply_markup=kb,
+    )
+    record_btn(ctx.application, update.effective_user.id, sent)
+    return AWAIT_PLATFORM_CHOICE
 
 
 async def cmd_link_consent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:

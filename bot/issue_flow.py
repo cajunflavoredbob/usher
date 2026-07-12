@@ -21,7 +21,7 @@ from telegram.ext import (
 
 from http_util import user_friendly_message
 from radarr import RadarrClient
-from seerr import CreatedIssue, SeerrClient
+from seerr import CreatedIssue, PlexTokenInvalidError, SeerrClient
 from settings import SettingsStore
 from sonarr import SonarrClient
 from store import UserStore
@@ -49,6 +49,7 @@ from bot.shared import (
     TITLE,
     _format_media_label,
     _require_seerr,
+    prompt_plex_relink,
     record_btn,
 )
 from bot.tickets import _run_arr_action
@@ -577,6 +578,9 @@ async def _submit_issue(
             problem_episode=episode if media["type"] == "tv" else None,
             as_plex_token=mapping.plex_token,
         )
+    except PlexTokenInvalidError:
+        await prompt_plex_relink(update, ctx)
+        return ConversationHandler.END
     except Exception as exc:
         logger.exception("create_issue failed")
         await update.effective_message.reply_text(f"Failed to create issue. {user_friendly_message(exc)}")

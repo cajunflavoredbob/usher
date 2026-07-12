@@ -34,7 +34,7 @@ from telegram.ext import (
 from fix_result import FixResult
 from http_util import user_friendly_message
 from radarr import RadarrClient
-from seerr import SeerrClient
+from seerr import PlexTokenInvalidError, SeerrClient
 from sonarr import SonarrClient
 from store import UserStore
 
@@ -58,6 +58,7 @@ from bot.shared import (
     _require_seerr,
     _ticket_detail_kb,
     _token_for,
+    prompt_plex_relink,
 )
 
 logger = logging.getLogger("hermes")
@@ -115,6 +116,9 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             take=25,
             as_plex_token=None if is_admin else mapping.plex_token,
         )
+    except PlexTokenInvalidError:
+        await prompt_plex_relink(update, ctx)
+        return
     except Exception as exc:
         logger.exception("list_issues failed")
         await update.effective_message.reply_text(f"Couldn't fetch tickets. {user_friendly_message(exc)}")
@@ -194,7 +198,11 @@ async def tk_open(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await q.message.reply_text("DM me /link first so I can act on tickets as you.")
         return
 
-    text, kb = await _build_ticket_detail(ctx, issue_id, is_admin, token)
+    try:
+        text, kb = await _build_ticket_detail(ctx, issue_id, is_admin, token)
+    except PlexTokenInvalidError:
+        await prompt_plex_relink(update, ctx)
+        return
     msg = await q.message.reply_text(
         text,
         parse_mode="HTML",
@@ -238,6 +246,8 @@ async def _build_ticket_detail(
                 media_label = f"{m_emoji} {bare}"
             except Exception:
                 logger.exception("get_media_title failed for #%d", issue_id)
+    except PlexTokenInvalidError:
+        raise  # callers show the re-link prompt; a degraded view can't help
     except Exception:
         logger.exception("get_issue failed for #%d", issue_id)
     lines = [f"<b>Ticket #{issue_id}</b>"]
@@ -289,7 +299,11 @@ async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_admin and token is None:
         await q.message.reply_text("DM me /link first so I can act on tickets as you.")
         return
-    text, kb = await _build_ticket_detail(ctx, issue_id, is_admin, token)
+    try:
+        text, kb = await _build_ticket_detail(ctx, issue_id, is_admin, token)
+    except PlexTokenInvalidError:
+        await prompt_plex_relink(update, ctx)
+        return
     try:
         await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
     except Exception:
@@ -602,6 +616,11 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     seerr: SeerrClient = ctx.bot_data["seerr"]
     try:
         await seerr.add_issue_comment(issue_id, text, as_plex_token=token)
+    except PlexTokenInvalidError:
+        await prompt_plex_relink(update, ctx)
+        ctx.user_data.pop("tk_reply_id", None)
+        ctx.user_data.pop("tk_close_after", None)
+        return ConversationHandler.END
     except Exception as exc:
         logger.exception("add_issue_comment failed for #%d", issue_id)
         await update.effective_message.reply_text(f"Couldn't post comment on #{issue_id}. {user_friendly_message(exc)}")

@@ -165,6 +165,7 @@ def make_ctx(*, admin_id: int = 999, user_data: Optional[dict] = None,
         log_autofix=AsyncMock(),
         find_by_plex_username=AsyncMock(return_value=None),
         count_autofix_24h=AsyncMock(return_value=0),
+        unlink=AsyncMock(return_value=True),
     )
     bot_data: dict = {
         "admin_id": admin_id,

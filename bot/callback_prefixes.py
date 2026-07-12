@@ -25,6 +25,8 @@ TK_CLOSE_DIRECT: Final = "tkcd"
 LINK_CONSENT: Final = "link_consent"  # link_consent:yes / link_consent:no
 LINK_PLATFORM: Final = "tklplat"      # tklplat:desktop / tklplat:mobile
 LINK_HELP: Final = "tklhelp"          # fixed-shape "Didn't work?" callback
+RELINK: Final = "relink"              # fixed-shape "Unlink & sign in again"
+                                      # (revoked-Plex-token recovery)
 
 # --- /issue flow -----------------------------------------------------------
 ISSUE_MEDIA: Final = "media"

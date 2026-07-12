@@ -19,6 +19,8 @@ from telegram.ext import ApplicationHandlerStop, ContextTypes, ConversationHandl
 from seerr import SeerrClient
 from store import UserStore
 
+from bot.callback_prefixes import RELINK
+
 logger = logging.getLogger("hermes")
 
 # --- Conversation states ----------------------------------------------------
@@ -351,6 +353,26 @@ def record_btn(app, user_id: int, message) -> None:
     user_entries.append(entry)
     while len(user_entries) > BTN_HISTORY_MAX:
         user_entries.pop(0)
+
+
+async def prompt_plex_relink(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Recovery prompt for a revoked Plex token (PlexTokenInvalidError): one
+    tap unlinks the dead session and drops the user into the sign-in flow
+    (link_flow.cmd_relink). Works from both callback and message contexts."""
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔗 Unlink & sign in again", callback_data=RELINK),
+    ]])
+    text = (
+        "⚠️ Plex says your sign-in is no longer valid. This usually happens "
+        "after a password change or signing out of all devices.\n\n"
+        "Tap below to clear the old session and sign back in - takes about "
+        "a minute."
+    )
+    if update.callback_query:
+        sent = await update.callback_query.edit_message_text(text, reply_markup=kb)
+    else:
+        sent = await update.effective_message.reply_text(text, reply_markup=kb)
+    record_btn(ctx.application, update.effective_user.id, sent)
 
 
 async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:

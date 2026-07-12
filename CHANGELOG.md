@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.26] - 2026-07-12
+
+### Fixed
+- **Revoked Plex tokens now get a guided re-link instead of a false "Seerr
+  isn't responding".** Seerr reports a dead Plex token on `/auth/plex` as a
+  500 "Unable to authenticate." - which the retry classifier read as
+  transient, so every user-token action (submit issue, close, comment,
+  /tickets) answered "try again in a minute" for an error no retry can fix.
+  `_as_user` now converts that (and 401/403) into `PlexTokenInvalidError`,
+  and every surface catches it with a one-tap recovery: "Unlink & sign in
+  again" clears the dead session and drops the user straight into the
+  platform-choice step of the existing /link flow (consent is implied by
+  the tap). Genuine Seerr outages keep the transient classification, and
+  wire-level tests (`tests/test_seerr_plex_auth.py`) pin the split.
+
+### Changed
+- **Resolve-flow and timeout copy no longer refers to "the admin" in the
+  third person when the admin is the one in the flow.** The comment prompt,
+  comment acknowledgement, and auto-fix-timeout DM now use admin-appropriate
+  wording ("I'll add it to the issue" / "Want to add a note to the issue?")
+  when the recipient is the admin.
+
 ## [0.11.25] - 2026-07-12
 
 ### Fixed

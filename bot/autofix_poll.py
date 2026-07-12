@@ -133,12 +133,16 @@ async def _notify_complete(ctx: ContextTypes.DEFAULT_TYPE, fix, extra: str = "")
 
 
 async def _notify_timeout(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:
+    # The admin follows up on their own issues; don't tell them to comment
+    # "for the admin".
+    is_admin = fix.user_id == ctx.bot_data.get("admin_id")
     lines = [
         f"⏱️ Auto-fix timed out ({AUTOFIX_TIMEOUT_HOURS}h) for <b>{html.escape(fix.label)}</b>.",
         "No new file was imported. Check Sonarr/Radarr to see if a release was grabbed.",
         *_issue_line(fix),
         "",
-        "Want to add a comment for the admin to follow up?",
+        "Want to add a note to the issue?" if is_admin
+        else "Want to add a comment for the admin to follow up?",
     ]
     keyboard = [[
         InlineKeyboardButton("💬 Add a comment", callback_data=f"{RESOLVE}:{fix.issue_id}:no"),

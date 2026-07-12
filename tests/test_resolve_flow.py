@@ -5,13 +5,16 @@ from __future__ import annotations
 
 from telegram.ext import ConversationHandler
 
+from bot.callback_prefixes import RELINK
 from bot.resolve_flow import (
     _resolve_conversation,
     _resolve_timeout,
     resolve_comment,
     resolve_start,
 )
+from bot.shared import AWAIT_COMMENT
 from const import RESOLVE_FLOW_TIMEOUT_S
+from seerr import PlexTokenInvalidError
 from tests._handler_harness import make_ctx, make_mapping, make_update
 
 
@@ -91,6 +94,72 @@ async def test_comment_posts_with_user_token():
     await resolve_comment(upd, ctx)
     ctx.bot_data["seerr"].add_issue_comment.assert_called_once_with(
         42, "audio still off", as_plex_token="plex-abc")
+
+
+# --- audience-specific copy ---------------------------------------------------
+
+
+async def test_user_comment_prompt_mentions_admin():
+    upd = make_update(callback_data="resolve:42:no", user_id=42)
+    ctx = make_ctx(admin_id=999, mapping=make_mapping(plex_token="plex-abc"))
+    state = await resolve_start(upd, ctx)
+    assert state == AWAIT_COMMENT
+    assert "admin will see it" in upd.callback_query.edits[0]["text"]
+
+
+async def test_admin_comment_prompt_omits_admin_reference():
+    """The admin IS the admin; 'admin will see it' reads wrong for them."""
+    upd = make_update(callback_data="resolve:42:no", user_id=999)
+    ctx = make_ctx(admin_id=999)
+    state = await resolve_start(upd, ctx)
+    assert state == AWAIT_COMMENT
+    text = upd.callback_query.edits[0]["text"]
+    assert "admin" not in text.lower()
+    assert "I'll add it to the issue" in text
+
+
+async def test_user_comment_ack_mentions_followup():
+    upd = make_update(text="audio still off", user_id=42)
+    ctx = make_ctx(admin_id=999, mapping=make_mapping(plex_token="plex-abc"),
+                   user_data={"awaiting_comment_for": 42})
+    await resolve_comment(upd, ctx)
+    assert "Admin will follow up" in upd.effective_message.reply_calls[0]["text"]
+
+
+async def test_admin_comment_ack_omits_followup():
+    upd = make_update(text="fixed the sub track", user_id=999)
+    ctx = make_ctx(admin_id=999, user_data={"awaiting_comment_for": 42})
+    await resolve_comment(upd, ctx)
+    text = upd.effective_message.reply_calls[0]["text"]
+    assert "Added your comment" in text
+    assert "Admin will follow up" not in text
+
+
+# --- revoked-token recovery ---------------------------------------------------
+
+
+async def test_revoked_token_on_close_prompts_relink():
+    upd = make_update(callback_data="resolve:42:yes", user_id=42)
+    ctx = make_ctx(admin_id=999, mapping=make_mapping(plex_token="plex-abc"))
+    ctx.bot_data["seerr"].resolve_issue.side_effect = PlexTokenInvalidError()
+    state = await resolve_start(upd, ctx)
+    assert state == ConversationHandler.END
+    edit = upd.callback_query.edits[-1]
+    assert "no longer valid" in edit["text"]
+    assert edit["reply_markup"].inline_keyboard[0][0].callback_data == RELINK
+
+
+async def test_revoked_token_on_comment_prompts_relink_and_clears_marker():
+    upd = make_update(text="still not working", user_id=42)
+    ctx = make_ctx(admin_id=999, mapping=make_mapping(plex_token="plex-abc"),
+                   user_data={"awaiting_comment_for": 42})
+    ctx.bot_data["seerr"].add_issue_comment.side_effect = PlexTokenInvalidError()
+    state = await resolve_comment(upd, ctx)
+    assert state == ConversationHandler.END
+    assert "awaiting_comment_for" not in ctx.user_data
+    reply = upd.effective_message.reply_calls[-1]
+    assert "no longer valid" in reply["text"]
+    assert reply["reply_markup"].inline_keyboard[0][0].callback_data == RELINK
 
 
 # --- conversation hygiene -----------------------------------------------------

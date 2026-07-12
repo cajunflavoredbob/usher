@@ -9,11 +9,21 @@ from typing import Optional
 
 import httpx
 
-from http_util import execute
+from http_util import APIError, PermanentAPIError, execute
 
 logger = logging.getLogger(__name__)
 
 _SERVICE = "Seerr"
+
+
+class PlexTokenInvalidError(PermanentAPIError):
+    """Seerr rejected the stored Plex token on /auth/plex (revoked or
+    expired). Retrying can't help; the user must re-link. Subclasses
+    PermanentAPIError so any surface without a dedicated re-link prompt
+    still renders a truthful message instead of "try again in a minute"."""
+    def __init__(self):
+        super().__init__("your Plex sign-in is no longer valid",
+                         status_code=500, service=_SERVICE)
 
 # Per-Plex-token authenticated client cache. Reuses warm clients under a
 # webhook comment flood instead of paying the TCP-handshake + /auth/plex
@@ -158,6 +168,17 @@ class SeerrClient:
         try:
             await execute(new_client, "POST", "/auth/plex", service=_SERVICE,
                           json={"authToken": plex_token})
+        except APIError as exc:
+            await new_client.aclose()
+            # Seerr reports a revoked/expired Plex token as a 500 "Unable to
+            # authenticate." -- which classify_response reads as transient.
+            # It isn't: plex.tv rejected the token upstream (422) and only a
+            # re-link fixes it. 401/403 (or a revoked Seerr membership)
+            # deserve the same re-link path.
+            if ("unable to authenticate" in str(exc).lower()
+                    or exc.status_code in (401, 403)):
+                raise PlexTokenInvalidError() from exc
+            raise
         except Exception:
             await new_client.aclose()
             raise

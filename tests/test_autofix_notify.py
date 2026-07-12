@@ -69,6 +69,26 @@ async def test_notify_timeout_records_keyboard_with_gate():
     assert [e["message_id"] for e in entries] == [778]
 
 
+async def test_timeout_copy_for_user_mentions_admin():
+    fix = _make_fix(timed_out=True)  # user_id=42
+    ctx = make_ctx(admin_id=999)
+    ctx.bot.send_message = AsyncMock(return_value=make_message(message_id=790))
+    await _notify_timeout(ctx, fix)
+    assert "for the admin to follow up" in ctx.bot.send_message.call_args.kwargs["text"]
+
+
+async def test_timeout_copy_for_admin_omits_admin_reference():
+    """The admin follows up on their own issues; the timeout DM must not
+    tell them to leave a comment 'for the admin'."""
+    fix = _make_fix(timed_out=True)  # user_id=42
+    ctx = make_ctx(admin_id=42)
+    ctx.bot.send_message = AsyncMock(return_value=make_message(message_id=791))
+    await _notify_timeout(ctx, fix)
+    text = ctx.bot.send_message.call_args.kwargs["text"]
+    assert "add a note to the issue" in text
+    assert "for the admin" not in text
+
+
 async def test_notify_uses_html_and_escapes_title():
     """A title full of Markdown/HTML metacharacters must neither kill the
     send (legacy Markdown raised BadRequest) nor inject markup."""

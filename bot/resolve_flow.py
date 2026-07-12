@@ -15,10 +15,10 @@ from telegram.ext import (
 )
 
 from http_util import user_friendly_message
-from seerr import SeerrClient
+from seerr import PlexTokenInvalidError, SeerrClient
 
 from bot.callback_prefixes import RESOLVE
-from bot.shared import AWAIT_COMMENT, token_for
+from bot.shared import AWAIT_COMMENT, prompt_plex_relink, token_for
 from const import RESOLVE_FLOW_TIMEOUT_S
 
 logger = logging.getLogger("hermes")
@@ -78,17 +78,28 @@ async def resolve_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         seerr: SeerrClient = ctx.bot_data["seerr"]
         try:
             await seerr.resolve_issue(issue_id, as_plex_token=token)
+        except PlexTokenInvalidError:
+            await prompt_plex_relink(update, ctx)
+            return ConversationHandler.END
         except Exception as exc:
             logger.exception("resolve_issue failed")
             await q.edit_message_text(f"Couldn't close issue #{issue_id}. {user_friendly_message(exc)}")
             return ConversationHandler.END
         await q.edit_message_text(f"✅ Issue #{issue_id} closed. Thanks!")
         return ConversationHandler.END
-    # "no" -> ask for comment
+    # "no" -> ask for comment. Copy differs by audience: telling the admin
+    # "admin will see it" reads wrong when they ARE the admin.
     ctx.user_data["awaiting_comment_for"] = issue_id
-    await q.edit_message_text(
-        "Sorry it's still broken. What's still wrong? (Send a brief message; admin will see it on the issue.)"
-    )
+    if is_admin:
+        await q.edit_message_text(
+            "Sorry it's still broken. What's still wrong? "
+            "(Send a brief message; I'll add it to the issue.)"
+        )
+    else:
+        await q.edit_message_text(
+            "Sorry it's still broken. What's still wrong? "
+            "(Send a brief message; admin will see it on the issue.)"
+        )
     return AWAIT_COMMENT
 
 
@@ -114,13 +125,18 @@ async def resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
         return ConversationHandler.END
     try:
         await seerr.add_issue_comment(issue_id, comment, as_plex_token=token)
+    except PlexTokenInvalidError:
+        await prompt_plex_relink(update, ctx)
+        ctx.user_data.pop("awaiting_comment_for", None)
+        return ConversationHandler.END
     except Exception as exc:
         logger.exception("add_issue_comment failed")
         await update.effective_message.reply_text(f"Couldn't add comment. {user_friendly_message(exc)}")
         ctx.user_data.pop("awaiting_comment_for", None)
         return ConversationHandler.END
+    followup = "" if is_admin else " Admin will follow up."
     await update.effective_message.reply_text(
-        f"💬 Added your comment to issue #{issue_id}. Admin will follow up."
+        f"💬 Added your comment to issue #{issue_id}.{followup}"
     )
     ctx.user_data.pop("awaiting_comment_for", None)
     return ConversationHandler.END
