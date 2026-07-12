@@ -33,6 +33,7 @@ from bot.shared import (
     AWAIT_PLATFORM_CHOICE,
     _require_seerr,
     record_btn,
+    run_relink_resume,
 )
 from const import (
     LINK_FLOW_TIMEOUT_S,
@@ -235,6 +236,10 @@ async def _finalize_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         parse_mode="Markdown",
     )
 
+    # If a revoked token interrupted an action (issue submit, close, comment),
+    # pick it back up now that the fresh token is stored.
+    await run_relink_resume(update, ctx)
+
 
 async def cmd_link_platform(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles the platform-choice tap: issues a strong PIN and starts polling."""
@@ -359,6 +364,9 @@ async def link_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def cmd_unlink(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     store: UserStore = ctx.bot_data["store"]
+    # A voluntary unlink is an intent to abandon whatever was interrupted;
+    # only the recovery-button path (cmd_relink) keeps the resume marker.
+    ctx.user_data.pop("relink_resume", None)
     removed = await store.unlink(update.effective_user.id)
     if removed:
         await update.effective_message.reply_text(

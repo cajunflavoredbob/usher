@@ -38,3 +38,8 @@ TICKET_REPLY_TIMEOUT_S: Final = 600    # 10 min
 ISSUE_FLOW_TIMEOUT_S: Final = 600      # 10 min
 LINK_FLOW_TIMEOUT_S: Final = 1800      # 30 min (covers strong-PIN window)
 RESOLVE_FLOW_TIMEOUT_S: Final = 600    # 10 min
+
+# How long a relink-resume marker (the action interrupted by a revoked Plex
+# token) stays valid. Matches LINK_FLOW_TIMEOUT_S so a resume can survive
+# the full strong-PIN window but a stale draft can't fire hours later.
+RELINK_RESUME_TTL_S: Final = 1800      # 30 min

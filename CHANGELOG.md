@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.27] - 2026-07-12
+
+### Added
+- **Interrupted actions resume automatically after a re-link.** When a
+  revoked Plex token gates an action mid-flow (submitting an issue, closing
+  a ticket, adding a comment, replying to a ticket), the bot now stashes
+  what the user was doing and picks it back up as soon as the sign-in
+  completes: "▶️ Picking up where you left off..." followed by the original
+  action running with the fresh token. Typed comment text is preserved, and
+  an interrupted issue submit keeps its whole draft (media, type,
+  description) - nothing gets re-asked. Markers expire after 30 minutes
+  (matching the link flow's own window), are consumed before executing so a
+  failure can't double-fire, never contain tokens, and a voluntary /unlink
+  abandons them - only the recovery-button path resumes.
+
 ## [0.11.26] - 2026-07-12
 
 ### Fixed

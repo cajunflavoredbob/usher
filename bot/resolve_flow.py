@@ -18,7 +18,12 @@ from http_util import user_friendly_message
 from seerr import PlexTokenInvalidError, SeerrClient
 
 from bot.callback_prefixes import RESOLVE
-from bot.shared import AWAIT_COMMENT, prompt_plex_relink, token_for
+from bot.shared import (
+    AWAIT_COMMENT,
+    RELINK_RESUME_EXECUTORS,
+    prompt_plex_relink,
+    token_for,
+)
 from const import RESOLVE_FLOW_TIMEOUT_S
 
 logger = logging.getLogger("hermes")
@@ -79,7 +84,8 @@ async def resolve_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         try:
             await seerr.resolve_issue(issue_id, as_plex_token=token)
         except PlexTokenInvalidError:
-            await prompt_plex_relink(update, ctx)
+            await prompt_plex_relink(update, ctx, resume_kind="resolve_close",
+                                     resume_payload={"issue_id": issue_id})
             return ConversationHandler.END
         except Exception as exc:
             logger.exception("resolve_issue failed")
@@ -126,7 +132,10 @@ async def resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     try:
         await seerr.add_issue_comment(issue_id, comment, as_plex_token=token)
     except PlexTokenInvalidError:
-        await prompt_plex_relink(update, ctx)
+        # Carry the typed comment so the resume posts what they already wrote.
+        await prompt_plex_relink(update, ctx, resume_kind="resolve_comment",
+                                 resume_payload={"issue_id": issue_id,
+                                                 "comment": comment})
         ctx.user_data.pop("awaiting_comment_for", None)
         return ConversationHandler.END
     except Exception as exc:
@@ -140,6 +149,51 @@ async def resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     )
     ctx.user_data.pop("awaiting_comment_for", None)
     return ConversationHandler.END
+
+
+async def _resume_resolve_close(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
+                                payload: dict) -> None:
+    """Relink-resume executor: close the issue the revoked token blocked.
+    The fresh token comes from the just-stored mapping, never the payload."""
+    issue_id = payload["issue_id"]
+    is_admin, token, _ = await token_for(ctx, update.effective_user.id)
+    if not is_admin and token is None:
+        return  # can't happen right after a successful link; guard anyway
+    seerr: SeerrClient = ctx.bot_data["seerr"]
+    try:
+        await seerr.resolve_issue(issue_id, as_plex_token=token)
+    except Exception as exc:
+        logger.exception("resumed resolve_issue failed for #%d", issue_id)
+        await update.effective_message.reply_text(
+            f"Couldn't close issue #{issue_id}. {user_friendly_message(exc)}")
+        return
+    await update.effective_message.reply_text(f"✅ Issue #{issue_id} closed. Thanks!")
+
+
+async def _resume_resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
+                                  payload: dict) -> None:
+    """Relink-resume executor: post the comment the user had already typed."""
+    issue_id = payload["issue_id"]
+    comment = payload["comment"]
+    is_admin, token, _ = await token_for(ctx, update.effective_user.id)
+    if not is_admin and token is None:
+        return
+    seerr: SeerrClient = ctx.bot_data["seerr"]
+    try:
+        await seerr.add_issue_comment(issue_id, comment, as_plex_token=token)
+    except Exception as exc:
+        logger.exception("resumed add_issue_comment failed for #%d", issue_id)
+        await update.effective_message.reply_text(
+            f"Couldn't add comment. {user_friendly_message(exc)}")
+        return
+    followup = "" if is_admin else " Admin will follow up."
+    await update.effective_message.reply_text(
+        f"💬 Added your comment to issue #{issue_id}.{followup}"
+    )
+
+
+RELINK_RESUME_EXECUTORS["resolve_close"] = _resume_resolve_close
+RELINK_RESUME_EXECUTORS["resolve_comment"] = _resume_resolve_comment
 
 
 async def resolve_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:

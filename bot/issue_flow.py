@@ -47,6 +47,7 @@ from bot.shared import (
     PICK_SEASON,
     PICK_TYPE,
     TITLE,
+    RELINK_RESUME_EXECUTORS,
     _format_media_label,
     _require_seerr,
     prompt_plex_relink,
@@ -579,7 +580,10 @@ async def _submit_issue(
             as_plex_token=mapping.plex_token,
         )
     except PlexTokenInvalidError:
-        await prompt_plex_relink(update, ctx)
+        # The draft (media, type, description) stays in user_data; only the
+        # autofix choice needs carrying for the post-relink resume.
+        await prompt_plex_relink(update, ctx, resume_kind="submit_issue",
+                                 resume_payload={"autofix": autofix})
         return ConversationHandler.END
     except Exception as exc:
         logger.exception("create_issue failed")
@@ -652,6 +656,17 @@ async def _submit_issue(
     await update.effective_message.reply_text("\n".join(lines))
     ctx.user_data.clear()
     return ConversationHandler.END
+
+
+async def _resume_submit_issue(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
+                               payload: dict) -> None:
+    """Relink-resume executor: re-run the submit that was gated by a revoked
+    token. The draft is still in user_data (the gate didn't clear it), and
+    _submit_issue's own guard handles the case where it got clobbered."""
+    await _submit_issue(update, ctx, autofix=bool(payload.get("autofix")))
+
+
+RELINK_RESUME_EXECUTORS["submit_issue"] = _resume_submit_issue
 
 
 async def issue_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:

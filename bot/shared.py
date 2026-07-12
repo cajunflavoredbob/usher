@@ -9,8 +9,9 @@ import asyncio
 import logging
 import os
 import signal
+import time
 from datetime import datetime, timezone
-from typing import Final, Optional
+from typing import Callable, Final, Optional
 
 import telegram
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity, Update
@@ -20,6 +21,7 @@ from seerr import SeerrClient
 from store import UserStore
 
 from bot.callback_prefixes import RELINK
+from const import RELINK_RESUME_TTL_S
 
 logger = logging.getLogger("hermes")
 
@@ -355,10 +357,29 @@ def record_btn(app, user_id: int, message) -> None:
         user_entries.pop(0)
 
 
-async def prompt_plex_relink(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+# Relink-resume executors, keyed by the resume kind stashed at each gated
+# surface. Populated at import time by issue_flow / resolve_flow / tickets so
+# link_flow can dispatch without importing them (avoids import cycles).
+# Signature: async (update, ctx, payload: dict) -> None.
+RELINK_RESUME_EXECUTORS: dict[str, Callable] = {}
+
+
+async def prompt_plex_relink(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *,
+                             resume_kind: Optional[str] = None,
+                             resume_payload: Optional[dict] = None) -> None:
     """Recovery prompt for a revoked Plex token (PlexTokenInvalidError): one
     tap unlinks the dead session and drops the user into the sign-in flow
-    (link_flow.cmd_relink). Works from both callback and message contexts."""
+    (link_flow.cmd_relink). Works from both callback and message contexts.
+
+    resume_kind/resume_payload (optional) stash what the user was doing so
+    _finalize_link can pick it back up after the re-link succeeds. NEVER put
+    a token in the payload; executors re-fetch it at execution time."""
+    if resume_kind is not None:
+        ctx.user_data["relink_resume"] = {
+            "kind": resume_kind,
+            "payload": resume_payload or {},
+            "saved_at": time.time(),
+        }
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("🔗 Unlink & sign in again", callback_data=RELINK),
     ]])
@@ -368,11 +389,31 @@ async def prompt_plex_relink(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
         "Tap below to clear the old session and sign back in - takes about "
         "a minute."
     )
+    if resume_kind is not None:
+        text += "\n\nI'll pick up where you left off once you're signed back in."
     if update.callback_query:
         sent = await update.callback_query.edit_message_text(text, reply_markup=kb)
     else:
         sent = await update.effective_message.reply_text(text, reply_markup=kb)
     record_btn(ctx.application, update.effective_user.id, sent)
+
+
+async def run_relink_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Execute a stashed relink-resume marker if one is fresh. Called by
+    _finalize_link after a successful (re-)link. The marker is popped BEFORE
+    running so a failing executor can't fire twice. Returns True if an
+    action was resumed."""
+    marker = ctx.user_data.pop("relink_resume", None)
+    if not marker:
+        return False
+    if time.time() - marker.get("saved_at", 0) > RELINK_RESUME_TTL_S:
+        return False
+    executor = RELINK_RESUME_EXECUTORS.get(marker.get("kind"))
+    if executor is None:
+        return False
+    await update.effective_message.reply_text("▶️ Picking up where you left off...")
+    await executor(update, ctx, marker.get("payload") or {})
+    return True
 
 
 async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:

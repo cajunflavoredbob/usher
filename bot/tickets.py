@@ -50,6 +50,7 @@ from bot.callback_prefixes import (
 from const import TICKET_REPLY_TIMEOUT_S
 from bot.shared import (
     AWAIT_TICKET_REPLY,
+    RELINK_RESUME_EXECUTORS,
     ISSUE_TYPES,
     _edit_or_send,
     _format_age,
@@ -617,7 +618,12 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     try:
         await seerr.add_issue_comment(issue_id, text, as_plex_token=token)
     except PlexTokenInvalidError:
-        await prompt_plex_relink(update, ctx)
+        # Carry the typed reply for the post-relink resume. close_after isn't
+        # carried: close-with-comment is admin-only, and the admin (admin-key
+        # attribution) can never hit this gate.
+        await prompt_plex_relink(update, ctx, resume_kind="ticket_reply",
+                                 resume_payload={"issue_id": issue_id,
+                                                 "text": text})
         ctx.user_data.pop("tk_reply_id", None)
         ctx.user_data.pop("tk_close_after", None)
         return ConversationHandler.END
@@ -654,6 +660,29 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     ctx.user_data.pop("tk_reply_id", None)
     ctx.user_data.pop("tk_close_after", None)
     return ConversationHandler.END
+
+
+async def _resume_ticket_reply(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
+                               payload: dict) -> None:
+    """Relink-resume executor: post the ticket reply the revoked token
+    blocked, with the text the user had already typed."""
+    issue_id = payload["issue_id"]
+    text = payload["text"]
+    is_admin, token, _ = await _token_for(ctx, update.effective_user.id)
+    if not is_admin and token is None:
+        return  # can't happen right after a successful link; guard anyway
+    seerr: SeerrClient = ctx.bot_data["seerr"]
+    try:
+        await seerr.add_issue_comment(issue_id, text, as_plex_token=token)
+    except Exception as exc:
+        logger.exception("resumed add_issue_comment failed for #%d", issue_id)
+        await update.effective_message.reply_text(
+            f"Couldn't post comment on #{issue_id}. {user_friendly_message(exc)}")
+        return
+    await update.effective_message.reply_text(f"💬 Replied to ticket #{issue_id}.")
+
+
+RELINK_RESUME_EXECUTORS["ticket_reply"] = _resume_ticket_reply
 
 
 async def tk_reply_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
