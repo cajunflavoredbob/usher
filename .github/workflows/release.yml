@@ -38,6 +38,15 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
+      # Import smoke test on the ACTUAL image before anything is pushed:
+      # pytest runs from the repo checkout, so it can't catch packaging
+      # failures (v0.12.0 shipped without two new modules and crash-looped
+      # on the first import).
+      - name: Image import smoke test
+        run: |
+          docker build -t hermes-smoke .
+          docker run --rm hermes-smoke python -c "import bot.app; print('import ok')"
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:

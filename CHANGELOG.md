@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-07-13
+
+### Fixed
+- **The 0.12.0 image crash-looped on startup** (`ModuleNotFoundError:
+  fsutil`): the Dockerfile copied a hand-maintained list of root modules,
+  and the two modules added in 0.12.0 (`fsutil.py`, `procutil.py`) were
+  never added to it. The COPY is now a glob (`*.py`), and the release
+  workflow gained an image-level import smoke test that runs BEFORE any
+  push - pytest runs from the repo checkout, so it structurally cannot
+  catch packaging failures like this one.
+
 ## [0.12.0] - 2026-07-12
 
 The pre-release audit release: seven staged batches closing every P0/P1/P2
