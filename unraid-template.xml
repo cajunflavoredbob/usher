@@ -57,4 +57,6 @@ See the [project page](https://github.com/cajunflavoredbob/hermes) for full docs
   <Config Name="Web UI / Webhook Port" Target="8765" Default="8765" Mode="tcp" Description="Port for both the admin web UI (/admin) and Seerr webhook receiver (/webhook/seerr)." Type="Port" Display="always" Required="true" Mask="false">8765</Config>
 
   <Config Name="Encryption Key (advanced)" Target="HERMES_ENCRYPTION_KEY" Default="" Mode="" Description="Fernet key used to encrypt stored Plex tokens at rest. Leave blank for normal use -- Hermes generates one on first run and persists it to /data/encryption.key. Set this only if you need to control the key explicitly (e.g. migrating from another install). Generate with: python -c &quot;from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())&quot;" Type="Variable" Display="advanced" Required="false" Mask="true"/>
+
+  <Config Name="Trusted Proxies (advanced)" Target="TRUSTED_PROXIES" Default="" Mode="" Description="Comma-separated IPs/CIDRs of reverse proxies allowed to set X-Forwarded-For / X-Forwarded-Proto (e.g. your Nginx Proxy Manager address). Leave blank when the admin UI is accessed directly -- forwarded headers are then ignored because clients can forge them. See 'Securing the admin UI' in the README." Type="Variable" Display="advanced" Required="false" Mask="false"/>
 </Container>

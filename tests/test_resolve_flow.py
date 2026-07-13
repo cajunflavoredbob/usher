@@ -59,7 +59,7 @@ async def test_skip_needs_no_link():
     upd = make_update(callback_data="resolve:42:skip", user_id=42)
     ctx = make_ctx(admin_id=999, mapping=None)
     await resolve_start(upd, ctx)
-    assert "leaving the issue open" in upd.callback_query.edits[0]["text"]
+    assert "leaving the ticket open" in upd.callback_query.edits[0]["text"]
     ctx.bot_data["seerr"].resolve_issue.assert_not_called()
 
 
@@ -115,7 +115,7 @@ async def test_admin_comment_prompt_omits_admin_reference():
     assert state == AWAIT_COMMENT
     text = upd.callback_query.edits[0]["text"]
     assert "admin" not in text.lower()
-    assert "I'll add it to the issue" in text
+    assert "I'll add it to the ticket" in text
 
 
 async def test_user_comment_ack_mentions_followup():

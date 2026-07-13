@@ -75,7 +75,7 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
     safe_commenter = html.escape(commenter_username or "Seerr")
     safe_title = html.escape(title_line) if title_line else ""
 
-    lines = [f"💬 New comment on issue #{issue_id}"]
+    lines = [f"💬 New comment on ticket #{issue_id}"]
     if safe_title:
         lines.append(safe_title)
     if scope_label:
@@ -171,7 +171,7 @@ async def handle_seerr_resolved(app: Application, payload: dict) -> None:
 
     # DM the reporter (if they're linked)
     if mapping is not None:
-        reporter_lines = [f"✅ Your issue #{issue_id} was resolved."]
+        reporter_lines = [f"✅ Your ticket #{issue_id} was resolved."]
         if safe_title:
             reporter_lines.append(safe_title)
         if safe_scope:
@@ -193,7 +193,7 @@ async def handle_seerr_resolved(app: Application, payload: dict) -> None:
 
     # Also DM the admin (unless admin IS the reporter)
     if admin_id and (mapping is None or mapping.telegram_id != admin_id):
-        admin_lines = [f"✅ Issue #{issue_id} resolved"]
+        admin_lines = [f"✅ Ticket #{issue_id} resolved"]
         if safe_title:
             admin_lines.append(safe_title)
         if safe_scope:
@@ -255,7 +255,7 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
     safe_title = html.escape(title_line) if title_line else "(unknown media)"
 
     lines = [
-        f"🆕 New issue <b>#{issue_id}</b>",
+        f"🆕 New ticket <b>#{issue_id}</b>",
         "",
         safe_title,
     ]

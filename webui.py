@@ -1,16 +1,19 @@
 """Slim aiohttp admin webui.
 
-Routes:
-  GET  /admin/setup    -- first-run admin account creation
-  POST /admin/setup
-  GET  /admin/login
-  POST /admin/login
-  GET  /admin/logout
-  GET  /admin          -- settings page (auth required)
-  POST /admin          -- save settings
-  POST /admin/password -- change admin password
-  GET  /admin/backup   -- download backup ZIP
-  POST /admin/restore  -- upload backup ZIP and exit (container restarts)
+Routes (auth middleware covers everything except setup/login):
+  GET/POST /admin/setup      -- first-run admin account creation
+  GET/POST /admin/login      -- session login
+  GET      /admin/logout
+  GET      /admin            -- settings page
+  POST     /admin/telegram | /admin/seerr | /admin/autofix | /admin/webhook
+                             -- save one settings tab each
+  POST     /admin/test/{telegram|seerr|autofix|webhook}
+                             -- connection tests (JSON)
+  GET      /admin/seerr/newplex-warning          -- banner state (JSON)
+  POST     /admin/seerr/newplex-warning/dismiss
+  POST     /admin/password   -- change admin password
+  POST     /admin/backup     -- download backup ZIP
+  POST     /admin/restore    -- upload backup ZIP and exit (container restarts)
 
 Inline HTML, no template engine. Session cookie is signed with HMAC-SHA256
 using a per-install secret persisted under /data.
@@ -50,6 +53,8 @@ from auth_util import (
     request_is_secure,
     validate_csrf,
 )
+from fsutil import atomic_write_bytes
+from procutil import schedule_clean_exit
 from backup_crypto import is_wrapped, unwrap, wrap
 from settings import (
     DEFAULT_DAILY_AUTOFIX_LIMIT,
@@ -85,19 +90,8 @@ def _set_session_cookie(resp, cookie_value: str, *, secure: bool) -> None:
     )
 
 
-def _schedule_clean_exit(delay_s: float = 2.0) -> None:
-    """Send SIGTERM to self after `delay_s` so PTB's run_polling and
-    aiohttp's runner unwind cleanly (closing httpx clients, DB
-    connections, the HTTP server). Falls back to os._exit only if
-    the SIGTERM dispatch itself fails."""
-    loop = asyncio.get_running_loop()
-    def _kill():
-        try:
-            os.kill(os.getpid(), signal.SIGTERM)
-        except Exception:
-            logger.exception("SIGTERM dispatch failed; falling back to os._exit")
-            os._exit(0)
-    loop.call_later(delay_s, _kill)
+# _schedule_clean_exit moved to procutil.schedule_clean_exit (the audit:
+# it was a verbatim copy between here and bot/shared.py).
 
 
 def _csrf_input(token: str) -> str:
@@ -120,14 +114,16 @@ def _b64d(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + pad)
 
 
-def _make_session_cookie(secret: bytes, username: str) -> str:
-    payload = json.dumps({"u": username, "exp": int(time.time()) + SESSION_TTL_SECONDS}).encode()
+def _make_session_cookie(secret: bytes, username: str, pwd_ver: int = 0) -> str:
+    payload = json.dumps({"u": username, "v": pwd_ver,
+                          "exp": int(time.time()) + SESSION_TTL_SECONDS}).encode()
     body = _b64(payload)
     sig = _b64(_sign(secret, body.encode()))
     return f"{body}.{sig}"
 
 
-def _verify_session_cookie(secret: bytes, cookie: str) -> Optional[str]:
+def _verify_session_cookie(secret: bytes, cookie: str,
+                           expected_pwd_ver: int = 0) -> Optional[str]:
     try:
         body, sig = cookie.split(".")
     except ValueError:
@@ -141,6 +137,11 @@ def _verify_session_cookie(secret: bytes, cookie: str) -> Optional[str]:
         return None
     if payload.get("exp", 0) < time.time():
         return None
+    # Sessions minted before a password change carry an older version and
+    # die here. Cookies from pre-0.12.0 have no "v" and
+    # default to 0, matching installs that never changed the password.
+    if payload.get("v", 0) != expected_pwd_ver:
+        return None
     return payload.get("u")
 
 
@@ -148,7 +149,9 @@ def _current_user(request: web.Request) -> Optional[str]:
     cookie = request.cookies.get(SESSION_COOKIE)
     if not cookie:
         return None
-    return _verify_session_cookie(request.app["session_secret"], cookie)
+    store: SettingsStore = request.app["settings_store"]
+    return _verify_session_cookie(request.app["session_secret"], cookie,
+                                  store.settings.admin.password_version)
 
 
 # --- HTML rendering ---------------------------------------------------------
@@ -184,6 +187,12 @@ button.danger:hover { background: #eba0ac; }
 .error { background: #f38ba8; color: #1e1e2e; padding: 10px 14px; border-radius: 4px; margin-bottom: 14px; }
 .success { background: #a6e3a1; color: #1e1e2e; padding: 10px 14px; border-radius: 4px; margin-bottom: 14px; }
 .note { color: #a6adc8; font-size: 13px; margin-top: 4px; }
+.banner-warn { background: #45402a; border: 1px solid #f9e2af; color: #f9e2af;
+               padding: 12px 14px; border-radius: 6px; margin-bottom: 14px;
+               font-size: 14px; line-height: 1.5; }
+.banner-warn button { background: #f9e2af; color: #1e1e2e; border: none;
+                      padding: 4px 12px; border-radius: 4px; font-weight: 600;
+                      cursor: pointer; margin-left: 8px; }
 a { color: #89b4fa; }
 code { background: #45475a; padding: 2px 6px; border-radius: 3px; font-size: 13px; }
 
@@ -363,6 +372,30 @@ SCRIPT = """
       setTimeout(function () { note.classList.remove('show'); }, 2000);
     }
   });
+
+  // New-Plex-Sign-In warning banner (Seerr tab). Fetched async after page
+  // load so a slow or down Seerr never delays panel render; errors keep the
+  // banner hidden.
+  (async function () {
+    var banner = document.getElementById('newplex-banner');
+    if (!banner) return;
+    try {
+      var resp = await fetch('/admin/seerr/newplex-warning');
+      var data = await resp.json();
+      if (data.show) banner.hidden = false;
+    } catch (e) {}
+    var dismiss = document.getElementById('newplex-dismiss');
+    if (dismiss) dismiss.addEventListener('click', async function () {
+      banner.hidden = true;
+      var fd = new FormData();
+      var tok = document.querySelector('#seerr-form input[name="csrf_token"]');
+      if (tok) fd.append('csrf_token', tok.value);
+      try {
+        await fetch('/admin/seerr/newplex-warning/dismiss',
+                    { method: 'POST', body: fd });
+      } catch (e) {}
+    });
+  })();
 })();
 </script>
 """
@@ -452,6 +485,15 @@ def _settings_page(
 """
 
     seerr_form = f"""
+<div id="newplex-banner" class="banner-warn" hidden>
+  <b>⚠️ Seerr's "Enable New Plex Sign-In" is turned on.</b>
+  Any Plex account with access to your Plex server becomes a Seerr user the
+  first time they sign in - including through this bot's /link, which anyone
+  who finds the bot can start. If that's not what you want, disable it in
+  Seerr under Settings &rarr; Users. (Hermes already turns away sign-ins
+  Seerr rejects, so disabling it won't break anything here.)
+  <button type="button" id="newplex-dismiss">Dismiss</button>
+</div>
 <form id="seerr-form" method="POST" action="/admin/seerr">
   {csrf}
   <h2>Seerr</h2>
@@ -551,9 +593,11 @@ def _settings_page(
 <form method="POST" action="/admin/backup">
   {csrf}
   <h2>Download Backup</h2>
-  <div class="note">Downloads a ZIP containing settings.json, the mappings database, and the encryption key. Treat this file as secret. Optionally wrap it with a passphrase.</div>
-  <label>Passphrase <span class="note">(optional)</span></label>
-  <input type="password" name="passphrase" placeholder="Leave blank for plain ZIP">
+  <div class="note">Downloads a ZIP containing settings.json, the mappings database, and the encryption key. Set a passphrase to encrypt it.</div>
+  <div class="note">⚠️ Without a passphrase the file contains the encryption key, every API key, the bot token, and all users' Plex tokens in a plain ZIP; anyone who obtains it fully controls the bot and its accounts.</div>
+  <label>Passphrase <span class="note">(strongly recommended)</span></label>
+  <input type="password" name="passphrase" placeholder="Encrypts the backup">
+  <label><input type="checkbox" name="unencrypted_ok" value="1"> I understand the risk; download WITHOUT a passphrase</label>
   <button type="submit">Download Backup</button>
 </form>
 
@@ -792,7 +836,7 @@ async def login_post(request: web.Request) -> web.Response:
     _throttle.record_success(ip)
     audit("login_success", user=username, ip=ip)
 
-    # PBKDF2 auto-upgrade (audit SEC #16): if the stored hash uses a stale
+    # PBKDF2 auto-upgrade: if the stored hash uses a stale
     # iteration count, rehash with the current count and persist. Hash
     # format is "pbkdf2_sha256$<iters>$<salt_hex>$<hash_hex>".
     try:
@@ -811,7 +855,8 @@ async def login_post(request: web.Request) -> web.Response:
             logger.exception("PBKDF2 auto-upgrade rehash failed for %s", username)
 
     secure = request_is_secure(request)
-    cookie = _make_session_cookie(request.app["session_secret"], username)
+    cookie = _make_session_cookie(request.app["session_secret"], username,
+                                  store.settings.admin.password_version)
     resp = web.HTTPFound("/admin")
     _set_session_cookie(resp, cookie, secure=secure)
     # Rotate CSRF cookie after privilege change.
@@ -949,6 +994,21 @@ async def seerr_post(request: web.Request) -> web.Response:
     if csrf_resp is not None:
         return csrf_resp
     s = store.settings
+    # Same validation as hermes_public_url (P3-7: one field class had two
+    # behaviors); non-empty URLs must parse, empty stays allowed where the
+    # field is optional.
+    for field_name, label in (("seerr_url", "Seerr URL"),
+                              ("seerr_public_url", "Seerr Public URL")):
+        value = (form.get(field_name) or "").strip()
+        url_err = validate_public_url(value) if value else None
+        if url_err:
+            return web.Response(
+                text=_settings_page(s, error=f"{label}: {url_err}",
+                                    active_tab="seerr",
+                                    webhook_url=_webhook_url_from_request(request),
+                                    csrf_token=csrf_for_request(request)),
+                content_type="text/html", status=400,
+            )
     s.seerr_url = (form.get("seerr_url") or "").strip()
     s.seerr_api_key = (form.get("seerr_api_key") or "").strip()
     s.seerr_public_url = (form.get("seerr_public_url") or "").strip()
@@ -962,6 +1022,18 @@ async def autofix_post(request: web.Request) -> web.Response:
     if csrf_resp is not None:
         return csrf_resp
     s = store.settings
+    for field_name, label in (("radarr_url", "Radarr URL"),
+                              ("sonarr_url", "Sonarr URL")):
+        value = (form.get(field_name) or "").strip()
+        url_err = validate_public_url(value) if value else None
+        if url_err:
+            return web.Response(
+                text=_settings_page(s, error=f"{label}: {url_err}",
+                                    active_tab="autofix",
+                                    webhook_url=_webhook_url_from_request(request),
+                                    csrf_token=csrf_for_request(request)),
+                content_type="text/html", status=400,
+            )
     s.radarr_url = (form.get("radarr_url") or "").strip()
     s.radarr_api_key = (form.get("radarr_api_key") or "").strip()
     s.sonarr_url = (form.get("sonarr_url") or "").strip()
@@ -1047,16 +1119,27 @@ async def change_password(request: web.Request) -> web.Response:
                                 csrf_token=csrf_for_request(request)),
             content_type="text/html", status=400,
         )
+    user = _current_user(request) or "-"
     admin.password_hash = hash_password(new)
+    # Invalidate every outstanding session: a stolen cookie
+    # must die when the admin rotates the password in response to it.
+    admin.password_version += 1
     store.save()
-    audit("password_changed", user=_current_user(request) or "-", ip=client_ip(request))
-    return web.Response(
-        text=_settings_page(store.settings, message="Password changed.",
+    audit("password_changed", user=user, ip=client_ip(request))
+    resp = web.Response(
+        text=_settings_page(store.settings,
+                            message="Password changed. All other sessions are signed out.",
                             active_tab="account",
                             webhook_url=_webhook_url_from_request(request),
                             csrf_token=csrf_for_request(request)),
         content_type="text/html",
     )
+    # Re-issue THIS session at the new version so the admin who changed the
+    # password isn't logged out mid-page.
+    cookie = _make_session_cookie(request.app["session_secret"],
+                                  admin.username, admin.password_version)
+    _set_session_cookie(resp, cookie, secure=request_is_secure(request))
+    return resp
 
 
 async def backup_download(request: web.Request) -> web.Response:
@@ -1064,19 +1147,48 @@ async def backup_download(request: web.Request) -> web.Response:
     settings_path: Path = request.app["settings_path"]
     db_path: Path = Path(request.app["db_path"])
     enc_key_path = data_dir / "encryption.key"
+    store: SettingsStore = request.app["settings_store"]
 
     form = await request.post()
     csrf_resp = _csrf_check_or_403(request, form)
     if csrf_resp is not None:
         return csrf_resp
     passphrase = form.get("passphrase") or ""
+    # Server-side gate for the unencrypted download: with an
+    # empty passphrase the ZIP is a total-compromise artifact (encryption
+    # key + the DB it decrypts + every API key/token), so it requires the
+    # explicit acknowledgement checkbox.
+    if not passphrase and not form.get("unencrypted_ok"):
+        return web.Response(
+            text=_settings_page(store.settings,
+                                error="Set a passphrase, or tick the acknowledgement "
+                                      "to download an unencrypted backup.",
+                                active_tab="account",
+                                webhook_url=_webhook_url_from_request(request),
+                                csrf_token=csrf_for_request(request)),
+            content_type="text/html", status=400,
+        )
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         if settings_path.exists():
             zf.write(settings_path, "settings.json")
         if db_path.exists():
-            zf.write(db_path, "mappings.sqlite")
+            # The store runs in WAL mode: copying the bare .sqlite file
+            # misses uncheckpointed commits (recent links, pending fixes)
+            # and a mid-checkpoint copy can be torn.
+            # VACUUM INTO produces a complete, consistent snapshot.
+            snap = db_path.with_name(f".backup-snapshot-{os.getpid()}.sqlite")
+            try:
+                snap.unlink(missing_ok=True)
+                conn = sqlite3.connect(db_path)
+                try:
+                    conn.execute("VACUUM INTO ?", (str(snap),))
+                finally:
+                    conn.close()
+                zf.write(snap, "mappings.sqlite")
+            finally:
+                snap.unlink(missing_ok=True)
         if enc_key_path.exists():
             zf.write(enc_key_path, "encryption.key")
     raw_zip = buf.getvalue()
@@ -1201,19 +1313,29 @@ async def restore_upload(request: web.Request) -> web.Response:
 
     try:
         with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
+            # Atomic per-file (temp + rename via fsutil): the bot keeps
+            # running until the scheduled exit below, and a bare write_bytes
+            # over the live files could be caught mid-write by power loss or
+            # a concurrent reader. The rename swaps whole files,
+            # so any in-flight reader sees old-or-new, never a torn file.
             if "settings.json" in names:
-                settings_path.write_bytes(zf.read("settings.json"))
+                atomic_write_bytes(settings_path, zf.read("settings.json"), chmod=None)
             if "mappings.sqlite" in names:
-                db_path.write_bytes(zf.read("mappings.sqlite"))
+                atomic_write_bytes(db_path, zf.read("mappings.sqlite"), chmod=None)
+                # Drop stale WAL/SHM sidecars: SQLite would otherwise pair
+                # the restored DB with the OLD database's write-ahead log
+                # and replay unrelated frames into it.
+                for suffix in ("-wal", "-shm"):
+                    Path(str(db_path) + suffix).unlink(missing_ok=True)
             if "encryption.key" in names:
-                enc_key_path.write_bytes(zf.read("encryption.key"))
+                atomic_write_bytes(enc_key_path, zf.read("encryption.key"))
     except Exception as exc:
         return _restore_error(request, f"Restore failed: {exc}", status=500)
 
     audit("restore_complete", user=_current_user(request) or "-",
           ip=client_ip(request), backup_dir=str(backup_dir))
     logger.info("Restore complete; restarting in 2s (snapshot at %s)", backup_dir)
-    _schedule_clean_exit(2.0)
+    schedule_clean_exit(2.0)
 
     body = _page("Restore", f"""
 <h1>Restore Complete</h1>
@@ -1329,7 +1451,11 @@ async def test_webhook(request: web.Request) -> web.Response:
     secret = (store.settings.webhook_secret or "").strip()
     if not secret:
         return _test_json(False, "No saved secret. Generate, Save, then Test.")
-    url = _webhook_url_from_request(request)
+    # Self-POST to loopback, never a Host-derived URL: the Host
+    # header is attacker-influenceable, and this request carries the real
+    # webhook secret in Authorization -- a spoofed Host exfiltrated it to an
+    # arbitrary target. The receiver runs in this same process/port.
+    url = f"http://127.0.0.1:{request.app['http_port']}/webhook/seerr"
     try:
         async with httpx.AsyncClient(timeout=10.0) as c:
             r = await c.post(url, headers={"Authorization": secret},
@@ -1341,6 +1467,51 @@ async def test_webhook(request: web.Request) -> web.Response:
         return _test_json(False, f"Receiver returned HTTP {r.status_code}.")
     except Exception as exc:
         return _test_json(False, user_friendly_message(exc))
+
+
+# --- Seerr New-Plex-Sign-In warning ------------------------------------------
+
+async def newplex_warning_check(request: web.Request) -> web.Response:
+    """Report whether the dismissible New-Plex-Sign-In banner should show.
+    Session-gated by the auth middleware. Silent on every failure path: the
+    panel must render normally with Seerr down, unconfigured, or too old to
+    have the setting."""
+    store: SettingsStore = request.app["settings_store"]
+    s = store.settings
+    if not (s.seerr_url and s.seerr_api_key):
+        return web.json_response({"show": False})
+    client = SeerrClient(s.seerr_url, s.seerr_api_key)
+    try:
+        main = await client.get_main_settings()
+    except Exception:
+        logger.debug("newplex check: couldn't read Seerr main settings", exc_info=True)
+        return web.json_response({"show": False})
+    finally:
+        await client.close()
+    enabled = main.get("newPlexLogin")
+    if enabled is None:
+        return web.json_response({"show": False})  # setting absent: unsupported build
+    if not enabled:
+        # Observed OFF: clear any dismissal so the warning re-arms if the
+        # setting is ever flipped back on (off -> on transition semantics).
+        if s.seerr_new_plex_login_ack:
+            s.seerr_new_plex_login_ack = False
+            store.save()
+        return web.json_response({"show": False})
+    return web.json_response({"show": not s.seerr_new_plex_login_ack})
+
+
+async def newplex_warning_dismiss(request: web.Request) -> web.Response:
+    form = await request.post()
+    guard = await _test_csrf_guard(request, form)
+    if guard is not None:
+        return guard
+    store: SettingsStore = request.app["settings_store"]
+    store.settings.seerr_new_plex_login_ack = True
+    store.save()
+    audit("newplex_warning_dismissed", user=_current_user(request) or "-",
+          ip=client_ip(request))
+    return web.json_response({"ok": True})
 
 
 # --- Auth middleware --------------------------------------------------------
@@ -1375,6 +1546,8 @@ def attach_webui(
     settings_path: Path,
     db_path: Path,
     on_settings_changed: Optional[ReloadCallback] = None,
+    trusted_proxies: tuple = (),
+    http_port: int = 8765,
 ) -> None:
     app["settings_store"] = settings_store
     app["session_secret"] = session_secret
@@ -1382,6 +1555,11 @@ def attach_webui(
     app["settings_path"] = settings_path
     app["db_path"] = db_path
     app["on_settings_changed"] = on_settings_changed
+    # Used by the webhook self-test to build its loopback URL.
+    app["http_port"] = http_port
+    # Trusted-proxy CIDRs (TRUSTED_PROXIES env): gates X-Forwarded-For /
+    # X-Forwarded-Proto trust in auth_util.client_ip / request_is_secure.
+    app["trusted_proxies"] = trusted_proxies
     app.middlewares.append(auth_middleware)
     app.router.add_get("/admin/setup", setup_get)
     app.router.add_post("/admin/setup", setup_post)
@@ -1397,6 +1575,8 @@ def attach_webui(
     app.router.add_post("/admin/test/seerr", test_seerr)
     app.router.add_post("/admin/test/autofix", test_autofix)
     app.router.add_post("/admin/test/webhook", test_webhook)
+    app.router.add_get("/admin/seerr/newplex-warning", newplex_warning_check)
+    app.router.add_post("/admin/seerr/newplex-warning/dismiss", newplex_warning_dismiss)
     app.router.add_post("/admin/password", change_password)
     app.router.add_post("/admin/backup", backup_download)
     app.router.add_post("/admin/restore", restore_upload)

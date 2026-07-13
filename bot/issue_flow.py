@@ -2,6 +2,7 @@
 take description, optional auto-fix offer, submit to Seerr."""
 from __future__ import annotations
 
+import html
 import logging
 from typing import Optional
 
@@ -37,6 +38,7 @@ from bot.callback_prefixes import (
     ISSUE_TYPE,
 )
 from bot.shared import (
+    DECRYPT_FAILED_MSG,
     AUTOFIX_ELIGIBLE_TYPES,
     CONFIRM_AUTOFIX,
     DESCRIPTION,
@@ -48,13 +50,23 @@ from bot.shared import (
     PICK_TYPE,
     TITLE,
     RELINK_RESUME_EXECUTORS,
-    _format_media_label,
-    _require_seerr,
+    format_media_label,
+    require_seerr,
+    end_action,
+    send_typing,
+    media_action_key,
     prompt_plex_relink,
     record_btn,
+    try_begin_action,
+    user_in_conversation,
 )
 from bot.tickets import _run_arr_action
-from const import ISSUE_FLOW_TIMEOUT_S, KB_BUTTONS_PER_ROW, SEARCH_RESULT_LIMIT
+from const import (
+    AUTOFIX_TIMEOUT_HOURS,
+    ISSUE_FLOW_TIMEOUT_S,
+    KB_BUTTONS_PER_ROW,
+    SEARCH_RESULT_LIMIT,
+)
 
 logger = logging.getLogger("hermes")
 
@@ -65,7 +77,7 @@ async def _issue_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     flow can populate so an abandoned conversation doesn't leak state for
     the life of the process."""
     for key in ("media", "search_results", "seasons", "season", "episode",
-                "issue_type", "description", "autofix"):
+                "issue_type", "description"):
         ctx.user_data.pop(key, None)
     return ConversationHandler.END
 
@@ -101,12 +113,24 @@ def _issue_conversation() -> ConversationHandler:
 
 
 async def issue_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    if await _require_seerr(update, ctx) is None:
+    if await require_seerr(update, ctx) is None:
         return ConversationHandler.END
+    # Full link gate at flow ENTRY: the old check only tested
+    # for a mapping row, so a decrypt-failed or token-less link sailed
+    # through the whole flow and died at submit with a misleading "lost
+    # conversation state", discarding the typed description.
     store: UserStore = ctx.bot_data["store"]
-    if (await store.get(update.effective_user.id)) is None:
+    mapping = await store.get(update.effective_user.id)
+    if mapping is None or (not mapping.plex_token
+                           and not mapping.plex_token_decrypt_failed):
         await update.effective_message.reply_text(
-            "You need to link your Seerr account first. DM me /link <username>."
+            "DM me /link first so reports are filed as you. It's a quick "
+            "Plex sign-in - no username needed."
+        )
+        return ConversationHandler.END
+    if mapping.plex_token_decrypt_failed:
+        await update.effective_message.reply_text(
+            DECRYPT_FAILED_MSG
         )
         return ConversationHandler.END
     await update.effective_message.reply_text(
@@ -166,7 +190,7 @@ async def _show_search_results(
 
     # Bump the search-results version. callback_data carries it so a rapid
     # /issue reentry that overwrites search_results doesn't make the
-    # in-flight pick pull the wrong tmdb_id from the new dict (audit CONC #10).
+    # in-flight pick pull the wrong tmdb_id from the new dict.
     version = (ctx.user_data.get("search_version") or 0) + 1
     ctx.user_data["search_version"] = version
 
@@ -194,7 +218,7 @@ async def _show_search_results(
         if parent:
             ctx.user_data["research_parent"] = parent
 
-    cancel_btn = InlineKeyboardButton("Cancel", callback_data=ISSUE_CANCEL)
+    cancel_btn = InlineKeyboardButton("🛑 Cancel", callback_data=ISSUE_CANCEL)
     if parent:
         # Flush the last partial row, then parent on its own row, then Cancel.
         if last_partial_row:
@@ -228,6 +252,7 @@ async def _show_search_results(
 
 async def issue_title(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.effective_message.text.strip()
+    await send_typing(update, ctx)  # search can take seconds on a big library
     return await _show_search_results(
         update.effective_message.reply_text, ctx, query,
         user_id=update.effective_user.id,
@@ -261,7 +286,7 @@ async def issue_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
     # Verify the embedded search version matches the current one. If the user
     # kicked off a new /issue search since this keyboard was built (allow_reentry
     # makes that easy), the in-flight pick mustn't resolve against the new
-    # search_results dict (audit CONC #10).
+    # search_results dict.
     current = ctx.user_data.get("search_results") or {}
     if current.get("version") != version:
         await q.edit_message_text(
@@ -329,16 +354,18 @@ async def _show_season_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
             row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton("Cancel", callback_data=ISSUE_CANCEL)])
+    rows.append([InlineKeyboardButton("🛑 Cancel", callback_data=ISSUE_CANCEL)])
     label = ctx.user_data["media"]["title"]
     if ctx.user_data["media"]["year"]:
         label += f" ({ctx.user_data['media']['year']})"
     # Re-record each flow step's edit so the menu stays in the newest slot of
     # the gate's history (a webhook DM burst mid-flow could otherwise evict it).
+    # HTML + escape, never Markdown: a title like M*A*S*H or [REC] makes
+    # Telegram reject the edit ("can't parse entities") and wipes the flow.
     sent = await q.edit_message_text(
-        f"Selected: *{label}*\n\nWhich season?",
+        f"Selected: <b>{html.escape(label)}</b>\n\nWhich season?",
         reply_markup=InlineKeyboardMarkup(rows),
-        parse_mode="Markdown",
+        parse_mode="HTML",
     )
     record_btn(ctx.application, update.effective_user.id, sent)
     return PICK_SEASON
@@ -366,7 +393,7 @@ async def issue_pick_season(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     if row:
         rows.append(row)
     rows.append([InlineKeyboardButton("📦 Whole season", callback_data=f"{ISSUE_EPISODE}:0")])
-    rows.append([InlineKeyboardButton("Cancel", callback_data=ISSUE_CANCEL)])
+    rows.append([InlineKeyboardButton("🛑 Cancel", callback_data=ISSUE_CANCEL)])
     sent = await q.edit_message_text(
         f"Season {season} — which episode?",
         reply_markup=InlineKeyboardMarkup(rows),
@@ -394,7 +421,7 @@ async def _show_type_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
         InlineKeyboardButton(f"{e} {n}", callback_data=f"{ISSUE_TYPE}:{i}")
         for i, (e, n) in ISSUE_TYPES.items()
     ]]
-    rows.append([InlineKeyboardButton("Cancel", callback_data=ISSUE_CANCEL)])
+    rows.append([InlineKeyboardButton("🛑 Cancel", callback_data=ISSUE_CANCEL)])
     media = ctx.user_data["media"]
     label = media["title"]
     if media.get("year"):
@@ -406,10 +433,12 @@ async def _show_type_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
             label += f" — S{season} (whole season)"
         else:
             label += f" — S{season}E{ep}"
+    # HTML + escape for the same reason as the season screen: raw titles
+    # break Markdown entity parsing and kill the flow mid-edit.
     sent = await q.edit_message_text(
-        f"Selected: *{label}*\n\nWhat kind of issue?",
+        f"Selected: <b>{html.escape(label)}</b>\n\nWhat kind of issue?",
         reply_markup=InlineKeyboardMarkup(rows),
-        parse_mode="Markdown",
+        parse_mode="HTML",
     )
     record_btn(ctx.application, update.effective_user.id, sent)
     return PICK_TYPE
@@ -510,7 +539,7 @@ async def issue_offer_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     await q.answer()
     choice = q.data.split(":")[1]
     if choice == "no":
-        await q.edit_message_text("Got it. Submitting issue without auto-fix.")
+        await q.edit_message_text("Got it. Submitting your report without auto-fix.")
         return await _submit_issue(update, ctx, autofix=False)
     rows = [[
         InlineKeyboardButton("⚠️ Yes, delete & re-search", callback_data=f"{ISSUE_AUTOFIX_CONFIRM}:yes"),
@@ -530,9 +559,9 @@ async def issue_confirm_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) 
     await q.answer()
     choice = q.data.split(":")[1]
     if choice == "no":
-        await q.edit_message_text("Skipping auto-fix. Submitting issue.")
+        await q.edit_message_text("Skipping auto-fix. Submitting your report.")
         return await _submit_issue(update, ctx, autofix=False)
-    await q.edit_message_text("Submitting issue and triggering auto-fix...")
+    await q.edit_message_text("Submitting your report and triggering auto-fix...")
     return await _submit_issue(update, ctx, autofix=True)
 
 
@@ -542,6 +571,26 @@ async def _submit_issue(
     *,
     autofix: bool,
 ) -> int:
+    """Double-tap guard around the real submit: with
+    concurrent_updates(True), a second confirm tap runs in parallel and
+    would file a duplicate Seerr issue. user_data is shared across the
+    user's updates and there is no await between check and set."""
+    if ctx.user_data.get("submitting_issue"):
+        return ConversationHandler.END
+    ctx.user_data["submitting_issue"] = True
+    try:
+        return await _submit_issue_inner(update, ctx, autofix=autofix)
+    finally:
+        ctx.user_data.pop("submitting_issue", None)
+
+
+async def _submit_issue_inner(
+    update: Update,
+    ctx: ContextTypes.DEFAULT_TYPE,
+    *,
+    autofix: bool,
+) -> int:
+    await send_typing(update, ctx)  # Seerr create + optional Arr calls are slow
     store: UserStore = ctx.bot_data["store"]
     seerr: SeerrClient = ctx.bot_data["seerr"]
     radarr: Optional[RadarrClient] = ctx.bot_data.get("radarr")
@@ -587,11 +636,11 @@ async def _submit_issue(
         return ConversationHandler.END
     except Exception as exc:
         logger.exception("create_issue failed")
-        await update.effective_message.reply_text(f"Failed to create issue. {user_friendly_message(exc)}")
+        await update.effective_message.reply_text(f"Couldn't submit the ticket. {user_friendly_message(exc)}")
         return ConversationHandler.END
 
     emoji, name = ISSUE_TYPES[issue_type]
-    label = _format_media_label(
+    label = format_media_label(
         media["title"], media.get("year") or "",
         season=season if media["type"] == "tv" else None,
         episode=episode,
@@ -602,55 +651,66 @@ async def _submit_issue(
         label += " (whole season)"
 
     lines = [
-        f"✅ Reported as issue #{created.id}",
+        f"✅ Reported as ticket #{created.id}",
         f"  {emoji} {name} — {label}",
     ]
 
-    # 2. If auto-fix requested, run it
+    # 2. If auto-fix requested, run it. Serialized per title:
+    # an admin fix and a user auto-fix racing on the same media must not
+    # interleave delete/blocklist/search.
     if autofix:
-        result = await _run_arr_action(media, season, episode, radarr, sonarr, action="fix")
-        if result.status == "failed":
-            lines.append(f"⚠️ Auto-fix didn't run: {result.message}")
+        media_key = media_action_key(media)
+        if not try_begin_action(ctx, media_key):
+            lines.append("⚠️ Auto-fix skipped: another fix for this title is already running.")
         else:
-            # ok or partial: always log the autofix event; only enqueue the
-            # completion poller when search actually ran.
-            await store.log_autofix(
-                update.effective_user.id,
-                media["type"],
-                media["tmdb_id"],
-                season=season,
-                episode=episode,
-            )
-            if result.should_poll:
-                try:
-                    poll_info = result.poll_info or {}
-                    kwargs = {
-                        "chat_id": update.effective_chat.id,
-                        "user_id": update.effective_user.id,
-                        "media_type": media["type"],
-                        "label": label,
-                        "issue_id": created.id,
-                        "issue_url": created.url,
-                    }
-                    if media["type"] == "movie":
-                        kwargs["radarr_movie_id"] = poll_info.get("movie_id")
+            try:
+                result = await _run_arr_action(media, season, episode, radarr, sonarr, action="fix")
+                if result.status == "failed":
+                    lines.append(f"⚠️ Auto-fix didn't run: {result.message}")
+                else:
+                    # ok or partial: always log the autofix event; only enqueue the
+                    # completion poller when search actually ran.
+                    await store.log_autofix(
+                        update.effective_user.id,
+                        media["type"],
+                        media["tmdb_id"],
+                        season=season,
+                        episode=episode,
+                    )
+                    if result.should_poll:
+                        try:
+                            poll_info = result.poll_info or {}
+                            kwargs = {
+                                "chat_id": update.effective_chat.id,
+                                "user_id": update.effective_user.id,
+                                "media_type": media["type"],
+                                "label": label,
+                                "issue_id": created.id,
+                                "issue_url": created.url,
+                            }
+                            if media["type"] == "movie":
+                                kwargs["radarr_movie_id"] = poll_info.get("movie_id")
+                            else:
+                                kwargs["sonarr_series_id"] = poll_info.get("series_id")
+                                kwargs["sonarr_episode_id"] = poll_info.get("episode_id")
+                                kwargs["sonarr_season"] = poll_info.get("season")
+                                kwargs["expected_episode_ids"] = poll_info.get("expected_episode_ids") or []
+                            await store.add_pending_autofix(**kwargs)
+                            prefix = "🔧" if result.ok else "⚠️"
+                            lines.append(f"{prefix} Auto-fix: {result.message}")
+                            lines.append(
+                                "🔔 I'll DM you when the new file finishes "
+                                f"downloading (or after {AUTOFIX_TIMEOUT_HOURS}h timeout).")
+                        except Exception:
+                            logger.exception("failed to enqueue pending autofix")
+                            prefix = "🔧" if result.ok else "⚠️"
+                            lines.append(f"{prefix} Auto-fix: {result.message}")
+                            lines.append("(Couldn't enqueue completion notification.)")
                     else:
-                        kwargs["sonarr_series_id"] = poll_info.get("series_id")
-                        kwargs["sonarr_episode_id"] = poll_info.get("episode_id")
-                        kwargs["sonarr_season"] = poll_info.get("season")
-                        kwargs["expected_episode_ids"] = poll_info.get("expected_episode_ids") or []
-                    await store.add_pending_autofix(**kwargs)
-                    prefix = "🔧" if result.ok else "⚠️"
-                    lines.append(f"{prefix} Auto-fix: {result.message}")
-                    lines.append("🔔 I'll DM you when the new file finishes downloading (or after 6h timeout).")
-                except Exception:
-                    logger.exception("failed to enqueue pending autofix")
-                    prefix = "🔧" if result.ok else "⚠️"
-                    lines.append(f"{prefix} Auto-fix: {result.message}")
-                    lines.append("(Couldn't enqueue completion notification.)")
-            else:
-                # No search step ran — there's nothing to poll for.
-                lines.append(f"⚠️ Auto-fix: {result.message}")
+                        # No search step ran — there's nothing to poll for.
+                        lines.append(f"⚠️ Auto-fix: {result.message}")
+            finally:
+                end_action(ctx, media_key)
 
     lines.append("\nUse /tickets to manage it.")
     await update.effective_message.reply_text("\n".join(lines))
@@ -663,6 +723,15 @@ async def _resume_submit_issue(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     """Relink-resume executor: re-run the submit that was gated by a revoked
     token. The draft is still in user_data (the gate didn't clear it), and
     _submit_issue's own guard handles the case where it got clobbered."""
+    # If the user started a NEW /issue while re-linking, user_data now holds
+    # that conversation's half-built draft; auto-submitting it would file a
+    # partial report (same shape as the audit).
+    if user_in_conversation(ctx, update, "issue"):
+        await update.effective_message.reply_text(
+            "You've started a new /issue since then, so I didn't auto-submit "
+            "the interrupted report. Finish the current one instead."
+        )
+        return
     await _submit_issue(update, ctx, autofix=bool(payload.get("autofix")))
 
 

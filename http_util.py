@@ -20,7 +20,7 @@ from typing import Awaitable, Callable, Optional, TypeVar
 
 import httpx
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("hermes." + __name__)
 T = TypeVar("T")
 
 # HTTP status codes that warrant a retry. 408 Request Timeout, 429 Too Many

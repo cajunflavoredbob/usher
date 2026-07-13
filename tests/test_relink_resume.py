@@ -150,7 +150,7 @@ async def test_resume_submit_issue_reuses_draft_from_user_data():
     kwargs = ctx.bot_data["seerr"].create_issue.call_args.kwargs
     assert kwargs["as_plex_token"] == "fresh-tok"
     assert kwargs["message"] == "wrong subs"
-    assert any("Reported as issue #99" in c["text"]
+    assert any("Reported as ticket #99" in c["text"]
                for c in upd.effective_message.reply_calls)
 
 
@@ -171,7 +171,7 @@ async def test_finalize_link_runs_resume(monkeypatch):
     upd = make_update(text="", user_id=42)
     ctx = make_ctx(user_data={"relink_resume": _fresh_marker("fake", {"x": 1})})
     ctx.bot_data["plex"] = SimpleNamespace(get_user=AsyncMock(return_value=None))
-    ctx.bot_data["seerr"].login_with_plex = AsyncMock(return_value=(7, "User1", None))
+    ctx.bot_data["seerr"].login_with_plex = AsyncMock(return_value=(7, "User1"))
     ctx.bot_data["store"].link_with_plex = AsyncMock()
     await _finalize_link(upd, ctx, "fresh-tok")
     executor.assert_called_once()

@@ -10,9 +10,11 @@ from urllib.parse import urlencode
 
 import httpx
 
+from _version import __version__ as HERMES_VERSION
+from fsutil import atomic_write_text
 from http_util import execute
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("hermes." + __name__)
 
 _SERVICE = "Plex"
 
@@ -32,17 +34,16 @@ class PlexPin:
 
 @dataclass
 class PlexUser:
-    id: int
+    """Only the fields Hermes stores. id and email were previously fetched
+    too -- a gratuitous PII pull nothing read; dropped in 0.12.0."""
     uuid: str
     username: str
-    email: str
 
 
 class PlexClient:
-    def __init__(self, client_id_path: str | Path = "/data/client_id", version: str = "0.4.0"):
+    def __init__(self, client_id_path: str | Path = "/data/client_id"):
         self.client_id_path = Path(client_id_path)
         self.client_id = self._load_or_create_client_id()
-        self.version = version
         self._http = httpx.AsyncClient(
             timeout=15.0,
             headers={
@@ -52,7 +53,8 @@ class PlexClient:
                 "X-Plex-Device": "Server",
                 "X-Plex-Device-Name": DEVICE_NAME,
                 "X-Plex-Platform": PLATFORM,
-                "X-Plex-Version": version,
+                # The real app version (was frozen at "0.4.0").
+                "X-Plex-Version": HERMES_VERSION,
             },
         )
 
@@ -67,8 +69,7 @@ class PlexClient:
         except FileNotFoundError:
             pass
         cid = str(uuid.uuid4())
-        self.client_id_path.parent.mkdir(parents=True, exist_ok=True)
-        self.client_id_path.write_text(cid)
+        atomic_write_text(self.client_id_path, cid, chmod=None)
         logger.info("Generated new Plex client identifier")
         return cid
 
@@ -104,8 +105,6 @@ class PlexClient:
                           headers={"X-Plex-Token": auth_token})
         d = r.json()
         return PlexUser(
-            id=d.get("id", 0),
             uuid=d.get("uuid", ""),
             username=d.get("username", "") or d.get("title", ""),
-            email=d.get("email", ""),
         )

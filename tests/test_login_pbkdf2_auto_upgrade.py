@@ -1,4 +1,4 @@
-"""Regression for audit SEC #16: a successful login with a stale-iter-count
+"""Regression for a successful login with a stale-iter-count
 PBKDF2 hash gets the hash rehashed with the current iteration count, and
 the upgrade is audit-logged. Login itself still succeeds."""
 from __future__ import annotations

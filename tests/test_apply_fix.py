@@ -73,7 +73,7 @@ async def test_movie_redownload_happy_path_enqueues_poller():
 
     # Success message edited in
     assert upd.callback_query.edits
-    text = upd.callback_query.edits[0]["text"]
+    text = upd.callback_query.edits[-1]["text"]
     assert "🔧 Redownload for #42" in text
     assert "Inception (2010)" in text
     assert "I'll DM when the new file finishes" in text
@@ -94,7 +94,7 @@ async def test_movie_mark_failed_happy_path():
     await _apply_fix(upd, ctx, strategy="mark_failed")
     ctx.bot_data["radarr"].mark_failed.assert_called_once()
     ctx.bot_data["store"].add_pending_autofix.assert_called_once()
-    assert "🔧 Mark Failed for #42" in upd.callback_query.edits[0]["text"]
+    assert "🔧 Mark Failed for #42" in upd.callback_query.edits[-1]["text"]
 
 
 # --- failed path: get_issue fails ---
@@ -106,7 +106,7 @@ async def test_get_issue_failure_surfaces_friendly_message():
     ctx.bot_data["seerr"].get_issue.side_effect = RuntimeError("seerr-down-noise")
     await _apply_fix(upd, ctx, strategy="redownload")
     assert upd.callback_query.edits
-    text = upd.callback_query.edits[0]["text"]
+    text = upd.callback_query.edits[-1]["text"]
     assert "Couldn't fetch ticket #42" in text
     # Raw exception NOT echoed
     assert "seerr-down-noise" not in text
@@ -124,7 +124,7 @@ async def test_whole_season_tv_rejected():
         media_type="tv", season=1, episode=None,
     )
     await _apply_fix(upd, ctx, strategy="redownload")
-    text = upd.callback_query.edits[0]["text"]
+    text = upd.callback_query.edits[-1]["text"]
     assert "only works on individual episodes" in text
     # Neither radarr.auto_fix nor sonarr.auto_fix_episode hit
     ctx.bot_data["sonarr"].auto_fix_episode.assert_not_called()
@@ -152,7 +152,7 @@ async def test_partial_success_still_enqueues_poller():
     # Poller IS enqueued (should_poll is True because 'search' is in steps_done)
     ctx.bot_data["store"].add_pending_autofix.assert_called_once()
     # Message uses the partial prefix
-    text = upd.callback_query.edits[0]["text"]
+    text = upd.callback_query.edits[-1]["text"]
     assert "⚠️ Mark Failed for #42" in text
 
 
@@ -185,6 +185,6 @@ async def test_arr_failure_no_enqueue():
         "Movie isn't in Radarr (not monitored)."
     )
     await _apply_fix(upd, ctx, strategy="redownload")
-    text = upd.callback_query.edits[0]["text"]
+    text = upd.callback_query.edits[-1]["text"]
     assert "⚠️ Redownload for #42 didn't run" in text
     ctx.bot_data["store"].add_pending_autofix.assert_not_called()

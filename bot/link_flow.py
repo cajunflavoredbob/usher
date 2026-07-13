@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import secrets
 from typing import Optional
@@ -31,7 +32,7 @@ from bot.callback_prefixes import LINK_CONSENT, LINK_HELP, LINK_PLATFORM, RELINK
 from bot.shared import (
     AWAIT_LINK_CONSENT,
     AWAIT_PLATFORM_CHOICE,
-    _require_seerr,
+    require_seerr,
     record_btn,
     run_relink_resume,
 )
@@ -80,7 +81,7 @@ async def cmd_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if msg.chat.type != ChatType.PRIVATE:
         await msg.reply_text("Please DM me to link your account.")
         return ConversationHandler.END
-    if await _require_seerr(update, ctx) is None:
+    if await require_seerr(update, ctx) is None:
         return ConversationHandler.END
     rows = [[
         InlineKeyboardButton("✅ Yes, continue", callback_data=f"{LINK_CONSENT}:yes"),
@@ -104,7 +105,7 @@ async def cmd_relink(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     is skipped -- tapping the recovery button IS the consent."""
     q = update.callback_query
     await q.answer()
-    if await _require_seerr(update, ctx) is None:
+    if await require_seerr(update, ctx) is None:
         return ConversationHandler.END
     store: UserStore = ctx.bot_data["store"]
     await store.unlink(update.effective_user.id)
@@ -198,7 +199,7 @@ async def _finalize_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     tg_id = update.effective_user.id
 
     try:
-        seerr_id, display, _ = await seerr.login_with_plex(auth_token)
+        seerr_id, display = await seerr.login_with_plex(auth_token)
     except Exception as exc:
         logger.exception("seerr login_with_plex failed")
         await ctx.bot.send_message(
@@ -227,13 +228,17 @@ async def _finalize_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         plex_username=plex_user.username if plex_user else display,
     )
 
+    # HTML + escape: a Plex display name containing `_` or `*` makes
+    # Telegram reject the Markdown send. The link is ALREADY STORED at this
+    # point -- a lost message here left the user assuming failure and
+    # retrying (the audit's worst case).
     await ctx.bot.send_message(
         chat_id=chat_id,
         text=(
-            f"✅ Linked as *{display}*.\n\n"
+            f"✅ Linked as <b>{html.escape(display)}</b>.\n\n"
             "You can now /issue and /tickets."
         ),
-        parse_mode="Markdown",
+        parse_mode="HTML",
     )
 
     # If a revoked token interrupted an action (issue submit, close, comment),
@@ -343,7 +348,7 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         if ctx.user_data.get("link_active_loop") != loop_id:
             return  # superseded by another loop
         # Clear the loop key explicitly so the parent /link conversation
-        # doesn't think it's still polling (audit ERR #19).
+        # doesn't think it's still polling.
         ctx.user_data.pop("link_active_loop", None)
         await q.edit_message_text("⏱️ Plex auth timed out. /link to try again.")
         return

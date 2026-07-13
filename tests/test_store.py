@@ -172,3 +172,79 @@ async def test_concurrent_writes_dont_raise(fresh_store: UserStore):
     # All should be retrievable.
     for i in range(20):
         assert (await fresh_store.get(i)) is not None
+
+
+# --- audit stage 2: corrupt-row resilience + schema stamp ---------------------
+
+
+async def test_corrupt_pending_row_is_skipped_not_fatal(fresh_store: UserStore,
+                                                        tmp_db_path: Path):
+    """One bad item must not kill the batch: garbage JSON in a
+    single expected_episode_ids cell previously raised on every poll tick,
+    permanently stopping all completion/timeout DMs."""
+    good = await fresh_store.add_pending_autofix(
+        chat_id=100, user_id=42, media_type="movie",
+        label="Good Movie", issue_id=1, issue_url="http://x/issues/1",
+        radarr_movie_id=555,
+    )
+    bad = await fresh_store.add_pending_autofix(
+        chat_id=100, user_id=42, media_type="tv",
+        label="Bad Show", issue_id=2, issue_url="http://x/issues/2",
+        sonarr_series_id=10, sonarr_season=1, expected_episode_ids=[101],
+    )
+    with sqlite3.connect(tmp_db_path) as c:
+        c.execute("UPDATE pending_autofixes SET expected_episode_ids = ? WHERE id = ?",
+                  ("{not json", bad))
+    pending = await fresh_store.list_pending_autofixes()
+    assert [p.id for p in pending] == [good]
+
+
+async def test_non_list_episode_ids_is_skipped(fresh_store: UserStore,
+                                               tmp_db_path: Path):
+    pid = await fresh_store.add_pending_autofix(
+        chat_id=100, user_id=42, media_type="tv",
+        label="Show", issue_id=2, issue_url="http://x/issues/2",
+        sonarr_series_id=10, sonarr_season=1, expected_episode_ids=[101],
+    )
+    with sqlite3.connect(tmp_db_path) as c:
+        c.execute("UPDATE pending_autofixes SET expected_episode_ids = ? WHERE id = ?",
+                  ('{"a": 1}', pid))  # valid JSON, wrong shape
+    assert await fresh_store.list_pending_autofixes() == []
+
+
+async def test_schema_version_is_stamped(tmp_db_path: Path, fresh_token_crypto):
+    UserStore(tmp_db_path, crypto=fresh_token_crypto)
+    with sqlite3.connect(tmp_db_path) as c:
+        version = c.execute("PRAGMA user_version").fetchone()[0]
+    assert version == UserStore.SCHEMA_VERSION
+
+
+async def test_old_shape_autofix_table_is_reconciled(tmp_db_path: Path,
+                                                     fresh_token_crypto):
+    """CREATE TABLE IF NOT EXISTS never fixes an existing old-shape table
+   ; opening the store must add the missing columns instead of
+    leaving a permanent 'no such column' poller kill."""
+    with sqlite3.connect(tmp_db_path) as c:
+        c.execute(
+            """
+            CREATE TABLE pending_autofixes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                media_type TEXT NOT NULL,
+                label TEXT NOT NULL,
+                issue_id INTEGER NOT NULL,
+                started_at TEXT NOT NULL DEFAULT (datetime('now')),
+                timeout_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+    store = UserStore(tmp_db_path, crypto=fresh_token_crypto)
+    # The full modern insert + list path must work against the migrated table.
+    pid = await store.add_pending_autofix(
+        chat_id=100, user_id=42, media_type="movie",
+        label="Movie", issue_id=1, issue_url="http://x/issues/1",
+        radarr_movie_id=555,
+    )
+    pending = await store.list_pending_autofixes()
+    assert [p.id for p in pending] == [pid]

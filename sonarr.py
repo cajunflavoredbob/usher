@@ -10,9 +10,14 @@ import httpx
 from fix_result import FixResult
 from http_util import APIError, execute
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("hermes." + __name__)
 
 _SERVICE = "Sonarr"
+
+# Mark-Failed history scan: page until the grabbed event is found, capped so
+# a pathological history can't spin forever (5 x 50 = 250 records deep).
+_HISTORY_PAGE_SIZE = 50
+_HISTORY_MAX_PAGES = 5
 
 
 @dataclass
@@ -52,9 +57,12 @@ class SonarrClient:
         r = await execute(self._client, "GET", "/series", service=_SERVICE,
                           params={"tvdbId": tvdb_id})
         items = r.json()
-        if not items:
+        # Identity guard: same reasoning as radarr.get_movie_by_tmdb -- the
+        # result feeds a delete workflow and Sonarr ignores unknown query
+        # params, so scan for the requested ID instead of trusting items[0].
+        s = next((it for it in items if it.get("tvdbId") == tvdb_id), None)
+        if s is None:
             return None
-        s = items[0]
         return SonarrSeries(id=s["id"], title=s.get("title", "?"))
 
     async def get_episodes(self, series_id: int, season: int) -> list[SonarrEpisode]:
@@ -80,10 +88,6 @@ class SonarrClient:
         await execute(self._client, "POST", "/command", service=_SERVICE,
                       json={"name": "EpisodeSearch", "episodeIds": episode_ids})
 
-    async def trigger_season_search(self, series_id: int, season: int) -> None:
-        await execute(self._client, "POST", "/command", service=_SERVICE,
-                      json={"name": "SeasonSearch", "seriesId": series_id,
-                            "seasonNumber": season})
 
     async def _run_episode_workflow(
         self, *, series: SonarrSeries, match: SonarrEpisode, blocklist: bool,
@@ -100,13 +104,23 @@ class SonarrClient:
         blocklisted = False
         if blocklist:
             try:
-                r = await execute(
-                    self._client, "GET", "/history", service=_SERVICE,
-                    params={"episodeId": match.id, "page": 1, "pageSize": 20,
-                            "sortKey": "date", "sortDirection": "descending"},
-                )
-                records = r.json().get("records") or []
-                grab = next((rec for rec in records if rec.get("eventType") == "grabbed"), None)
+                # Page until the grabbed event is found: a
+                # churn-heavy episode (repeated imports/upgrades) can push
+                # the grab past the newest 20 records, and silently skipping
+                # the blocklist re-grabs the exact release Mark Failed was
+                # meant to bury.
+                grab = None
+                for page in range(1, _HISTORY_MAX_PAGES + 1):
+                    r = await execute(
+                        self._client, "GET", "/history", service=_SERVICE,
+                        params={"episodeId": match.id, "page": page,
+                                "pageSize": _HISTORY_PAGE_SIZE,
+                                "sortKey": "date", "sortDirection": "descending"},
+                    )
+                    records = r.json().get("records") or []
+                    grab = next((rec for rec in records if rec.get("eventType") == "grabbed"), None)
+                    if grab is not None or len(records) < _HISTORY_PAGE_SIZE:
+                        break
                 if grab is not None:
                     await execute(self._client, "POST", f"/history/failed/{grab['id']}",
                                   service=_SERVICE)
@@ -182,54 +196,11 @@ class SonarrClient:
             return err
         return await self._run_episode_workflow(series=series, match=match, blocklist=False)
 
-    async def auto_fix_season(
-        self, tvdb_id: int, season: int
-    ) -> FixResult:
-        """Delete every existing file in `season` and trigger a season-wide search."""
-        try:
-            series = await self.get_series_by_tvdb(tvdb_id)
-        except APIError as exc:
-            return FixResult.failed(f"Sonarr lookup failed: {exc.user_message}")
-        if series is None:
-            return FixResult.failed("Series isn't in Sonarr.")
-        try:
-            episodes = await self.get_episodes(series.id, season)
-        except APIError as exc:
-            return FixResult.failed(f"Sonarr episode lookup failed: {exc.user_message}")
-
-        steps: list[str] = []
-        to_delete_ids: list[int] = []  # episodes that had files (poll target after re-grab)
-        for e in episodes:
-            if e.has_file and e.episode_file_id:
-                try:
-                    await self.delete_episode_file(e.episode_file_id)
-                    to_delete_ids.append(e.id)
-                except APIError as exc:
-                    logger.warning("failed to delete episode file %s: %s",
-                                   e.episode_file_id, exc.user_message)
-        if to_delete_ids:
-            steps.append("delete")
-
-        poll_info = {
-            "series_id": series.id,
-            "season": season,
-            "expected_episode_ids": to_delete_ids,
-        }
-
-        try:
-            await self.trigger_season_search(series.id, season)
-            steps.append("search")
-        except APIError as exc:
-            return FixResult.partial(
-                f"Cleaned up but couldn't trigger search: {exc.user_message}",
-                steps_done=steps, poll_info=poll_info,
-            )
-
-        return FixResult.success(
-            f"Deleted {len(to_delete_ids)} file(s) in '{series.title}' Season {season} "
-            "and triggered a season-wide search.",
-            steps_done=steps, poll_info=poll_info,
-        )
+    # NOTE: the whole-season workflow (auto_fix_season / SeasonSearch /
+    # season_files_present) was removed in 0.12.0 as dead code -- no caller
+    # ever produced a season-shaped poll_info. The DB columns
+    # (sonarr_season, expected_episode_ids) are kept for when the feature
+    # is actually wired up.
 
     async def mark_failed_episode(
         self, tvdb_id: int, season: int, episode: int
@@ -247,11 +218,3 @@ class SonarrClient:
                           service=_SERVICE)
         return bool(r.json().get("hasFile"))
 
-    async def season_files_present(
-        self, series_id: int, season: int, expected_ids: list[int]
-    ) -> tuple[int, int]:
-        """Returns (present_count, total_expected). Used for whole-season poll."""
-        episodes = await self.get_episodes(series_id, season)
-        by_id = {e.id: e for e in episodes}
-        present = sum(1 for eid in expected_ids if by_id.get(eid) and by_id[eid].has_file)
-        return present, len(expected_ids)

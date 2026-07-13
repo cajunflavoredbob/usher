@@ -18,6 +18,8 @@ from hmac import compare_digest
 from pathlib import Path
 from typing import Optional
 
+from fsutil import atomic_write_bytes
+
 logger = logging.getLogger("hermes.settings")
 
 PBKDF2_ITERATIONS = 600_000
@@ -29,6 +31,10 @@ class AdminAccount:
     username: str = ""
     # Format: pbkdf2_sha256$<iter>$<salt_hex>$<hash_hex>
     password_hash: str = ""
+    # Bumped on every password change; session cookies embed the value they
+    # were minted with, so a bump invalidates all outstanding sessions
+    # (a stolen 7-day cookie survived a password rotation).
+    password_version: int = 0
 
     def is_set(self) -> bool:
         return bool(self.username and self.password_hash)
@@ -58,6 +64,10 @@ class Settings:
     # above is retained for when this is turned back off.
     daily_autofix_unlimited: bool = False
     webhook_secret: str = ""
+    # Admin dismissed the "Seerr's New Plex Sign-In is enabled" banner.
+    # Cleared automatically whenever a check observes the setting OFF, so
+    # the warning re-arms only on an off -> on transition.
+    seerr_new_plex_login_ack: bool = False
     admin: AdminAccount = field(default_factory=AdminAccount)
 
     def to_dict(self) -> dict:
@@ -91,14 +101,21 @@ class Settings:
             radarr_api_key=data.get("radarr_api_key", "") or "",
             sonarr_url=data.get("sonarr_url", "") or "",
             sonarr_api_key=data.get("sonarr_api_key", "") or "",
-            allowed_autofix_telegram_ids=list(data.get("allowed_autofix_telegram_ids") or []),
+            # Coerce to int and drop junk: hand-edited string ids used to
+            # pass through untouched and silently never match the int compare.
+            allowed_autofix_telegram_ids=[
+                int(v) for v in (data.get("allowed_autofix_telegram_ids") or [])
+                if str(v).strip().lstrip("-").isdigit()
+            ],
             autofix_allow_all=bool(data.get("autofix_allow_all")),
             daily_autofix_limit=daily_limit,
             daily_autofix_unlimited=bool(data.get("daily_autofix_unlimited")),
             webhook_secret=data.get("webhook_secret", "") or "",
+            seerr_new_plex_login_ack=bool(data.get("seerr_new_plex_login_ack")),
             admin=AdminAccount(
                 username=admin_data.get("username", "") or "",
                 password_hash=admin_data.get("password_hash", "") or "",
+                password_version=int(admin_data.get("password_version") or 0),
             ),
         )
 
@@ -214,7 +231,7 @@ class SettingsStore:
     def _write(self, s: Settings) -> None:
         # Crash-safe write: flush + fsync the temp file's contents to disk
         # BEFORE the atomic rename, then fsync the parent directory so the
-        # rename is durable too. Without this, an unsafe shutdown (server1
+        # rename is durable too. Without this, an unsafe shutdown (the host
         # loses power mid-write) can land the rename before the data, leaving a
         # truncated settings.json -- which _load_or_seed would then have to
         # preserve-and-reseed, locking the admin out. POSIX rename is already
@@ -281,11 +298,8 @@ def load_or_create_session_secret(path: str | Path) -> bytes:
                 return data
         except OSError:
             pass
-    p.parent.mkdir(parents=True, exist_ok=True)
     secret = secrets.token_bytes(32)
-    p.write_bytes(secret)
-    try:
-        os.chmod(p, 0o600)
-    except OSError:
-        pass
+    # Atomic + durable (fsutil): a torn write here truncates the HMAC
+    # signing key and silently weakens every session token.
+    atomic_write_bytes(p, secret)
     return secret

@@ -49,17 +49,23 @@ from bot.callback_prefixes import (
 )
 from const import TICKET_REPLY_TIMEOUT_S
 from bot.shared import (
+    DECRYPT_FAILED_MSG,
     AWAIT_TICKET_REPLY,
     RELINK_RESUME_EXECUTORS,
     ISSUE_TYPES,
-    _edit_or_send,
-    _format_age,
-    _format_media_label,
-    _record_btn,
-    _require_seerr,
-    _ticket_detail_kb,
-    _token_for,
+    edit_or_send,
+    format_age,
+    format_media_label,
+    record_btn,
+    require_seerr,
+    ticket_detail_kb,
+    token_for,
+    end_action,
+    media_action_key,
     prompt_plex_relink,
+    send_typing,
+    try_begin_action,
+    user_in_conversation,
 )
 
 logger = logging.getLogger("hermes")
@@ -92,10 +98,23 @@ async def _require_admin(
     return False
 
 
+def _truncate_message(text: str, limit: int = 4000) -> str:
+    """Keep a message under Telegram's 4096-char cap (an
+    oversized detail view failed the send silently). Cuts at the last
+    newline before the limit so an HTML tag is never split mid-entity."""
+    if len(text) <= limit:
+        return text
+    cut = text.rfind("\n", 0, limit - 20)
+    if cut < limit // 2:
+        cut = limit - 20
+    return text[:cut] + "\n…(truncated)"
+
+
 async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    seerr = await _require_seerr(update, ctx)
+    seerr = await require_seerr(update, ctx)
     if seerr is None:
         return
+    await send_typing(update, ctx)  # list + title fetches can take seconds
     user_id = update.effective_user.id
     admin_id = ctx.bot_data.get("admin_id")
     is_admin = user_id == admin_id
@@ -112,7 +131,7 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Fetch issues
     try:
-        issues = await seerr.list_issues(
+        issues, total = await seerr.list_issues(
             filter="open",
             take=25,
             as_plex_token=None if is_admin else mapping.plex_token,
@@ -135,7 +154,13 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     title_tasks = [seerr.get_media_title(i.media_type, i.tmdb_id) for i in issues]
     title_results = await asyncio.gather(*title_tasks, return_exceptions=True)
 
-    header = f"📋 {'All open tickets' if is_admin else 'Your open tickets'} ({len(issues)}):"
+    # Honest truncation: the header used to claim "All open
+    # tickets (25)" while issues 26+ were silently invisible.
+    scope = "All open tickets" if is_admin else "Your open tickets"
+    if total > len(issues):
+        header = f"📋 {scope} (showing {len(issues)} of {total}; manage the rest in Seerr):"
+    else:
+        header = f"📋 {scope} ({len(issues)}):"
     lines = [header, ""]
     for issue, tr in zip(issues, title_results):
         emoji, _ = ISSUE_TYPES.get(issue.issue_type, ("❓", "Other"))
@@ -143,21 +168,19 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             media_label = f"TMDb {issue.tmdb_id}"
         else:
             title, year = tr
-            media_label = _format_media_label(
+            media_label = format_media_label(
                 title, year,
                 season=issue.problem_season if issue.media_type == "tv" else None,
                 episode=issue.problem_episode,
             )
-        age = _format_age(issue.created_at)
+        age = format_age(issue.created_at)
         line = f"#{issue.id} {emoji} {media_label} — {age}"
         if is_admin and issue.created_by:
             line += f" — {issue.created_by}"
         lines.append(line)
     lines.append("")
     lines.append("Tap a ticket number below to manage it.")
-    text = "\n".join(lines)
-    if len(text) > 4000:
-        text = text[:3990] + "\n…(truncated)"
+    text = _truncate_message("\n".join(lines))
 
     # Inline keyboard: one button per ticket (#N), 4 per row
     button_rows: list[list[InlineKeyboardButton]] = []
@@ -174,7 +197,7 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         text,
         reply_markup=InlineKeyboardMarkup(button_rows) if button_rows else None,
     )
-    _record_btn(ctx.application, update.effective_user.id, msg)
+    record_btn(ctx.application, update.effective_user.id, msg)
 
 
 async def tk_open(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -186,13 +209,13 @@ async def tk_open(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         issue_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
+        logger.warning("Unparseable callback data: %r", q.data)
         return
     tg_id = update.effective_user.id
-    is_admin, token, decrypt_failed = await _token_for(ctx, tg_id)
+    is_admin, token, decrypt_failed = await token_for(ctx, tg_id)
     if not is_admin and decrypt_failed:
         await q.message.reply_text(
-            "Your Plex link can't be decrypted (the encryption key may have rotated). "
-            "Run /unlink then /link to reconnect."
+            DECRYPT_FAILED_MSG
         )
         return
     if not is_admin and token is None:
@@ -209,7 +232,7 @@ async def tk_open(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         parse_mode="HTML",
         reply_markup=kb,
     )
-    _record_btn(ctx.application, tg_id, msg)
+    record_btn(ctx.application, tg_id, msg)
 
 
 async def _build_ticket_detail(
@@ -217,9 +240,10 @@ async def _build_ticket_detail(
     issue_id: int,
     is_admin: bool,
     token: Optional[str],
-) -> tuple[str, InlineKeyboardMarkup]:
+) -> tuple[str, Optional[InlineKeyboardMarkup]]:
     """Render the ticket detail message text + keyboard. Shared between tk_open
-    (sending a new message) and tk_back (editing an existing one)."""
+    (sending a new message) and tk_back (editing an existing one). Keyboard is
+    None when the ticket couldn't be loaded (no actions over unknown state)."""
     seerr: SeerrClient = ctx.bot_data["seerr"]
     media_label = ""
     type_emoji = "📝"
@@ -232,14 +256,14 @@ async def _build_ticket_detail(
         issue = await seerr.get_issue(issue_id, as_plex_token=None if is_admin else token)
         type_emoji, type_name = ISSUE_TYPES.get(issue.issue_type, ("❓", "Other"))
         reporter = issue.created_by or ""
-        age = _format_age(issue.created_at) if issue.created_at else ""
+        age = format_age(issue.created_at) if issue.created_at else ""
         description = (issue.description or "").strip()
         comments = issue.comments or []
         if issue.media_type in ("movie", "tv") and issue.tmdb_id:
             try:
                 title, year = await seerr.get_media_title(issue.media_type, issue.tmdb_id)
                 m_emoji = "🎬" if issue.media_type == "movie" else "📺"
-                bare = _format_media_label(
+                bare = format_media_label(
                     title, year,
                     season=issue.problem_season if issue.media_type == "tv" else None,
                     episode=issue.problem_episode,
@@ -250,7 +274,13 @@ async def _build_ticket_detail(
     except PlexTokenInvalidError:
         raise  # callers show the re-link prompt; a degraded view can't help
     except Exception:
+        # Honest failure state: the old path rendered a
+        # healthy-looking detail with live Fix/Close buttons over data it
+        # never loaded.
         logger.exception("get_issue failed for #%d", issue_id)
+        return (f"<b>Ticket #{issue_id}</b>\n"
+                "Couldn't load the ticket details right now. "
+                "Try again in a moment.", None)
     lines = [f"<b>Ticket #{issue_id}</b>"]
     if media_label:
         lines.append(html.escape(media_label))
@@ -271,30 +301,30 @@ async def _build_ticket_detail(
         else:
             lines.append("<b>Replies:</b>")
         for c in shown:
-            age_c = _format_age(c.created_at) if c.created_at else ""
+            age_c = format_age(c.created_at) if c.created_at else ""
             head = f"<b>{html.escape(c.author or '?')}</b>"
             if age_c:
                 head += f" · {age_c}"
             lines.append(f"{head}: <i>\"{html.escape(c.message)}\"</i>")
-    return "\n".join(lines), _ticket_detail_kb(issue_id, is_admin)
+    return _truncate_message("\n".join(lines)), ticket_detail_kb(issue_id, is_admin)
 
 
 async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Cancel from a sub-menu -- edit the message back to the ticket detail view."""
+    """Back from a sub-menu -- edit the message back to the ticket detail view."""
     q = update.callback_query
     await q.answer()
     try:
         issue_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
+        logger.warning("Unparseable callback data: %r", q.data)
         return
     tg_id = update.effective_user.id
-    is_admin, token, decrypt_failed = await _token_for(ctx, tg_id)
+    is_admin, token, decrypt_failed = await token_for(ctx, tg_id)
     # Same gate as tk_open: a non-admin without a usable token must not fall
     # through to _build_ticket_detail's admin-key fetch.
     if not is_admin and decrypt_failed:
         await q.message.reply_text(
-            "Your Plex link can't be decrypted (the encryption key may have rotated). "
-            "Run /unlink then /link to reconnect."
+            DECRYPT_FAILED_MSG
         )
         return
     if not is_admin and token is None:
@@ -311,7 +341,7 @@ async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         logger.exception("tk_back edit failed for #%d", issue_id)
         return
     # The same message_id is the active one; refresh sent_at so the 6h timer resets.
-    _record_btn(ctx.application, tg_id, q.message)
+    record_btn(ctx.application, tg_id, q.message)
 
 
 async def tk_close_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -321,6 +351,7 @@ async def tk_close_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         issue_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
+        logger.warning("Unparseable callback data: %r", q.data)
         return
     if not await _require_admin(q, ctx, action_label="tk_close_menu"):
         return
@@ -329,19 +360,20 @@ async def tk_close_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             InlineKeyboardButton("💬 Comment", callback_data=f"{TK_CLOSE_WITH_COMMENT}:{issue_id}"),
             InlineKeyboardButton("✓ No comment", callback_data=f"{TK_CLOSE_DIRECT}:{issue_id}"),
         ],
-        [InlineKeyboardButton("⬅️ Cancel", callback_data=f"{TK_BACK}:{issue_id}")],
+        [InlineKeyboardButton("⬅️ Back", callback_data=f"{TK_BACK}:{issue_id}")],
     ])
     await q.edit_message_text(f"Close ticket #{issue_id}?", reply_markup=kb)
-    _record_btn(ctx.application, update.effective_user.id, q.message)
+    record_btn(ctx.application, update.effective_user.id, q.message)
 
 
 async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Admin tapped [Fix]. Opens the [Redownload] [Mark Failed] [Close] submenu."""
+    """Admin tapped [Fix]. Opens the [Redownload] [Mark Failed] [Back] submenu."""
     q = update.callback_query
     await q.answer()
     try:
         issue_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
+        logger.warning("Unparseable callback data: %r", q.data)
         return
     if not await _require_admin(q, ctx, action_label="tk_fix"):
         return
@@ -350,10 +382,10 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             InlineKeyboardButton("🔄 Redownload", callback_data=f"{TK_FIX_REDOWNLOAD}:{issue_id}"),
             InlineKeyboardButton("🚫 Mark Failed", callback_data=f"{TK_FIX_MARK_FAILED}:{issue_id}"),
         ],
-        [InlineKeyboardButton("⬅️ Cancel", callback_data=f"{TK_BACK}:{issue_id}")],
+        [InlineKeyboardButton("⬅️ Back", callback_data=f"{TK_BACK}:{issue_id}")],
     ])
     await q.edit_message_text(f"🔧 Fix #{issue_id} — how?", reply_markup=kb)
-    _record_btn(ctx.application, update.effective_user.id, q.message)
+    record_btn(ctx.application, update.effective_user.id, q.message)
 
 
 async def tk_fix_redownload(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -418,7 +450,7 @@ async def _resolve_fix_context(
         except Exception:
             logger.exception("get_tv_seasons failed for #%d", issue_id)
 
-    label = _format_media_label(
+    label = format_media_label(
         label_title, label_year,
         season=season if media_type == "tv" else None,
         episode=episode,
@@ -459,6 +491,7 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
     try:
         issue_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
+        logger.warning("Unparseable callback data: %r", q.data)
         return
     if not await _require_admin(q, ctx, action_label=f"_apply_fix:{strategy}"):
         return
@@ -468,50 +501,67 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
     store: UserStore = ctx.bot_data["store"]
     action_name = "Redownload" if strategy == "redownload" else "Mark Failed"
 
+    # Working-state edit BEFORE any network call: strips the Fix
+    # submenu so it can't be tapped again while the Seerr+Arr calls run.
+    await edit_or_send(q, f"⏳ {action_name} for #{issue_id} - working...")
+
     fix, err = await _resolve_fix_context(seerr, issue_id, action_name=action_name)
     if err is not None:
-        await _edit_or_send(q, err)
+        await edit_or_send(q, err)
         return
     assert fix is not None
 
-    action: FixAction = "fix" if strategy == "redownload" else "mark_failed"
-    result = await _run_arr_action(
-        fix.media, fix.season, fix.episode, radarr, sonarr, action=action,
-    )
-
-    if result.status == "failed":
-        await _edit_or_send(q, f"⚠️ {action_name} for #{issue_id} didn't run: {result.message}")
+    # Per-media serialization: a second trigger for the same
+    # title - a racing double-tap that beat the edit above, or a user autofix
+    # running concurrently - must not race delete/blocklist/search.
+    media_key = media_action_key(fix.media)
+    if not try_begin_action(ctx, media_key):
+        await edit_or_send(q,
+            f"⏳ Another fix for {fix.label or f'#{issue_id}'} is already "
+            "running. Wait for its result before retrying."
+        )
         return
+    try:
+        action: FixAction = "fix" if strategy == "redownload" else "mark_failed"
+        result = await _run_arr_action(
+            fix.media, fix.season, fix.episode, radarr, sonarr, action=action,
+        )
 
-    # ok or partial: always log the autofix event (mirrors _submit_issue,
-    # which logs even when no search ran); enqueue the completion poller
-    # iff search ran.
-    await store.log_autofix(update.effective_user.id, fix.media["type"],
-                            fix.media["tmdb_id"],
-                            season=fix.season, episode=fix.episode)
-    if result.should_poll:
-        try:
-            await _enqueue_fix_completion(
-                store, fix=fix, result=result,
-                chat_id=q.message.chat_id,
-                user_id=update.effective_user.id,
-                issue_url=f"{seerr.public_url}/issues/{issue_id}",
-            )
-        except Exception:
-            logger.exception("failed to enqueue pending autofix for #%d", issue_id)
-            prefix = "🔧" if result.ok else "⚠️"
-            await _edit_or_send(q,
-                f"{prefix} {action_name} for #{issue_id} ({result.message}), "
-                "but couldn't enqueue completion notification."
-            )
+        if result.status == "failed":
+            await edit_or_send(q, f"⚠️ {action_name} for #{issue_id} didn't run: {result.message}")
             return
 
-    prefix = "🔧" if result.ok else "⚠️"
-    tail = "\n\n🔔 I'll DM when the new file finishes downloading." if result.should_poll else ""
-    await _edit_or_send(q,
-        f"{prefix} {action_name} for #{issue_id}.\n{fix.label}\n\n{result.message}{tail}"
-    )
-    return
+        # ok or partial: always log the autofix event (mirrors _submit_issue,
+        # which logs even when no search ran); enqueue the completion poller
+        # iff search ran.
+        await store.log_autofix(update.effective_user.id, fix.media["type"],
+                                fix.media["tmdb_id"],
+                                season=fix.season, episode=fix.episode)
+        if result.should_poll:
+            try:
+                await _enqueue_fix_completion(
+                    store, fix=fix, result=result,
+                    chat_id=q.message.chat_id,
+                    user_id=update.effective_user.id,
+                    issue_url=f"{seerr.public_url}/issues/{issue_id}",
+                )
+            except Exception:
+                logger.exception("failed to enqueue pending autofix for #%d", issue_id)
+                prefix = "🔧" if result.ok else "⚠️"
+                await edit_or_send(q,
+                    f"{prefix} {action_name} for #{issue_id} ({result.message}), "
+                    "but couldn't enqueue completion notification."
+                )
+                return
+
+        prefix = "🔧" if result.ok else "⚠️"
+        tail = "\n\n🔔 I'll DM when the new file finishes downloading." if result.should_poll else ""
+        await edit_or_send(q,
+            f"{prefix} {action_name} for #{issue_id}.\n{fix.label}\n\n{result.message}{tail}"
+        )
+        return
+    finally:
+        end_action(ctx, media_key)
 
 
 async def tk_close_direct(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -521,17 +571,29 @@ async def tk_close_direct(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     try:
         issue_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
+        logger.warning("Unparseable callback data: %r", q.data)
         return
     if not await _require_admin(q, ctx, action_label="tk_close_direct"):
         return
     seerr: SeerrClient = ctx.bot_data["seerr"]
-    try:
-        await seerr.resolve_issue(issue_id, as_plex_token=None)
-    except Exception as exc:
-        logger.exception("resolve_issue failed for #%d", issue_id)
-        await _edit_or_send(q, f"Couldn't close #{issue_id}. {user_friendly_message(exc)}")
+    # Double-tap guard: strip the submenu before the network
+    # call, and drop a racing second tap that got in before the edit (it
+    # would resolve an already-resolved issue and show a contradictory
+    # "Closed" + "Couldn't close" pair on screen).
+    close_key = f"close:{issue_id}"
+    if not try_begin_action(ctx, close_key):
         return
-    await _edit_or_send(q, f"✅ Closed ticket #{issue_id}.")
+    try:
+        await edit_or_send(q, f"⏳ Closing #{issue_id}...")
+        try:
+            await seerr.resolve_issue(issue_id, as_plex_token=None)
+        except Exception as exc:
+            logger.exception("resolve_issue failed for #%d", issue_id)
+            await edit_or_send(q, f"Couldn't close #{issue_id}. {user_friendly_message(exc)}")
+            return
+        await edit_or_send(q, f"✅ Closed ticket #{issue_id}.")
+    finally:
+        end_action(ctx, close_key)
 
 
 # --- Ticket reply conversation ----------------------------------------------
@@ -543,16 +605,24 @@ async def tk_reply_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     try:
         issue_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
+        logger.warning("Unparseable callback data: %r", q.data)
         return ConversationHandler.END
-    is_admin, token, decrypt_failed = await _token_for(ctx, update.effective_user.id)
+    is_admin, token, decrypt_failed = await token_for(ctx, update.effective_user.id)
     if not is_admin and decrypt_failed:
         await q.message.reply_text(
-            "Your Plex link can't be decrypted (the encryption key may have rotated). "
-            "Run /unlink then /link to reconnect."
+            DECRYPT_FAILED_MSG
         )
         return ConversationHandler.END
     if not is_admin and token is None:
         await q.message.reply_text("DM me /link first so I can post comments as you.")
+        return ConversationHandler.END
+    # Same text-capture guard as the resolve comment prompt:
+    # an active /issue conversation would swallow the reply as its next input.
+    if user_in_conversation(ctx, update, "issue", "resolve"):
+        await q.message.reply_text(
+            "You're in the middle of another flow (like /issue). Finish or "
+            "/cancel it first, then tap Reply again."
+        )
         return ConversationHandler.END
     ctx.user_data["tk_reply_id"] = issue_id
     ctx.user_data["tk_close_after"] = False
@@ -575,8 +645,16 @@ async def tk_close_with_comment_start(update: Update, ctx: ContextTypes.DEFAULT_
     try:
         issue_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
+        logger.warning("Unparseable callback data: %r", q.data)
         return ConversationHandler.END
     if not await _require_admin(q, ctx, action_label="tk_close_with_comment_start"):
+        return ConversationHandler.END
+    # Same text-capture guard as tk_reply_start.
+    if user_in_conversation(ctx, update, "issue", "resolve"):
+        await q.message.reply_text(
+            "You're in the middle of another flow (like /issue). Finish or "
+            "/cancel it first, then tap the button again."
+        )
         return ConversationHandler.END
     ctx.user_data["tk_reply_id"] = issue_id
     ctx.user_data["tk_close_after"] = True
@@ -602,11 +680,10 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if not text:
         await update.effective_message.reply_text("Empty message. Send a few words or /cancel.")
         return AWAIT_TICKET_REPLY
-    is_admin, token, decrypt_failed = await _token_for(ctx, update.effective_user.id)
+    is_admin, token, decrypt_failed = await token_for(ctx, update.effective_user.id)
     if not is_admin and decrypt_failed:
         await update.effective_message.reply_text(
-            "Your Plex link can't be decrypted (the encryption key may have rotated). "
-            "Run /unlink then /link to reconnect."
+            DECRYPT_FAILED_MSG
         )
         return ConversationHandler.END
     if not is_admin and token is None:
@@ -668,7 +745,7 @@ async def _resume_ticket_reply(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     blocked, with the text the user had already typed."""
     issue_id = payload["issue_id"]
     text = payload["text"]
-    is_admin, token, _ = await _token_for(ctx, update.effective_user.id)
+    is_admin, token, _ = await token_for(ctx, update.effective_user.id)
     if not is_admin and token is None:
         return  # can't happen right after a successful link; guard anyway
     seerr: SeerrClient = ctx.bot_data["seerr"]

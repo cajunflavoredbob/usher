@@ -7,6 +7,207 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-12
+
+The pre-release audit release: seven staged batches closing every P0/P1/P2
+finding and the P3 hygiene backlog from a four-pass adversarial audit of
+v0.11.27 (security, backend reliability, UX consistency, code hygiene).
+
+### Removed / internal hygiene (stage 7)
+- Dead whole-season auto-fix chain removed (`auto_fix_season`,
+  `SeasonSearch` trigger, `season_files_present`, the season branch of
+  `PendingAutofix.is_complete`) - no caller ever produced a season-shaped
+  poll; DB columns kept for a future real implementation.
+- The 6-hour auto-fix timeout has one source of truth: the store default
+  and both user-facing texts now derive from `AUTOFIX_TIMEOUT_HOURS`.
+- `schedule_clean_exit` deduplicated into a new root `procutil` module
+  (was a verbatim copy in webui and bot.shared); the Seerr client's
+  five pasted client-selection branches collapsed into `_client_for()`;
+  the six drifting "can't be decrypted" messages collapsed into one
+  shared constant.
+- The twelve-entry `_foo = foo` alias block in `bot/shared.py` is gone;
+  every caller uses the public names.
+- Stale comments/copy fixed: webui route-table docstring, frozen
+  `X-Plex-Version` (now the real app version), private-host reference
+  genericized, Back/Fix submenu docstrings; private audit ticket ids
+  stripped from comments repo-wide (explanations kept).
+- Dead code removed: unused `WEBHOOK_MAX_BYTES` const duplicate,
+  `login_with_plex`'s discarded cookies return, `TvSeason.name` and the
+  Specials naming logic, `PlexUser.id`/`email` (a gratuitous PII fetch
+  nothing read), the never-assigned `"autofix"` user_data key.
+- Consistency: Seerr/Radarr/Sonarr URLs get the same save-time validation
+  as the public URL; all root modules log under the `hermes.*` namespace
+  so filtering catches the API clients; unparseable callback data is
+  logged instead of silently dropped; hand-edited string ids in the
+  autofix allowlist are coerced to int on load (they previously never
+  matched).
+
+### Added
+- **Dismissible "New Plex Sign-In" warning on the Seerr tab.** When Seerr's
+  `newPlexLogin` setting is enabled, any Plex account with access to the
+  Plex server becomes a Seerr user by signing in through the bot's /link.
+  The admin panel now checks the setting (async after page load; silent
+  when Seerr is down, unconfigured, or too old to have the key) and shows a
+  dismissible banner explaining the exposure. A dismissal persists until a
+  check observes the setting OFF, so the warning only ever returns on an
+  off -> on transition - never on restarts or upgrades.
+
+### Changed (audit P2-13, UX consistency cluster)
+- One object, one name: all user-facing copy now says **ticket** ("Reported
+  as ticket #N", "Ticket #N closed", "New ticket #N", comment/timeout DMs);
+  "issue" remains only as the problem description ("what's the issue?").
+- Back is not Cancel: ticket submenu buttons now read "⬅️ Back" (they
+  return to the detail view); real cancels are consistently "🛑 Cancel".
+- The /issue flow checks the full link state at ENTRY (missing, token-less,
+  and decrypt-failed each get their correct message) instead of dying at
+  submit with a misleading "lost conversation state" that discarded the
+  typed description. The stale "/link <username>" copy is gone (/link
+  takes no username).
+- A failed ticket-detail load now says so, with no action buttons - it
+  previously rendered a healthy-looking view with live Fix/Close buttons
+  over data it never loaded. Detail views are also length-capped like the
+  list (newline-safe truncation under Telegram's 4096 limit).
+- Typing indicators on the three slow reads (ticket list, title search,
+  submit) so the bot no longer looks frozen.
+
+### Fixed
+- **The webhook self-test can no longer exfiltrate the secret (audit
+  P2-1).** It built its target URL from the attacker-influenceable Host
+  header and sent the real webhook secret in Authorization - blind SSRF
+  plus secret leak. It now posts to `http://127.0.0.1:<port>/webhook/seerr`
+  unconditionally; the receiver lives in the same process.
+- **Password changes now kill every outstanding session (audit P2-10).**
+  Session cookies were stateless 7-day HMAC tokens, so a stolen cookie
+  survived a password rotation. Cookies now embed a `password_version`
+  that bumps on every change; old sessions die instantly, the changing
+  admin's own session is re-issued in place, and pre-0.12.0 cookies count
+  as version 0 (still valid until the first change - no forced logout on
+  upgrade).
+- **Unencrypted backups require explicit acknowledgement (audit P2-11).**
+  A blank-passphrase backup is a plain ZIP holding encryption.key, the DB
+  it decrypts (all Plex tokens), and settings.json (admin hash, API keys,
+  bot token). The form now spells that out, and the server refuses the
+  download unless a passphrase is set or the "I understand the risk"
+  checkbox is ticked.
+- **Both unauthenticated tracking maps are bounded (audit P2-12).** The
+  login throttle no longer mints a bucket for every key it merely checks,
+  drops empty buckets, and caps tracked keys at 4096 with expired-then-
+  oldest eviction; the webhook's rejection-log sampler sweeps expired
+  entries and caps at 1024 sources. Combined with the stage-1 socket-peer
+  keying, a spray of forged headers can no longer grow either map at all.
+- **A garbage 2xx from Seerr no longer masquerades as a retryable failure
+  (audit P2-2).** `execute()` only guarantees the status code; every Seerr
+  response body is now parsed through a shape guard that raises
+  `AmbiguousResponseError` on empty/HTML/misshapen bodies. Critically,
+  `create_issue` - where the issue is already created by the time the body
+  is read - now says "check Seerr before retrying to avoid a duplicate"
+  instead of inviting a retry, and a missing `id` can no longer produce a
+  `.../issues/None` URL plus a NOT NULL crash on the poller insert.
+- **`/tickets` is honest about truncation (audit P2-3).** `list_issues` now
+  returns Seerr's full matching count from `pageInfo`, and the header reads
+  "showing 25 of N; manage the rest in Seerr" instead of claiming "All open
+  tickets (25)" while issues 26+ were invisible.
+- **Sonarr Mark Failed pages history until the grab is found (audit P2-5).**
+  A churn-heavy episode could push the grabbed event past the newest 20
+  records, silently skipping the blocklist and re-grabbing the exact
+  release Mark Failed was meant to bury. Now pages up to 250 records deep.
+- **The per-user Seerr client cache is race-free (audit P2-6).** Concurrent
+  cache misses for one token both authenticated and the loser's client
+  leaked; get-or-create now runs under an async lock. Evicted/expired
+  clients are retired and closed after a 60s grace period instead of
+  immediately, so a request another coroutine has mid-flight on the old
+  client isn't killed with a confusing transport error.
+- **Raw titles can no longer kill a flow mid-edit (audit P1-3).** The issue
+  flow's season/type screens and the link-success message used
+  `parse_mode="Markdown"` with unescaped Seerr titles / Plex display names;
+  a title like `M*A*S*H` or `[REC]` made Telegram reject the send and wiped
+  the flow - worst case the link-success message, where the link was already
+  stored but the user saw nothing and retried. All three now use the
+  HTML + `html.escape` pattern the rest of the bot already uses.
+- **Destructive admin actions are double-tap-proof (audit P1-6).** With
+  `concurrent_updates(True)`, a second tap on Redownload / Mark Failed /
+  Close / the auto-fix confirm ran in parallel: double delete+blocklist+
+  search, duplicate pending rows and DMs, duplicate Seerr issues. Fix
+  actions now edit to a working state (stripping the buttons) before any
+  network call, the issue submit has a per-user in-flight guard, and direct
+  close drops a racing second tap.
+- **Fixes on the same title are serialized (audit P2-4).** A new per-media
+  in-flight set (`type:tmdb_id`) covers both the admin fix path and user
+  auto-fix, so two triggers for the same movie/episode can't interleave
+  delete/blocklist/search (where the second blocklist could mark the first
+  fix's fresh grab as failed). The second trigger gets "another fix for
+  this title is already running" instead.
+- **Expired keyboards now say so (audit P1-4).** Mid-flow keyboards outlive
+  their 10-minute conversation by hours in chat history; a tap used to hang
+  the Telegram spinner with no feedback. A terminal catch-all handler
+  (registered last) answers any unclaimed callback with an "expired" toast
+  and strips the dead keyboard.
+- **Text-awaiting flows can no longer capture each other's input (audit
+  P1-5).** Tapping "add a comment" (resolve DM) or "Reply" / close-with-
+  comment mid-/issue put two conversations in a text-awaiting state, and
+  the issue flow silently swallowed the comment as its description. Those
+  entry points now check a conversation registry and ask the user to finish
+  or /cancel the active flow first (in a new message, so the button stays
+  usable). The relink-resume issue executor got the same guard: a new
+  /issue started mid-relink owns the draft, so the interrupted report is
+  not auto-submitted over it.
+- **One corrupt DB row can no longer kill the autofix poller (audit P1-1).**
+  `list_pending_autofixes` parsed every row's `expected_episode_ids` JSON in
+  one comprehension, so a single garbage cell raised on every 60s tick and
+  permanently stopped all completion/timeout DMs. Bad rows are now skipped
+  and logged individually; the batch continues.
+- **A corrupt `timeout_at` no longer creates an immortal zombie fix (audit
+  P2-7).** A parse failure on the timestamp - the only time bound a fix has -
+  left the row pending and re-polled forever. It is now treated as timed
+  out and exits the poll set through the normal marked path.
+- **Backups now capture uncheckpointed WAL data; restores are atomic (audit
+  P1-2).** The store runs in WAL mode, but backup zipped the bare
+  `mappings.sqlite`, silently missing recent commits (links, pending fixes)
+  and risking a torn mid-checkpoint copy. Backup now snapshots via `VACUUM
+  INTO`. Restore wrote over live files non-atomically; it now writes each
+  file via temp+fsync+rename and removes stale `-wal`/`-shm` sidecars so
+  SQLite can't replay the old database's log into the restored file.
+- **First-boot key/secret writes are crash-safe (audit P2-8).** A torn
+  `encryption.key` write crash-looped the container on every boot
+  (`Fernet(key)` raises SystemExit) until the file was deleted by hand.
+  New `fsutil.atomic_write_bytes/text` (temp -> fsync -> rename -> parent
+  fsync, 0600 before rename) now backs `encryption.key`, the session
+  secret, the Plex client id, and the setup token.
+
+### Added
+- **Schema version stamp + full-table migrations (audit P2-9).** Migrations
+  previously reconciled only `user_mapping`; `pending_autofixes` and
+  `autofix_events` relied on `CREATE TABLE IF NOT EXISTS`, which never
+  updates an existing old-shape table - any column drift meant a permanent
+  "no such column" poller kill. `_migrate_schema` now reconciles all three
+  tables against their expected column sets and stamps `PRAGMA
+  user_version` (schema version 1) so future migrations can branch on it.
+- **Arr lookups can no longer select the wrong media for deletion (audit
+  P0-1).** `get_movie_by_tmdb` / `get_series_by_tvdb` took `items[0]` of the
+  filtered lookup without verifying the ID matched. Radarr/Sonarr silently
+  ignore unknown query params (the v0.11.25 `/history` bug proved it), so an
+  ignored filter would have fed an arbitrary title into the
+  blocklist+delete+re-search workflow. Both lookups now scan the response
+  for the requested tmdbId/tvdbId and return None on no match - fail-safe in
+  front of an irreversible delete.
+- **Login throttle can no longer be bypassed with X-Forwarded-For (audit
+  P0-2).** `client_ip()` trusted the client-forgeable XFF header, so
+  rotating it on each `/admin/login` attempt landed in a fresh throttle
+  bucket forever. The socket peer is now the key unless it belongs to a
+  configured trusted proxy (`TRUSTED_PROXIES` env, comma-separated CIDRs),
+  and then the XFF chain is walked right-to-left past trusted hops so a
+  client-prepended spoof can't win. `X-Forwarded-Proto` (Secure-cookie
+  detection) gets the same trust gate, and the webhook's unauthenticated-
+  request log sampling now keys on the same hardened value.
+
+### Added
+- **Plaintext-admin startup warning (audit P0-2).** When the HTTP server
+  binds a non-loopback address with no trusted proxy configured, startup
+  logs a warning that the admin password and cookies are LAN-visible. New
+  README section "Securing the admin UI" documents the reverse-proxy and
+  loopback+SSH-tunnel setups; `TRUSTED_PROXIES` added to the compose example
+  and Unraid template (advanced).
+
 ## [0.11.27] - 2026-07-12
 
 ### Added

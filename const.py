@@ -31,7 +31,6 @@ SEARCH_RESULT_LIMIT: Final = 5
 
 # --- HTTP upload caps -------------------------------------------------------
 ADMIN_UPLOAD_MAX_BYTES: Final = 32 * 1024 * 1024  # 32 MB for backup restores
-WEBHOOK_MAX_BYTES: Final = 128 * 1024             # 128 KB on the webhook handler
 
 # --- Conversation timeouts (seconds) ---------------------------------------
 TICKET_REPLY_TIMEOUT_S: Final = 600    # 10 min

@@ -25,7 +25,10 @@ from typing import Callable, Optional, TypeVar
 
 from cryptography.fernet import Fernet, InvalidToken
 
-logger = logging.getLogger(__name__)
+from const import AUTOFIX_TIMEOUT_HOURS
+from fsutil import atomic_write_bytes
+
+logger = logging.getLogger("hermes." + __name__)
 
 T = TypeVar("T")
 
@@ -73,12 +76,9 @@ class TokenCrypto:
         except FileNotFoundError:
             pass
         key = Fernet.generate_key()
-        self.key_path.parent.mkdir(parents=True, exist_ok=True)
-        self.key_path.write_bytes(key)
-        try:
-            os.chmod(self.key_path, 0o600)
-        except OSError:
-            pass
+        # Atomic + durable: a torn write here crash-loops the container on
+        # every subsequent boot (Fernet(key) raises SystemExit).
+        atomic_write_bytes(self.key_path, key)
         logger.info("Generated new encryption key at %s", self.key_path)
         return key
 
@@ -107,21 +107,14 @@ class PendingAutofix:
     timeout_at: str
 
     async def is_complete(self, radarr, sonarr) -> tuple[bool, str]:
-        """Returns (done, extra_suffix). `extra_suffix` is the
-        "(present/total episodes)" string for whole-season fixes,
-        empty for movie/single-episode. Polymorphic dispatch over
-        media_type lives here so the poller stays flat."""
+        """Returns (done, extra_suffix). Polymorphic dispatch over media_type
+        lives here so the poller stays flat. Only {movie_id} and
+        {series_id, episode_id} poll shapes exist; the whole-season branch
+        was removed as dead code in 0.12.0 (columns kept)."""
         if self.media_type == "movie" and radarr and self.radarr_movie_id:
             return await radarr.movie_has_file(self.radarr_movie_id), ""
-        if self.media_type == "tv" and sonarr:
-            if self.sonarr_episode_id:
-                return await sonarr.episode_has_file(self.sonarr_episode_id), ""
-            if self.sonarr_series_id and self.sonarr_season and self.expected_episode_ids:
-                present, total = await sonarr.season_files_present(
-                    self.sonarr_series_id, self.sonarr_season, self.expected_episode_ids,
-                )
-                return (present >= total and total > 0,
-                        f" ({present}/{total} episodes)")
+        if self.media_type == "tv" and sonarr and self.sonarr_episode_id:
+            return await sonarr.episode_has_file(self.sonarr_episode_id), ""
         return False, ""
 
 
@@ -219,24 +212,65 @@ class UserStore:
                 )
                 """
             )
+            # NOTE: idx_pending_status is created in _migrate_schema, after
+            # column reconciliation -- an old-shape table may not have the
+            # status column yet when this runs.
+
+    # Bump when any table's expected shape changes, and add the reconciling
+    # entries to _EXPECTED_COLUMNS below. Version 1 = the stamped 0.12.0
+    # schema; 0 = any pre-stamp database (CREATE TABLE IF NOT
+    # EXISTS never reconciles an existing old-shape table, and a missing
+    # column is a permanent poller kill).
+    SCHEMA_VERSION = 1
+
+    # Full expected column sets, table -> (column, ADD COLUMN ddl). ALTER
+    # TABLE ADD COLUMN needs a default for NOT NULL adds, so nullable/
+    # defaulted forms are used -- fine for reconciliation, since rows that
+    # predate a column have no better value anyway.
+    _EXPECTED_COLUMNS: dict[str, list[tuple[str, str]]] = {
+        "user_mapping": [
+            ("plex_token_enc", "ALTER TABLE user_mapping ADD COLUMN plex_token_enc TEXT"),
+            ("plex_uuid",      "ALTER TABLE user_mapping ADD COLUMN plex_uuid TEXT"),
+            ("plex_username",  "ALTER TABLE user_mapping ADD COLUMN plex_username TEXT"),
+        ],
+        "autofix_events": [
+            ("season",  "ALTER TABLE autofix_events ADD COLUMN season INTEGER"),
+            ("episode", "ALTER TABLE autofix_events ADD COLUMN episode INTEGER"),
+        ],
+        "pending_autofixes": [
+            ("radarr_movie_id",      "ALTER TABLE pending_autofixes ADD COLUMN radarr_movie_id INTEGER"),
+            ("sonarr_series_id",     "ALTER TABLE pending_autofixes ADD COLUMN sonarr_series_id INTEGER"),
+            ("sonarr_episode_id",    "ALTER TABLE pending_autofixes ADD COLUMN sonarr_episode_id INTEGER"),
+            ("sonarr_season",        "ALTER TABLE pending_autofixes ADD COLUMN sonarr_season INTEGER"),
+            ("expected_episode_ids", "ALTER TABLE pending_autofixes ADD COLUMN expected_episode_ids TEXT NOT NULL DEFAULT '[]'"),
+            ("issue_url",            "ALTER TABLE pending_autofixes ADD COLUMN issue_url TEXT NOT NULL DEFAULT ''"),
+            ("status",               "ALTER TABLE pending_autofixes ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'"),
+        ],
+    }
+
+    def _migrate_schema(self) -> None:
+        """Reconcile every table to the current shape, then stamp
+        PRAGMA user_version so future migrations can branch on it."""
+        with self._conn() as c:
+            for table, expected in self._EXPECTED_COLUMNS.items():
+                cols = {r[1] for r in c.execute(f"PRAGMA table_info({table})").fetchall()}
+                if not cols:
+                    continue  # table missing entirely; _init_schema creates it
+                for col, ddl in expected:
+                    if col not in cols:
+                        logger.info("Schema migration: adding %s.%s", table, col)
+                        c.execute(ddl)
+            # Index depends on the status column, which may only just have
+            # been added by the reconciliation above.
             c.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_pending_status
                 ON pending_autofixes(status)
                 """
             )
-
-    def _migrate_schema(self) -> None:
-        """Idempotent column adds for backwards compat with v0.1.x dbs."""
-        with self._conn() as c:
-            cols = {r[1] for r in c.execute("PRAGMA table_info(user_mapping)").fetchall()}
-            for col, ddl in [
-                ("plex_token_enc", "ALTER TABLE user_mapping ADD COLUMN plex_token_enc TEXT"),
-                ("plex_uuid",      "ALTER TABLE user_mapping ADD COLUMN plex_uuid TEXT"),
-                ("plex_username",  "ALTER TABLE user_mapping ADD COLUMN plex_username TEXT"),
-            ]:
-                if col not in cols:
-                    c.execute(ddl)
+            version = c.execute("PRAGMA user_version").fetchone()[0]
+            if version < self.SCHEMA_VERSION:
+                c.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
 
     # --- Token decryption helper ----------------------------------------
 
@@ -424,7 +458,10 @@ class UserStore:
         label: str,
         issue_id: int,
         issue_url: str,
-        timeout_hours: int = 6,
+        # Single source of truth: no caller passes this, so the
+        # const IS the effective timeout, and the DM text derives from the
+        # same value instead of lying when it's tuned.
+        timeout_hours: int = AUTOFIX_TIMEOUT_HOURS,
         radarr_movie_id: Optional[int] = None,
         sonarr_series_id: Optional[int] = None,
         sonarr_episode_id: Optional[int] = None,
@@ -469,17 +506,27 @@ class UserStore:
                 ).fetchall()
 
         rows = await self._run(_do)
-        return [
-            PendingAutofix(
-                id=r[0], chat_id=r[1], user_id=r[2], media_type=r[3],
-                radarr_movie_id=r[4], sonarr_series_id=r[5],
-                sonarr_episode_id=r[6], sonarr_season=r[7],
-                expected_episode_ids=json.loads(r[8] or "[]"),
-                label=r[9], issue_id=r[10], issue_url=r[11],
-                started_at=r[12], timeout_at=r[13],
-            )
-            for r in rows
-        ]
+        # One bad item must not kill the batch: a single corrupt row (garbage
+        # JSON in expected_episode_ids, wrong types) previously raised here
+        # on every poll tick, permanently stopping ALL completion/timeout DMs
+        #. Skip and log the bad row; process the rest.
+        out: list[PendingAutofix] = []
+        for r in rows:
+            try:
+                ids = json.loads(r[8] or "[]")
+                if not isinstance(ids, list):
+                    raise ValueError(f"expected_episode_ids is {type(ids).__name__}, not list")
+                out.append(PendingAutofix(
+                    id=r[0], chat_id=r[1], user_id=r[2], media_type=r[3],
+                    radarr_movie_id=r[4], sonarr_series_id=r[5],
+                    sonarr_episode_id=r[6], sonarr_season=r[7],
+                    expected_episode_ids=ids,
+                    label=r[9], issue_id=r[10], issue_url=r[11],
+                    started_at=r[12], timeout_at=r[13],
+                ))
+            except Exception:
+                logger.exception("Skipping corrupt pending_autofix row id=%s", r[0])
+        return out
 
     async def mark_autofix_status(self, pending_id: int, status: str) -> None:
         """status: 'complete', 'timeout', or 'failed'."""

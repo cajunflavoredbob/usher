@@ -19,6 +19,8 @@ from typing import Awaitable, Callable
 
 from aiohttp import web
 
+from auth_util import client_ip
+
 logger = logging.getLogger("hermes.webhook")
 
 CommentHandler = Callable[[dict], Awaitable[None]]
@@ -34,8 +36,8 @@ DEDUPE_MAX = 256
 # Seerr's JSON payloads are well under 8KB. The parent aiohttp app has
 # client_max_size=ADMIN_UPLOAD_MAX_BYTES (32MB) for admin backup restores;
 # we enforce a tighter limit here so unauthenticated clients can't
-# allocate 32MB per request. Kept here (not imported from const) to avoid
-# a fanout dependency from a leaf module.
+# allocate 32MB per request. This is the single definition -- the unused
+# const.py duplicate was removed in 0.12.0.
 MAX_BODY_BYTES = 128 * 1024
 
 
@@ -57,11 +59,12 @@ def attach_webhook(
     recent: "OrderedDict[str, float]" = OrderedDict()
     # Per-IP rejection counters for the 401 path. Botnets that probe
     # /webhook/seerr without the right header would otherwise generate one
-    # WARN line per request indefinitely (audit ERR #8). We log the first
+    # WARN line per request indefinitely. We log the first
     # rejection from each IP at WARN, then drop to DEBUG and only re-log
     # once per UNAUTH_LOG_INTERVAL_S window per IP.
     unauth_seen: dict[str, float] = {}
     UNAUTH_LOG_INTERVAL_S = 300.0  # 5 min
+    UNAUTH_SEEN_MAX = 1024  # hard cap on tracked sources
 
     def _seen_recently(body_hash: str) -> bool:
         now = time.monotonic()
@@ -90,15 +93,26 @@ def attach_webhook(
         if not hmac.compare_digest(auth.encode("utf-8"), secret.encode("utf-8")):
             # Sample WARN per IP+window; otherwise DEBUG. Botnet probes don't
             # fill the operational log; first probe from a new IP still surfaces.
-            client_ip = (request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-                         or request.remote or "-")
+            # client_ip() keys on the socket peer unless a trusted proxy is
+            # configured -- a spoofed X-Forwarded-For must not mint unbounded
+            # fresh log buckets.
+            ip = client_ip(request)
             now = time.monotonic()
-            last = unauth_seen.get(client_ip)
+            # Bound the sampling map: sweep expired entries,
+            # then evict the oldest if a flood of distinct sources still
+            # fills it. Worst case a noisy source logs at WARN again early.
+            expired = [k for k, t in unauth_seen.items()
+                       if now - t > UNAUTH_LOG_INTERVAL_S]
+            for k in expired:
+                unauth_seen.pop(k, None)
+            if ip not in unauth_seen and len(unauth_seen) >= UNAUTH_SEEN_MAX:
+                unauth_seen.pop(next(iter(unauth_seen)), None)
+            last = unauth_seen.get(ip)
             if last is None or (now - last) > UNAUTH_LOG_INTERVAL_S:
-                unauth_seen[client_ip] = now
-                logger.warning("Webhook rejected: bad/missing Authorization (ip=%s)", client_ip)
+                unauth_seen[ip] = now
+                logger.warning("Webhook rejected: bad/missing Authorization (ip=%s)", ip)
             else:
-                logger.debug("Webhook rejected: bad/missing Authorization (ip=%s, sampled)", client_ip)
+                logger.debug("Webhook rejected: bad/missing Authorization (ip=%s, sampled)", ip)
             return web.Response(status=401, text="unauthorized")
 
         try:
@@ -181,4 +195,12 @@ async def start_http_server(
     site = web.TCPSite(runner, host=host, port=port)
     await site.start()
     logger.info("HTTP server listening on %s:%d", host, port)
+    if host not in ("127.0.0.1", "::1", "localhost") and not app.get("trusted_proxies"):
+        logger.warning(
+            "Admin UI is served over PLAIN HTTP on %s:%d with no trusted proxy "
+            "configured. The admin password and session cookies are visible to "
+            "anyone on this network segment. Put a TLS reverse proxy in front "
+            "and set TRUSTED_PROXIES to its address/CIDR, or bind to 127.0.0.1 "
+            "(WEBHOOK_BIND).", host, port,
+        )
     return runner

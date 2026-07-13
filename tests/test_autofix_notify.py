@@ -85,7 +85,7 @@ async def test_timeout_copy_for_admin_omits_admin_reference():
     ctx.bot.send_message = AsyncMock(return_value=make_message(message_id=791))
     await _notify_timeout(ctx, fix)
     text = ctx.bot.send_message.call_args.kwargs["text"]
-    assert "add a note to the issue" in text
+    assert "add a note to the ticket" in text
     assert "for the admin" not in text
 
 
@@ -150,6 +150,23 @@ async def test_complete_marks_before_notifying(monkeypatch):
         lambda *a, **k: events.append("mark"))
     await poll_pending_autofixes(ctx)
     assert events == ["mark", "notify"]
+
+
+async def test_corrupt_timeout_at_is_treated_as_timed_out(monkeypatch):
+    """A row with an unparseable timeout_at has no time bound at all; it must
+    exit the poll set as a timeout instead of re-polling forever."""
+    fix = _make_fix()
+    fix.timeout_at = "not-a-timestamp"
+    notified: list[int] = []
+
+    async def fake_notify(_ctx, fx):
+        notified.append(fx.id)
+    monkeypatch.setattr(autofix_poll, "_notify_timeout", fake_notify)
+
+    ctx, store = _poll_ctx(fix)
+    await poll_pending_autofixes(ctx)
+    store.mark_autofix_status.assert_called_once_with(fix.id, "timeout")
+    assert notified == [fix.id]
 
 
 async def test_failed_mark_suppresses_completion_dm(monkeypatch):

@@ -33,7 +33,7 @@ def _issue(id: int = 1, **kwargs) -> IssueListItem:
 async def test_admin_lists_all_issues():
     upd = make_update(text="/tickets", user_id=999)
     ctx = make_ctx(admin_id=999)
-    ctx.bot_data["seerr"].list_issues.return_value = [_issue(id=1), _issue(id=2)]
+    ctx.bot_data["seerr"].list_issues.return_value = ([_issue(id=1), _issue(id=2)], 2)
     await cmd_tickets(upd, ctx)
     # Admin sees "All open tickets" framing.
     text = upd.message.reply_calls[0]["text"]
@@ -48,7 +48,7 @@ async def test_user_lists_only_their_issues():
     mapping = make_mapping(telegram_id=42, plex_token="user-token")
     upd = make_update(text="/tickets", user_id=42)
     ctx = make_ctx(admin_id=999, mapping=mapping)
-    ctx.bot_data["seerr"].list_issues.return_value = [_issue(id=7)]
+    ctx.bot_data["seerr"].list_issues.return_value = ([_issue(id=7)], 1)
     await cmd_tickets(upd, ctx)
     text = upd.message.reply_calls[0]["text"]
     assert "Your open tickets" in text
@@ -74,7 +74,7 @@ async def test_unlinked_non_admin_gets_link_prompt():
 async def test_empty_list_for_admin():
     upd = make_update(text="/tickets", user_id=999)
     ctx = make_ctx(admin_id=999)
-    ctx.bot_data["seerr"].list_issues.return_value = []
+    ctx.bot_data["seerr"].list_issues.return_value = ([], 0)
     await cmd_tickets(upd, ctx)
     assert "No open tickets across all users" in upd.message.reply_calls[0]["text"]
 
@@ -83,7 +83,7 @@ async def test_empty_list_for_user():
     mapping = make_mapping(telegram_id=42, plex_token="t")
     upd = make_update(text="/tickets", user_id=42)
     ctx = make_ctx(admin_id=999, mapping=mapping)
-    ctx.bot_data["seerr"].list_issues.return_value = []
+    ctx.bot_data["seerr"].list_issues.return_value = ([], 0)
     await cmd_tickets(upd, ctx)
     assert "No open tickets" in upd.message.reply_calls[0]["text"]
     assert "across all users" not in upd.message.reply_calls[0]["text"]

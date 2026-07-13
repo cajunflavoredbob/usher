@@ -10,7 +10,7 @@ import httpx
 from fix_result import FixResult
 from http_util import APIError, execute
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("hermes." + __name__)
 
 _SERVICE = "Radarr"
 
@@ -45,9 +45,14 @@ class RadarrClient:
         r = await execute(self._client, "GET", "/movie", service=_SERVICE,
                           params={"tmdbId": tmdb_id})
         items = r.json()
-        if not items:
+        # Identity guard: this result feeds a blocklist+delete workflow, and
+        # Radarr silently ignores query params it doesn't recognize (the
+        # /history movieId bug all over again). Never trust items[0] -- scan
+        # for the requested ID so an unfiltered response can't select an
+        # arbitrary movie for deletion.
+        m = next((it for it in items if it.get("tmdbId") == tmdb_id), None)
+        if m is None:
             return None
-        m = items[0]
         mf = m.get("movieFile") or {}
         return RadarrMovie(
             id=m["id"],

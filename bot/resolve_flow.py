@@ -19,10 +19,12 @@ from seerr import PlexTokenInvalidError, SeerrClient
 
 from bot.callback_prefixes import RESOLVE
 from bot.shared import (
+    DECRYPT_FAILED_MSG,
     AWAIT_COMMENT,
     RELINK_RESUME_EXECUTORS,
     prompt_plex_relink,
     token_for,
+    user_in_conversation,
 )
 from const import RESOLVE_FLOW_TIMEOUT_S
 
@@ -64,7 +66,7 @@ async def resolve_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await q.edit_message_text("Couldn't parse selection.")
         return ConversationHandler.END
     if choice == "skip":
-        await q.edit_message_text("OK, leaving the issue open.")
+        await q.edit_message_text("OK, leaving the ticket open.")
         return ConversationHandler.END
     # Same identity gate as tickets.py: an unlinked (or decrypt-failed)
     # non-admin must never fall through to the admin API key. For admin,
@@ -72,8 +74,7 @@ async def resolve_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     is_admin, token, decrypt_failed = await token_for(ctx, update.effective_user.id)
     if not is_admin and decrypt_failed:
         await q.edit_message_text(
-            "Your Plex link can't be decrypted (the encryption key may have rotated). "
-            "Run /unlink then /link to reconnect."
+            DECRYPT_FAILED_MSG
         )
         return ConversationHandler.END
     if not is_admin and token is None:
@@ -89,22 +90,32 @@ async def resolve_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
             return ConversationHandler.END
         except Exception as exc:
             logger.exception("resolve_issue failed")
-            await q.edit_message_text(f"Couldn't close issue #{issue_id}. {user_friendly_message(exc)}")
+            await q.edit_message_text(f"Couldn't close ticket #{issue_id}. {user_friendly_message(exc)}")
             return ConversationHandler.END
-        await q.edit_message_text(f"✅ Issue #{issue_id} closed. Thanks!")
+        await q.edit_message_text(f"✅ Ticket #{issue_id} closed. Thanks!")
         return ConversationHandler.END
-    # "no" -> ask for comment. Copy differs by audience: telling the admin
-    # "admin will see it" reads wrong when they ARE the admin.
+    # "no" -> ask for comment. Refuse while another text-awaiting flow is
+    # active: both conversations would await the next message
+    # and the issue flow, registered first, would swallow this comment as
+    # its description. Reply in a NEW message so the buttons stay usable.
+    if user_in_conversation(ctx, update, "issue", "ticket_reply"):
+        await q.message.reply_text(
+            "You're in the middle of another flow (like /issue). Finish or "
+            "/cancel it first, then tap the button again."
+        )
+        return ConversationHandler.END
+    # Copy differs by audience: telling the admin "admin will see it" reads
+    # wrong when they ARE the admin.
     ctx.user_data["awaiting_comment_for"] = issue_id
     if is_admin:
         await q.edit_message_text(
             "Sorry it's still broken. What's still wrong? "
-            "(Send a brief message; I'll add it to the issue.)"
+            "(Send a brief message; I'll add it to the ticket.)"
         )
     else:
         await q.edit_message_text(
             "Sorry it's still broken. What's still wrong? "
-            "(Send a brief message; admin will see it on the issue.)"
+            "(Send a brief message; admin will see it on the ticket.)"
         )
     return AWAIT_COMMENT
 
@@ -145,7 +156,7 @@ async def resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
         return ConversationHandler.END
     followup = "" if is_admin else " Admin will follow up."
     await update.effective_message.reply_text(
-        f"💬 Added your comment to issue #{issue_id}.{followup}"
+        f"💬 Added your comment to ticket #{issue_id}.{followup}"
     )
     ctx.user_data.pop("awaiting_comment_for", None)
     return ConversationHandler.END
@@ -165,9 +176,9 @@ async def _resume_resolve_close(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     except Exception as exc:
         logger.exception("resumed resolve_issue failed for #%d", issue_id)
         await update.effective_message.reply_text(
-            f"Couldn't close issue #{issue_id}. {user_friendly_message(exc)}")
+            f"Couldn't close ticket #{issue_id}. {user_friendly_message(exc)}")
         return
-    await update.effective_message.reply_text(f"✅ Issue #{issue_id} closed. Thanks!")
+    await update.effective_message.reply_text(f"✅ Ticket #{issue_id} closed. Thanks!")
 
 
 async def _resume_resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
@@ -188,7 +199,7 @@ async def _resume_resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE
         return
     followup = "" if is_admin else " Admin will follow up."
     await update.effective_message.reply_text(
-        f"💬 Added your comment to issue #{issue_id}.{followup}"
+        f"💬 Added your comment to ticket #{issue_id}.{followup}"
     )
 
 

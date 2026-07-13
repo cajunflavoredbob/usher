@@ -1,4 +1,4 @@
-"""Regression for audit CONC #8: the poller skips fix IDs already being
+"""Regression for the poller skips fix IDs already being
 processed by a prior tick, so a slow tick that overlaps the next 60s mark
 doesn't double-notify on the same fix."""
 from __future__ import annotations

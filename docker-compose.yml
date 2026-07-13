@@ -11,6 +11,9 @@ services:
       - ./data:/data
     # No environment variables required. After first start, open
     # http://<host>:8765/admin to finish setup. Advanced users can pin
-    # the Plex-token encryption key here (otherwise auto-generated):
+    # the Plex-token encryption key here (otherwise auto-generated), and
+    # should set TRUSTED_PROXIES when running behind a TLS reverse proxy
+    # (see "Securing the admin UI" in the README):
     #   environment:
     #     HERMES_ENCRYPTION_KEY: ${HERMES_ENCRYPTION_KEY}
+    #     TRUSTED_PROXIES: "172.18.0.0/16"

@@ -30,7 +30,7 @@ logger = logging.getLogger("hermes")
 # Module-level set of fix IDs currently being processed by a tick. If a single
 # tick's await chain stretches past the next 60s mark (slow Sonarr/Radarr), the
 # next tick sees the ID still in-flight and skips it -- otherwise we'd
-# double-notify on a fix that completes mid-tick (audit CONC #8).
+# double-notify on a fix that completes mid-tick.
 _inflight: set[int] = set()
 
 
@@ -62,7 +62,13 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 timeout_at = datetime.fromisoformat(fix.timeout_at.replace(" ", "T")).replace(tzinfo=timezone.utc)
                 timed_out = datetime.now(timezone.utc) >= timeout_at
             except Exception:
-                logger.exception("timeout parse failed for fix %d", fix.id)
+                # The timestamp is the ONLY time bound on a fix. Leaving
+                # timed_out False on a corrupt value re-polled the row every
+                # 60s forever; treat it as timed out so it
+                # exits the poll set through the normal marked path.
+                logger.exception(
+                    "timeout parse failed for fix %d; treating as timed out", fix.id)
+                timed_out = True
             if timed_out:
                 try:
                     await store.mark_autofix_status(fix.id, "timeout")
@@ -92,9 +98,9 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def _issue_line(fix) -> list[str]:
-    """The "Original issue: <url>" line, or nothing for legacy rows enqueued
+    """The "Ticket: <url>" line, or nothing for legacy rows enqueued
     before the admin-fix path learned to set issue_url."""
-    return [f"Original issue: {html.escape(fix.issue_url)}"] if fix.issue_url else []
+    return [f"Ticket: {html.escape(fix.issue_url)}"] if fix.issue_url else []
 
 
 async def _notify_media_gone(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:
@@ -141,7 +147,7 @@ async def _notify_timeout(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:
         "No new file was imported. Check Sonarr/Radarr to see if a release was grabbed.",
         *_issue_line(fix),
         "",
-        "Want to add a note to the issue?" if is_admin
+        "Want to add a note to the ticket?" if is_admin
         else "Want to add a comment for the admin to follow up?",
     ]
     keyboard = [[

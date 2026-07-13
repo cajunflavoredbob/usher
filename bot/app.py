@@ -17,6 +17,7 @@ from telegram.ext import (
     TypeHandler,
 )
 
+from auth_util import parse_trusted_proxies
 from http_util import user_friendly_message
 from plex import PlexClient
 from radarr import RadarrClient
@@ -43,10 +44,11 @@ from bot.issue_flow import _issue_conversation
 from bot.link_flow import _link_conversation, cmd_link_didnt_work, cmd_unlink
 from bot.resolve_flow import _resolve_conversation
 from bot.shared import (
-    _format_status,
-    _global_btn_gate,
-    _reset_stale_flows,
-    _schedule_clean_exit,
+    format_status,
+    global_btn_gate,
+    reset_stale_flows,
+    schedule_clean_exit,
+    unmatched_callback,
 )
 from bot.tickets import (
     _ticket_conversation,
@@ -193,7 +195,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "Hi! I forward issue reports to Seerr.",
         "",
         "*Connection status:*",
-        _format_status(summary),
+        format_status(summary),
         "",
         "*Commands*",
         "  /link — sign in with Plex (DM only)",
@@ -218,7 +220,7 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     summary = await _check_connections(ctx.application)
     await update.effective_message.reply_text(
-        f"*Connection status:*\n{_format_status(summary)}",
+        f"*Connection status:*\n{format_status(summary)}",
         parse_mode="Markdown",
     )
 
@@ -248,6 +250,8 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.bot_data["admin_id"] = admin_id
     app.bot_data["http_port"] = http_port
     app.bot_data["http_bind"] = http_bind
+    app.bot_data["trusted_proxies"] = parse_trusted_proxies(
+        os.environ.get("TRUSTED_PROXIES", ""))
 
     _build_clients_from_settings(app)
 
@@ -258,12 +262,20 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     issue_conv = _issue_conversation()
     resolve_conv = _resolve_conversation()
     ticket_conv = _ticket_conversation()
+    # Registry for shared.user_in_conversation: lets one flow's
+    # entry point refuse to start while another text-awaiting flow is active.
+    app.bot_data["conversations"] = {
+        "link": link_conv,
+        "issue": issue_conv,
+        "resolve": resolve_conv,
+        "ticket_reply": ticket_conv,
+    }
     app.bot_data["flow_convs"] = [link_conv, issue_conv, resolve_conv, ticket_conv]
-    app.add_handler(TypeHandler(Update, _reset_stale_flows), group=-2)
+    app.add_handler(TypeHandler(Update, reset_stale_flows), group=-2)
 
     # Global gate: drop callbacks from stale button-bearing messages. Group -1
     # so it fires before any normal handler.
-    app.add_handler(TypeHandler(Update, _global_btn_gate), group=-1)
+    app.add_handler(TypeHandler(Update, global_btn_gate), group=-1)
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
@@ -285,6 +297,9 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CallbackQueryHandler(tk_back, pattern=fr"^{TK_BACK}:\d+$"))
     app.add_handler(ticket_conv)
     app.add_handler(CallbackQueryHandler(cmd_link_didnt_work, pattern=fr"^{LINK_HELP}$"))
+    # MUST stay the last callback handler in the default group:
+    # catches taps on keyboards whose conversation has timed out or ended.
+    app.add_handler(CallbackQueryHandler(unmatched_callback))
     app.add_error_handler(on_error)
 
     app.job_queue.run_repeating(
@@ -325,7 +340,7 @@ async def _post_init(app: Application) -> None:
         s = settings_store.settings
         if s.telegram_bot_token != boot_token or s.admin_telegram_id != boot_admin_id:
             logger.info("Bot token or admin id changed; exiting in 2s to restart")
-            _schedule_clean_exit(2.0)
+            schedule_clean_exit(2.0)
             return
         logger.info("Settings changed; rebuilding clients")
         _build_clients_from_settings(app)
@@ -345,6 +360,8 @@ async def _post_init(app: Application) -> None:
         settings_path=app.bot_data["settings_path"],
         db_path=Path(app.bot_data["db_path"]),
         on_settings_changed=_on_settings_changed,
+        trusted_proxies=app.bot_data["trusted_proxies"],
+        http_port=app.bot_data["http_port"],
     )
 
     runner = await start_http_server(
@@ -364,7 +381,7 @@ async def _post_init(app: Application) -> None:
         admin_url = f"http://<host>:{app.bot_data['http_port']}/admin"
     msg = (
         f"👋 Bot is online (v{HERMES_VERSION}).\n\n"
-        f"{_format_status(summary)}\n\n"
+        f"{format_status(summary)}\n\n"
         f"Admin UI: {admin_url}\n"
         "Run `/link` to authorize with Plex (per-user issue attribution)."
     )
@@ -508,7 +525,7 @@ async def _run_setup_only(settings_store: SettingsStore, session_secret: bytes,
     async def _on_settings_changed() -> None:
         if settings_store.settings.is_bot_configured():
             logger.info("Setup complete; exiting in 2s so container restarts into full mode")
-            _schedule_clean_exit(2.0)
+            schedule_clean_exit(2.0)
 
     attach_webui(
         web_app,
@@ -518,6 +535,8 @@ async def _run_setup_only(settings_store: SettingsStore, session_secret: bytes,
         settings_path=settings_path,
         db_path=Path(db_path),
         on_settings_changed=_on_settings_changed,
+        trusted_proxies=parse_trusted_proxies(os.environ.get("TRUSTED_PROXIES", "")),
+        http_port=http_port,
     )
     runner = await start_http_server(web_app, host=http_bind, port=http_port)
     try:

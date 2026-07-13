@@ -1,4 +1,4 @@
-"""Regression for audit CONC #11: SeerrClient._as_user reuses cached
+"""Regression for SeerrClient._as_user reuses cached
 authenticated clients per Plex token. LRU + TTL bounded."""
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from seerr import SeerrClient
 
 
 @pytest.fixture
-def client(monkeypatch):
+async def client(monkeypatch):
     """SeerrClient with _as_user's network call mocked so we can assert on
     cache hits without actually talking to Seerr."""
     c = SeerrClient("http://seerr.example.com:5056", "api-key", timeout=10.0)
@@ -23,6 +23,9 @@ def client(monkeypatch):
         return SimpleNamespace(json=lambda: {})
     monkeypatch.setattr(seerr, "execute", fake_execute)
     yield c
+    # Drain retired clients + cancel deferred-close tasks so nothing
+    # outlives the test's event loop.
+    await c.close()
 
 
 # --- cache hit ---
@@ -47,8 +50,9 @@ async def test_different_tokens_get_different_clients(client: SeerrClient):
 
 
 async def test_expired_entry_is_replaced(client: SeerrClient, monkeypatch):
-    """After TTL expires, _as_user closes the stale client and mints a fresh
-    one (different instance)."""
+    """After TTL expires, _as_user retires the stale client (deferred close,
+    an immediate aclose could kill a request another coroutine
+    is mid-flight on) and mints a fresh one."""
     a = await client._as_user("token-X")
     # Advance the monotonic clock past TTL.
     real_monotonic = time.monotonic
@@ -56,7 +60,10 @@ async def test_expired_entry_is_replaced(client: SeerrClient, monkeypatch):
     monkeypatch.setattr(seerr.time, "monotonic", lambda: fake_now[0])
     b = await client._as_user("token-X")
     assert a is not b
-    # The original client should have been aclose()'d during eviction.
+    # NOT closed yet -- retired for grace-period close, drained by close().
+    assert not a.is_closed
+    assert a in client._retired_user_clients
+    await client.close()
     assert a.is_closed
 
 
@@ -76,10 +83,13 @@ async def test_lru_evicts_oldest_when_over_cap(client: SeerrClient, monkeypatch)
     assert {"t1", "t2", "t3"}.issubset(client._user_clients.keys())
     # Now exceed the cap.
     await client._as_user("t4")
-    # t1 should have been evicted (LRU) and its client closed.
+    # t1 should have been evicted (LRU) and retired for deferred close.
     assert "t1" not in client._user_clients
-    assert a.is_closed
+    assert not a.is_closed
+    assert a in client._retired_user_clients
     assert {"t2", "t3", "t4"}.issubset(client._user_clients.keys())
+    await client.close()
+    assert a.is_closed
 
 
 async def test_touching_an_entry_promotes_it_in_lru(client: SeerrClient, monkeypatch):
@@ -91,12 +101,36 @@ async def test_touching_an_entry_promotes_it_in_lru(client: SeerrClient, monkeyp
     c = await client._as_user("t3")
     # Touch t1 -> moves it to the most-recent end.
     await client._as_user("t1")
-    # Exceed cap; t2 (now LRU) gets evicted, not t1.
+    # Exceed cap; t2 (now LRU) gets evicted (retired), not t1.
     await client._as_user("t4")
     assert "t2" not in client._user_clients
     assert "t1" in client._user_clients
-    assert b.is_closed
-    assert not a.is_closed
+    assert b in client._retired_user_clients
+    assert a not in client._retired_user_clients
+
+
+# --- concurrent-miss lock ---
+
+
+async def test_concurrent_misses_share_one_client(monkeypatch):
+    """Two coroutines missing the cache for the same token must not both
+    POST /auth/plex; the loser previously orphaned its client (FD leak)."""
+    import asyncio
+
+    auth_calls = []
+
+    async def fake_execute(client, method, path, **kwargs):
+        from types import SimpleNamespace
+        auth_calls.append(path)
+        await asyncio.sleep(0)  # yield so the second coroutine can race
+        return SimpleNamespace(json=lambda: {})
+
+    monkeypatch.setattr(seerr, "execute", fake_execute)
+    c = SeerrClient("http://seerr.example.com:5056", "api-key")
+    a, b = await asyncio.gather(c._as_user("tok"), c._as_user("tok"))
+    assert a is b
+    assert auth_calls == ["/auth/plex"]
+    await c.close()
 
 
 # --- close() drains cache ---

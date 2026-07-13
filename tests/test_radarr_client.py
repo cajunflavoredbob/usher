@@ -11,7 +11,7 @@ import httpx
 
 from radarr import RadarrClient
 
-MOVIE = {"id": 5, "title": "The Death of Robin Hood",
+MOVIE = {"id": 5, "tmdbId": 42, "title": "The Death of Robin Hood",
          "hasFile": True, "movieFile": {"id": 9}}
 
 
@@ -62,6 +62,41 @@ async def test_mark_failed_blocklists_via_per_movie_history():
     # The paginated library-wide endpoint must never be hit (the old bug).
     assert not any(r.url.path == "/api/v3/history" for r in requests)
     assert any(r.url.path == "/api/v3/history/failed/123" for r in requests)
+
+
+async def test_lookup_scans_for_requested_tmdb_id():
+    """Identity guard: if the tmdbId filter is ignored (version drift, proxy
+    stripping the query string), the response holds arbitrary movies. The
+    lookup must scan for the requested ID, never trust items[0] -- this
+    result feeds a blocklist+delete workflow."""
+    other = {"id": 7, "tmdbId": 999, "title": "Some Other Movie",
+             "hasFile": True, "movieFile": {"id": 3}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[other, MOVIE])
+
+    client = RadarrClient("http://radarr.test", "key")
+    client._client = httpx.AsyncClient(
+        base_url="http://radarr.test/api/v3",
+        transport=httpx.MockTransport(handler),
+    )
+    movie = await client.get_movie_by_tmdb(42)
+    await client.close()
+    assert movie is not None and movie.id == 5
+
+
+async def test_lookup_returns_none_when_only_wrong_movies_returned():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[{"id": 7, "tmdbId": 999, "title": "Wrong",
+                                          "hasFile": True, "movieFile": {"id": 3}}])
+
+    client = RadarrClient("http://radarr.test", "key")
+    client._client = httpx.AsyncClient(
+        base_url="http://radarr.test/api/v3",
+        transport=httpx.MockTransport(handler),
+    )
+    assert await client.get_movie_by_tmdb(42) is None
+    await client.close()
 
 
 async def test_mark_failed_no_grab_falls_back_to_delete_search():

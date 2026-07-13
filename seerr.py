@@ -1,19 +1,45 @@
 """Async client for the Seerr REST API."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Union
 
 import httpx
 
 from http_util import APIError, PermanentAPIError, execute
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("hermes." + __name__)
 
 _SERVICE = "Seerr"
+
+
+class AmbiguousResponseError(PermanentAPIError):
+    """A 2xx from Seerr with an unusable body (empty, HTML from a proxy,
+    missing required fields). For writes the side effect may have LANDED,
+    so callers must not blind-retry (a retried create_issue
+    files a duplicate)."""
+    def __init__(self, detail: str):
+        super().__init__(detail, status_code=None, service=_SERVICE)
+
+
+def _json_or_raise(r: httpx.Response, *, what: str,
+                   expect: type = dict) -> Union[dict, list]:
+    """Parse a 2xx body; raise a clean AmbiguousResponseError instead of a
+    bare ValueError when the body isn't JSON (or isn't the expected shape).
+    execute() only guarantees the status code, not the body."""
+    try:
+        data = r.json()
+    except Exception as exc:
+        raise AmbiguousResponseError(
+            f"Seerr returned an unreadable response for {what}") from exc
+    if expect is not None and not isinstance(data, expect):
+        raise AmbiguousResponseError(
+            f"Seerr returned an unexpected response shape for {what}")
+    return data
 
 
 class PlexTokenInvalidError(PermanentAPIError):
@@ -27,10 +53,13 @@ class PlexTokenInvalidError(PermanentAPIError):
 
 # Per-Plex-token authenticated client cache. Reuses warm clients under a
 # webhook comment flood instead of paying the TCP-handshake + /auth/plex
-# cost on every call (audit CONC #11). LRU + TTL bounded so a token flood
+# cost on every call. LRU + TTL bounded so a token flood
 # doesn't blow up FD count.
 _USER_CLIENT_TTL_S = 300.0
 _USER_CLIENT_MAX = 32
+# Grace before an evicted/expired user client is actually closed; must
+# outlive the 15s per-request timeout so no in-flight request is killed.
+_USER_CLIENT_CLOSE_GRACE_S = 60.0
 
 
 @dataclass
@@ -54,7 +83,6 @@ class CreatedIssue:
 class TvSeason:
     season_number: int
     episode_count: int
-    name: str
 
 
 @dataclass
@@ -108,9 +136,48 @@ class SeerrClient:
         # Per-Plex-token authenticated client cache. Value is
         # (httpx.AsyncClient, expires_at_monotonic). Cache owns aclose().
         self._user_clients: "OrderedDict[str, tuple[httpx.AsyncClient, float]]" = OrderedDict()
+        # Serializes cache get-or-create: two concurrent misses
+        # for one token would otherwise both POST /auth/plex and orphan the
+        # loser's client (never closed).
+        self._user_clients_lock = asyncio.Lock()
+        # Clients evicted while possibly mid-request; closed after a grace
+        # period instead of immediately.
+        self._retired_user_clients: set[httpx.AsyncClient] = set()
+        self._deferred_close_tasks: set[asyncio.Task] = set()
+
+    def _close_later(self, client: httpx.AsyncClient) -> None:
+        """Retire an evicted/expired user client. An immediate aclose() would
+        kill any request another coroutine is mid-flight on; the grace period
+        comfortably outlives the 15s request timeout."""
+        self._retired_user_clients.add(client)
+
+        async def _close() -> None:
+            try:
+                await asyncio.sleep(_USER_CLIENT_CLOSE_GRACE_S)
+                await client.aclose()
+            except Exception:
+                logger.warning("deferred aclose on retired user client failed",
+                               exc_info=True)
+            finally:
+                self._retired_user_clients.discard(client)
+
+        task = asyncio.get_running_loop().create_task(_close())
+        self._deferred_close_tasks.add(task)
+        task.add_done_callback(self._deferred_close_tasks.discard)
 
     async def close(self) -> None:
         await self._client.aclose()
+        for task in list(self._deferred_close_tasks):
+            task.cancel()
+        if self._deferred_close_tasks:
+            # Let cancellations settle so no task outlives the event loop.
+            await asyncio.gather(*self._deferred_close_tasks, return_exceptions=True)
+        for client in list(self._retired_user_clients):
+            try:
+                await client.aclose()
+            except Exception:
+                logger.warning("aclose on retired user client failed", exc_info=True)
+        self._retired_user_clients.clear()
         for client, _ in list(self._user_clients.values()):
             try:
                 await client.aclose()
@@ -118,20 +185,31 @@ class SeerrClient:
                 logger.warning("aclose on cached user client failed", exc_info=True)
         self._user_clients.clear()
 
+    async def get_main_settings(self) -> dict:
+        """Seerr's main settings (admin API key; read-only). Backs the admin
+        panel's New-Plex-Sign-In warning. Raises APIError on failure."""
+        r = await execute(self._client, "GET", "/settings/main", service=_SERVICE)
+        return _json_or_raise(r, what="main settings")
+
     async def ping(self) -> str:
         """Return Seerr's version string. Raises APIError on failure."""
         r = await execute(self._client, "GET", "/status", service=_SERVICE)
-        return r.json().get("version", "?")
+        data = _json_or_raise(r, what="status")
+        return data.get("version", "?")
 
-    async def login_with_plex(self, plex_token: str) -> tuple[int, str, httpx.Cookies]:
-        """Authenticate to Seerr as a Plex user. Returns (seerr_user_id, display_name, cookies)."""
+    async def login_with_plex(self, plex_token: str) -> tuple[int, str]:
+        """Authenticate to Seerr as a Plex user. Returns (seerr_user_id,
+        display_name). (The response cookies were previously returned too;
+        dropped in 0.12.0 -- the cookie-transfer approach was abandoned and
+        the only caller discarded them.)"""
         r = await execute(self._client, "POST", "/auth/plex", service=_SERVICE,
                           json={"authToken": plex_token})
-        data = r.json()
+        data = _json_or_raise(r, what="sign-in")
+        if "id" not in data:
+            raise AmbiguousResponseError("Seerr's sign-in response was missing the user id")
         return (
             int(data["id"]),
             data.get("displayName") or data.get("plexUsername") or data.get("username") or "?",
-            r.cookies,
         )
 
     async def _as_user(self, plex_token: str) -> httpx.AsyncClient:
@@ -145,58 +223,67 @@ class SeerrClient:
         or LRU eviction at _USER_CLIENT_MAX. The cache owns each client's
         lifecycle -- callers MUST NOT aclose() the returned client. Drained
         by SeerrClient.close() at shutdown.
-        """
-        now = time.monotonic()
-        entry = self._user_clients.get(plex_token)
-        if entry is not None:
-            client, expires = entry
-            if now < expires:
-                self._user_clients.move_to_end(plex_token)
-                return client
-            # Stale -- evict + close, then fall through to mint a new one.
-            self._user_clients.pop(plex_token, None)
-            try:
-                await client.aclose()
-            except Exception:
-                logger.warning("aclose on expired user client failed", exc_info=True)
 
-        new_client = httpx.AsyncClient(
-            base_url=f"{self.base_url}/api/v1",
-            headers={"Accept": "application/json"},
-            timeout=15.0,
-        )
-        try:
-            await execute(new_client, "POST", "/auth/plex", service=_SERVICE,
-                          json={"authToken": plex_token})
-        except APIError as exc:
-            await new_client.aclose()
-            # Seerr reports a revoked/expired Plex token as a 500 "Unable to
-            # authenticate." -- which classify_response reads as transient.
-            # It isn't: plex.tv rejected the token upstream (422) and only a
-            # re-link fixes it. 401/403 (or a revoked Seerr membership)
-            # deserve the same re-link path.
-            if ("unable to authenticate" in str(exc).lower()
-                    or exc.status_code in (401, 403)):
-                raise PlexTokenInvalidError() from exc
-            raise
-        except Exception:
-            await new_client.aclose()
-            raise
-        self._user_clients[plex_token] = (new_client, now + _USER_CLIENT_TTL_S)
-        self._user_clients.move_to_end(plex_token)
-        while len(self._user_clients) > _USER_CLIENT_MAX:
-            _, (evict_client, _) = self._user_clients.popitem(last=False)
+        The whole get-or-create runs under _user_clients_lock:
+        without it, two concurrent misses for one token both POST /auth/plex
+        and the losing client leaks. Contention is negligible -- the lock is
+        only held across the network call on a cold or expired entry.
+        """
+        async with self._user_clients_lock:
+            now = time.monotonic()
+            entry = self._user_clients.get(plex_token)
+            if entry is not None:
+                client, expires = entry
+                if now < expires:
+                    self._user_clients.move_to_end(plex_token)
+                    return client
+                # Stale -- evict + retire (deferred close: a request may
+                # still be running on it), then mint a new one.
+                self._user_clients.pop(plex_token, None)
+                self._close_later(client)
+
+            new_client = httpx.AsyncClient(
+                base_url=f"{self.base_url}/api/v1",
+                headers={"Accept": "application/json"},
+                timeout=15.0,
+            )
             try:
-                await evict_client.aclose()
+                await execute(new_client, "POST", "/auth/plex", service=_SERVICE,
+                              json={"authToken": plex_token})
+            except APIError as exc:
+                await new_client.aclose()
+                # Seerr reports a revoked/expired Plex token as a 500 "Unable to
+                # authenticate." -- which classify_response reads as transient.
+                # It isn't: plex.tv rejected the token upstream (422) and only a
+                # re-link fixes it. 401/403 (or a revoked Seerr membership)
+                # deserve the same re-link path.
+                if ("unable to authenticate" in str(exc).lower()
+                        or exc.status_code in (401, 403)):
+                    raise PlexTokenInvalidError() from exc
+                raise
             except Exception:
-                logger.warning("aclose on LRU-evicted user client failed", exc_info=True)
-        return new_client
+                await new_client.aclose()
+                raise
+            self._user_clients[plex_token] = (new_client, now + _USER_CLIENT_TTL_S)
+            self._user_clients.move_to_end(plex_token)
+            while len(self._user_clients) > _USER_CLIENT_MAX:
+                _, (evict_client, _) = self._user_clients.popitem(last=False)
+                self._close_later(evict_client)
+            return new_client
+
+    async def _client_for(self, as_plex_token: Optional[str]) -> httpx.AsyncClient:
+        """The per-user client for token-attributed calls, else the admin-key
+        client. Collapses the if/else previously pasted across five methods
+       ."""
+        if as_plex_token:
+            return await self._as_user(as_plex_token)
+        return self._client
 
     async def search(self, query: str, limit: int = 5) -> list[MediaResult]:
         """Search Seerr for movies + TV shows matching the query."""
         r = await execute(self._client, "GET", "/search", service=_SERVICE,
                           params={"query": query})
-        data = r.json()
+        data = _json_or_raise(r, what="search")
         out: list[MediaResult] = []
         for item in data.get("results", []):
             mt = item.get("mediaType")
@@ -218,21 +305,20 @@ class SeerrClient:
         return out
 
     async def get_tv_seasons(self, tmdb_id: int) -> tuple[list[TvSeason], Optional[int]]:
-        """Return (seasons, tvdb_id) for a TV show. Includes season 0
-        (rendered as 'Specials') because anime movies / OVAs / tie-in
-        specials often live there and users need to report issues on them."""
+        """Return (seasons, tvdb_id) for a TV show. Includes season 0 because
+        anime movies / OVAs / tie-in specials often live there and users need
+        to report issues on them. (Season NAMES are not fetched: the picker
+        renders S<number> buttons only.)"""
         r = await execute(self._client, "GET", f"/tv/{tmdb_id}", service=_SERVICE)
-        data = r.json()
+        data = _json_or_raise(r, what="TV seasons")
         seasons: list[TvSeason] = []
         for s in data.get("seasons", []):
             n = s.get("seasonNumber")
             if n is None:
                 continue
-            default_name = "Specials" if n == 0 else f"Season {n}"
             seasons.append(TvSeason(
                 season_number=n,
                 episode_count=s.get("episodeCount", 0),
-                name=s.get("name") or default_name,
             ))
         external = data.get("externalIds") or {}
         tvdb_id = external.get("tvdbId")
@@ -244,18 +330,16 @@ class SeerrClient:
         filter: str = "open",
         take: int = 25,
         as_plex_token: Optional[str] = None,
-    ) -> list[IssueListItem]:
+    ) -> tuple[list[IssueListItem], int]:
         """List issues. If as_plex_token is provided, authenticates as that
-        user (gets their visible issues only). Else returns all (admin view)."""
-        if as_plex_token:
-            client = await self._as_user(as_plex_token)
-            r = await execute(client, "GET", "/issue", service=_SERVICE,
-                              params={"filter": filter, "take": take})
-            data = r.json()
-        else:
-            r = await execute(self._client, "GET", "/issue", service=_SERVICE,
-                              params={"filter": filter, "take": take})
-            data = r.json()
+        user (gets their visible issues only). Else returns all (admin view).
+        Returns (items, total): total is Seerr's full matching count, which
+        can exceed len(items) when the list is truncated at `take` (audit
+        P2-3: the cap was silent and issues 26+ were invisible)."""
+        client = await self._client_for(as_plex_token)
+        r = await execute(client, "GET", "/issue", service=_SERVICE,
+                          params={"filter": filter, "take": take})
+        data = _json_or_raise(r, what="issue list")
         out: list[IssueListItem] = []
         for item in data.get("results", []):
             media = item.get("media") or {}
@@ -271,7 +355,11 @@ class SeerrClient:
                 problem_episode=item.get("problemEpisode"),
                 created_by=created_by.get("displayName") or created_by.get("plexUsername") or "?",
             ))
-        return out
+        page_info = data.get("pageInfo") or {}
+        total = page_info.get("results")
+        if not isinstance(total, int) or total < len(out):
+            total = len(out)
+        return out, total
 
     async def get_issue(
         self,
@@ -280,13 +368,9 @@ class SeerrClient:
         as_plex_token: Optional[str] = None,
     ) -> IssueListItem:
         """Fetch a single issue by id. Same shape as list_issues entries."""
-        if as_plex_token:
-            client = await self._as_user(as_plex_token)
-            r = await execute(client, "GET", f"/issue/{issue_id}", service=_SERVICE)
-            d = r.json()
-        else:
-            r = await execute(self._client, "GET", f"/issue/{issue_id}", service=_SERVICE)
-            d = r.json()
+        client = await self._client_for(as_plex_token)
+        r = await execute(client, "GET", f"/issue/{issue_id}", service=_SERVICE)
+        d = _json_or_raise(r, what=f"issue #{issue_id}")
         media = d.get("media") or {}
         created_by = d.get("createdBy") or {}
         # Seerr posts the original report as comments[0] at creation; everything
@@ -325,7 +409,7 @@ class SeerrClient:
         """Returns (title, year). Year may be empty string."""
         endpoint = "movie" if media_type == "movie" else "tv"
         r = await execute(self._client, "GET", f"/{endpoint}/{tmdb_id}", service=_SERVICE)
-        d = r.json()
+        d = _json_or_raise(r, what="media title")
         title = d.get("title") or d.get("name") or "Unknown"
         release = d.get("releaseDate") or d.get("firstAirDate") or ""
         year = release[:4] if release else ""
@@ -338,13 +422,9 @@ class SeerrClient:
         *,
         as_plex_token: Optional[str] = None,
     ) -> None:
-        if as_plex_token:
-            client = await self._as_user(as_plex_token)
-            await execute(client, "POST", f"/issue/{issue_id}/comment",
-                          service=_SERVICE, json={"message": message})
-        else:
-            await execute(self._client, "POST", f"/issue/{issue_id}/comment",
-                          service=_SERVICE, json={"message": message})
+        client = await self._client_for(as_plex_token)
+        await execute(client, "POST", f"/issue/{issue_id}/comment",
+                      service=_SERVICE, json={"message": message})
 
     async def resolve_issue(
         self,
@@ -352,13 +432,9 @@ class SeerrClient:
         *,
         as_plex_token: Optional[str] = None,
     ) -> None:
-        if as_plex_token:
-            client = await self._as_user(as_plex_token)
-            await execute(client, "POST", f"/issue/{issue_id}/resolved",
-                          service=_SERVICE)
-        else:
-            await execute(self._client, "POST", f"/issue/{issue_id}/resolved",
-                          service=_SERVICE)
+        client = await self._client_for(as_plex_token)
+        await execute(client, "POST", f"/issue/{issue_id}/resolved",
+                      service=_SERVICE)
 
     async def create_issue(
         self,
@@ -392,15 +468,18 @@ class SeerrClient:
             payload["problemSeason"] = problem_season
         if problem_episode is not None:
             payload["problemEpisode"] = problem_episode
-        if as_plex_token:
-            client = await self._as_user(as_plex_token)
-            r = await execute(client, "POST", "/issue", service=_SERVICE,
-                              json=payload)
-            data = r.json()
-        else:
-            r = await execute(self._client, "POST", "/issue", service=_SERVICE,
-                              json=payload)
-            data = r.json()
+        client = await self._client_for(as_plex_token)
+        r = await execute(client, "POST", "/issue", service=_SERVICE,
+                          json=payload)
+        # Ambiguous-success guard: the issue is CREATED by now.
+        # A garbage 2xx body used to raise a retryable-looking error (user
+        # retries -> duplicate issue) or yield CreatedIssue(id=None) (a
+        # .../issues/None URL + NOT NULL violation on the poller insert).
+        data = _json_or_raise(r, what="issue creation")
         issue_id = data.get("id")
+        if not isinstance(issue_id, int):
+            raise AmbiguousResponseError(
+                "Seerr accepted the report but didn't return an issue id; "
+                "check Seerr before retrying to avoid a duplicate")
         url = f"{self.public_url}/issues/{issue_id}"
         return CreatedIssue(id=issue_id, url=url)

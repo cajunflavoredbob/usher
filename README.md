@@ -127,7 +127,7 @@ Configuration is managed in the `/admin` web UI and persisted to `/data/settings
 | `HERMES_WEBHOOK_SECRET` | no | Auto-generated on first run if unset; copy it into Seerr's webhook Authorization header |
 | `HERMES_ENCRYPTION_KEY` | no | Fernet key for encrypting stored Plex tokens. Auto-generated to `/data/encryption.key` if unset |
 
-Runtime/path overrides: `DATA_DIR` (default `/data`), `STORE_PATH` (mappings DB), `WEBHOOK_PORT` (default `8765`), `WEBHOOK_BIND` (default `0.0.0.0`).
+Runtime/path overrides: `DATA_DIR` (default `/data`), `STORE_PATH` (mappings DB), `WEBHOOK_PORT` (default `8765`), `WEBHOOK_BIND` (default `0.0.0.0`), `TRUSTED_PROXIES` (comma-separated IPs/CIDRs of reverse proxies allowed to set `X-Forwarded-For`/`X-Forwarded-Proto`; unset by default, so those headers are ignored).
 
 ## How user attribution works
 
@@ -163,6 +163,22 @@ Because users sign in with Plex, Hermes authenticates to Seerr **as the user** (
 - Seerr reaches Hermes over your LAN for webhooks; nothing needs to be exposed publicly.
 - Plex tokens are encrypted at rest (Fernet) in the local SQLite DB.
 - Hermes talks only to the Telegram API, your Seerr, your *arr stack, and Plex's auth API — nothing else.
+
+## Securing the admin UI
+
+Hermes has no built-in TLS. On the default bind (`0.0.0.0`, plain HTTP) the
+admin password and session cookies are readable by anyone on the same network
+segment, and Hermes logs a startup warning saying so. Recommended setups:
+
+- **Reverse proxy with TLS** (Nginx Proxy Manager, Caddy, Traefik): terminate
+  HTTPS at the proxy and set `TRUSTED_PROXIES` to the proxy's IP or CIDR.
+  Hermes then trusts `X-Forwarded-For`/`X-Forwarded-Proto` from that proxy —
+  login throttling keys on the real client IP and cookies get the `Secure`
+  flag. Without `TRUSTED_PROXIES`, those headers are ignored (they're
+  client-forgeable) and every request behind the proxy shares one throttle
+  bucket: fail-safe, but set the variable for correct behavior.
+- **Loopback-only**: set `WEBHOOK_BIND=127.0.0.1` and reach the admin UI via
+  an SSH tunnel; point Seerr's webhook at the same loopback address.
 
 ## Troubleshooting
 

@@ -20,6 +20,8 @@ from telegram.ext import ApplicationHandlerStop, ContextTypes, ConversationHandl
 from seerr import SeerrClient
 from store import UserStore
 
+from procutil import schedule_clean_exit  # noqa: F401  (re-export for bot.*)
+
 from bot.callback_prefixes import RELINK
 from const import RELINK_RESUME_TTL_S
 
@@ -63,21 +65,8 @@ ISSUE_TYPE_LABELS: Final = {
 BTN_TTL_SECONDS = 6 * 3600  # 6h before a button-bearing message's buttons expire
 
 
-# --- Clean exit -------------------------------------------------------------
-
-def schedule_clean_exit(delay_s: float = 2.0) -> None:
-    """Send SIGTERM to self after `delay_s` so PTB's run_polling and aiohttp's
-    runner unwind cleanly (closing httpx clients, DB connections, the HTTP
-    server). Falls back to os._exit only if the SIGTERM dispatch itself fails.
-    """
-    loop = asyncio.get_running_loop()
-    def _kill():
-        try:
-            os.kill(os.getpid(), signal.SIGTERM)
-        except Exception:
-            logger.exception("SIGTERM dispatch failed; falling back to os._exit")
-            os._exit(0)
-    loop.call_later(delay_s, _kill)
+# schedule_clean_exit moved to the root procutil module (it was
+# a verbatim copy between here and webui.py). Re-exported for bot.* callers.
 
 
 # --- Formatting -------------------------------------------------------------
@@ -364,6 +353,88 @@ def record_btn(app, user_id: int, message) -> None:
 RELINK_RESUME_EXECUTORS: dict[str, Callable] = {}
 
 
+# One canonical decrypt-failed message (it was pasted six times
+# with wording drift across tickets.py / resolve_flow.py / issue_flow.py).
+DECRYPT_FAILED_MSG = (
+    "Your Plex link can't be decrypted (the encryption key may have "
+    "rotated). Run /unlink then /link to reconnect."
+)
+
+
+async def send_typing(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Best-effort typing indicator before a slow network read (the audit:
+    ticket list / title search / submit looked frozen). Never fatal."""
+    try:
+        await ctx.bot.send_chat_action(chat_id=update.effective_chat.id,
+                                       action="typing")
+    except Exception:
+        logger.debug("send_chat_action failed", exc_info=True)
+
+
+# --- Per-media action serialization (the audit / P2-4) -----------------------
+
+def media_action_key(media: dict) -> str:
+    """Serialization key for destructive arr workflows on one title."""
+    return f"{media.get('type')}:{media.get('tmdb_id')}"
+
+
+def try_begin_action(ctx: ContextTypes.DEFAULT_TYPE, key: str) -> bool:
+    """Claim the in-flight slot for key; False if already claimed. Safe under
+    concurrent_updates: one event loop, and no await between check and add."""
+    inflight: set = ctx.bot_data.setdefault("inflight_actions", set())
+    if key in inflight:
+        return False
+    inflight.add(key)
+    return True
+
+
+def end_action(ctx: ContextTypes.DEFAULT_TYPE, key: str) -> None:
+    ctx.bot_data.get("inflight_actions", set()).discard(key)
+
+
+# --- Cross-conversation text-capture guard ------------------------
+
+def user_in_conversation(ctx: ContextTypes.DEFAULT_TYPE, update: Update,
+                         *names: str) -> bool:
+    """True if any of the named conversations (bot_data["conversations"],
+    registered in app.py) is active for this chat+user. Reads PTB's private
+    _conversations dict, keyed (chat_id, user_id) for per_chat+per_user
+    handlers -- tests pin that shape so a PTB upgrade that changes it fails
+    loudly instead of silently letting text capture cross flows again."""
+    convs = ctx.bot_data.get("conversations") or {}
+    key = (update.effective_chat.id, update.effective_user.id)
+    for name in names:
+        conv = convs.get(name)
+        if conv is None:
+            continue
+        if getattr(conv, "_conversations", {}).get(key) is not None:
+            return True
+    return False
+
+
+# --- Expired-keyboard catch-all -----------------------------------
+
+async def unmatched_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Terminal catch-all for callback taps nothing else claimed: a keyboard
+    outlives its 10-minute conversation by hours in chat history, and a tap
+    on it previously hung the Telegram spinner with no feedback at all.
+    Registered LAST in the default group, so it only fires when every real
+    handler (including active conversations) has passed on the update."""
+    q = update.callback_query
+    if q is None:
+        return
+    try:
+        await q.answer("That menu has expired. Run the command again.")
+    except Exception:
+        logger.debug("expired-callback answer failed", exc_info=True)
+    try:
+        await q.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        # Message may be too old to edit or already edited; the toast above
+        # is the load-bearing part.
+        logger.debug("expired-callback keyboard strip failed", exc_info=True)
+
+
 async def prompt_plex_relink(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *,
                              resume_kind: Optional[str] = None,
                              resume_payload: Optional[dict] = None) -> None:
@@ -530,19 +601,5 @@ def ticket_detail_kb(issue_id: int, is_admin: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([row])
 
 
-# --- Underscore-prefix aliases for backwards-compatible internal callers ---
-# The extracted handler modules use the original `_foo` names. New external
-# call sites should prefer the unprefixed names.
-_schedule_clean_exit = schedule_clean_exit
-_format_age = format_age
-_format_status = format_status
-_require_seerr = require_seerr
-_edit_or_send = edit_or_send
-_token_for = token_for
-_record_btn = record_btn
-_global_btn_gate = global_btn_gate
-_reset_stale_flows = reset_stale_flows
-_ticket_detail_kb = ticket_detail_kb
-_format_media_title_line = format_media_title_line
-_format_se_suffix = format_se_suffix
-_format_media_label = format_media_label
+# The underscore-prefix alias block (`_foo = foo`) was removed in 0.12.0
+#: one naming convention, the unprefixed public names.

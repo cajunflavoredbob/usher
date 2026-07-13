@@ -83,45 +83,7 @@ async def test_episode_pending():
     assert done is False
 
 
-# --- whole season ---
-
-
-async def test_season_partial():
-    fix = _make_fix(
-        media_type="tv",
-        sonarr_series_id=10, sonarr_season=1,
-        expected_episode_ids=[101, 102, 103],
-    )
-    sonarr = SimpleNamespace(season_files_present=AsyncMock(return_value=(2, 3)))
-    done, extra = await fix.is_complete(None, sonarr)
-    assert done is False
-    assert extra == " (2/3 episodes)"
-
-
-async def test_season_complete():
-    fix = _make_fix(
-        media_type="tv",
-        sonarr_series_id=10, sonarr_season=1,
-        expected_episode_ids=[101, 102, 103],
-    )
-    sonarr = SimpleNamespace(season_files_present=AsyncMock(return_value=(3, 3)))
-    done, extra = await fix.is_complete(None, sonarr)
-    assert done is True
-    assert extra == " (3/3 episodes)"
-
-
-async def test_season_zero_expected_returns_false():
-    """Edge: if total expected is 0, present>=total trivially but we should
-    not mark complete (nothing was actually pending)."""
-    fix = _make_fix(
-        media_type="tv",
-        sonarr_series_id=10, sonarr_season=1,
-        expected_episode_ids=[],
-    )
-    # No-expected falls through to the no-handler bottom branch.
-    done, extra = await fix.is_complete(None, SimpleNamespace())
-    assert done is False
-    assert extra == ""
+# --- whole-season branch removed in 0.12.0 (dead code) ---
 
 
 # --- error propagation ---
