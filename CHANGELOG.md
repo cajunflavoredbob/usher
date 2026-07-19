@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-07-18
+
+### Fixed
+- **Follow-up DMs no longer claim "All seasons" on a single-episode
+  ticket.** Seerr sends the affected season/episode only in the
+  issue-created webhook's `extra` array; comment and resolved payloads
+  carry neither it nor problemSeason/problemEpisode. Those handlers fed
+  the absent value to `format_scope_label`, whose absent -> "All seasons"
+  rule is correct for the created event but wrong for follow-ups, so a
+  comment on a Season 6 Episode 9 ticket announced "All seasons".
+  Follow-ups now resolve the ticket's real scope through the API
+  (new `followup_scope_label`) and render no scope line when it cannot
+  be determined - a missing line beats a wrong one. Season 0 still
+  renders "All seasons": zero means whole-series, None means not sent,
+  and that distinction is the bug.
+
 ## [0.12.1] - 2026-07-13
 
 ### Fixed

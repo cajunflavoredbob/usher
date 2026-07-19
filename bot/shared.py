@@ -202,7 +202,11 @@ def format_scope_label(media_type, season, episode) -> str:
     'Season 1, Episode 5' / 'Season 1' / 'All seasons'. Empty for movies.
 
     Seerr uses season 0 (and absence) to mean a whole-series / all-seasons
-    issue, so a falsy season renders as 'All seasons'."""
+    issue, so a falsy season renders as 'All seasons'.
+
+    Only safe when the caller KNOWS the scope was carried in the payload (the
+    issue-created webhook). For follow-up events, where absence means "not
+    sent" rather than "whole series", use followup_scope_label instead."""
     if (media_type or "").lower() != "tv":
         return ""
     if not season:
@@ -210,6 +214,42 @@ def format_scope_label(media_type, season, episode) -> str:
     if episode:
         return f"Season {season}, Episode {episode}"
     return f"Season {season}"
+
+
+async def followup_scope_label(seerr, payload: dict, issue_id, media_type) -> str:
+    """Scope line for follow-up events (ISSUE_COMMENT / ISSUE_RESOLVED).
+
+    Seerr only puts `Affected Season`/`Affected Episode` in the `extra` array
+    of the issue-CREATED webhook. Follow-up payloads carry neither those nor
+    problemSeason/problemEpisode, so absence there means "unknown", NOT the
+    whole series -- feeding it to format_scope_label told the reporter their
+    single-episode ticket was "All seasons" (the create DM said
+    "Season 6, Episode 9", the comment DM contradicted it).
+
+    So: use the payload when it does carry a scope, otherwise ask the REST API
+    for the ticket's real scope, and render nothing at all when it still can't
+    be determined. Never guess -- a missing line beats a wrong one.
+    """
+    if (media_type or "").lower() != "tv":
+        return ""
+    season, episode = extract_affected_se(payload)
+    if season is None and episode is None and seerr is not None:
+        try:
+            issue = await seerr.get_issue(issue_id)
+        except Exception:
+            logger.info(
+                "Couldn't fetch ticket #%s for its affected scope; omitting the "
+                "scope line rather than guessing", issue_id, exc_info=True,
+            )
+        else:
+            season = _se_to_int(getattr(issue, "problem_season", None))
+            episode = _se_to_int(getattr(issue, "problem_episode", None))
+    if season is None and episode is None:
+        # Genuinely unknown (no payload fields, no/failed lookup). A
+        # whole-series ticket comes back as season 0, which is not None and
+        # still renders "All seasons" below.
+        return ""
+    return format_scope_label(media_type, season, episode)
 
 
 async def format_media_title_line(

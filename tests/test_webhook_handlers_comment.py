@@ -157,6 +157,51 @@ async def test_scope_line_from_extra_array():
     assert "Season 1, Episode 5" in text
 
 
+async def test_scope_line_falls_back_to_api_when_payload_has_none():
+    """Live regression (ticket #47): the comment webhook carries no `extra`
+    array, so the scope fell through to "All seasons" and contradicted the
+    create DM, which correctly said Season 6, Episode 9. The handler must now
+    resolve the ticket's real scope instead of guessing."""
+    admin = make_mapping(telegram_id=999, plex_username="user1plex")
+    reporter = make_mapping(telegram_id=111, plex_username="user2")
+    app = _app(admin_id=999, admin_mapping=admin, reporter_mapping=reporter)
+    app.bot_data["seerr"].get_issue = AsyncMock(return_value=SimpleNamespace(
+        problem_season=6, problem_episode=9,
+    ))
+    payload = {
+        "notification_type": "ISSUE_COMMENT",
+        "issue": {"issue_id": 47, "reportedBy_username": "user2", "issue_status": "OPEN"},
+        "comment": {"commentedBy_username": "user2", "comment_message": "still s6 ep 10"},
+        "media": {"media_type": "tv", "tmdbId": 555},
+        # no `extra` array -- exactly what Seerr sends for ISSUE_COMMENT
+    }
+    await handle_seerr_comment(app, payload)
+    text = app.bot.send_message.call_args.kwargs["text"]
+    assert "Season 6, Episode 9" in text
+    assert "All seasons" not in text
+
+
+async def test_scope_line_omitted_when_scope_unknowable():
+    """No payload scope and no API answer -> no scope line, rather than a
+    fabricated "All seasons"."""
+    admin = make_mapping(telegram_id=999, plex_username="user1plex")
+    reporter = make_mapping(telegram_id=111, plex_username="user2")
+    app = _app(admin_id=999, admin_mapping=admin, reporter_mapping=reporter)
+    app.bot_data["seerr"].get_issue = AsyncMock(return_value=SimpleNamespace(
+        problem_season=None, problem_episode=None,
+    ))
+    payload = {
+        "notification_type": "ISSUE_COMMENT",
+        "issue": {"issue_id": 47, "reportedBy_username": "user2", "issue_status": "OPEN"},
+        "comment": {"commentedBy_username": "user2", "comment_message": "still broken"},
+        "media": {"media_type": "tv", "tmdbId": 555},
+    }
+    await handle_seerr_comment(app, payload)
+    text = app.bot.send_message.call_args.kwargs["text"]
+    assert "All seasons" not in text
+    assert "Season" not in text
+
+
 # --- guards -----------------------------------------------------------------
 
 

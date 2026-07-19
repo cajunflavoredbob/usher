@@ -16,6 +16,7 @@ from bot.callback_prefixes import TK_CLOSE, TK_FIX, TK_OPEN, TK_REPLY
 from bot.shared import (
     ISSUE_TYPE_LABELS,
     extract_affected_se,
+    followup_scope_label,
     format_media_title_line,
     format_scope_label,
     record_btn,
@@ -68,8 +69,11 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
 
     seerr: Optional[SeerrClient] = app.bot_data.get("seerr")
     title_line = await format_media_title_line(seerr, media)
-    season, episode = extract_affected_se(payload)
-    scope_label = format_scope_label(media.get("media_type"), season, episode)
+    # Comment payloads carry no affected season/episode; look it up rather
+    # than letting absence render as "All seasons" on a per-episode ticket.
+    scope_label = await followup_scope_label(
+        seerr, payload, issue_id, media.get("media_type"),
+    )
 
     safe_comment = html.escape(comment_text)
     safe_commenter = html.escape(commenter_username or "Seerr")
@@ -161,8 +165,10 @@ async def handle_seerr_resolved(app: Application, payload: dict) -> None:
 
     seerr: Optional[SeerrClient] = app.bot_data.get("seerr")
     title_line = await format_media_title_line(seerr, media)
-    season, episode = extract_affected_se(payload)
-    scope_label = format_scope_label(media.get("media_type"), season, episode)
+    # Same as the comment path: resolved payloads don't carry the scope.
+    scope_label = await followup_scope_label(
+        seerr, payload, issue_id, media.get("media_type"),
+    )
 
     safe_title = html.escape(title_line) if title_line else ""
     safe_scope = html.escape(scope_label) if scope_label else ""
