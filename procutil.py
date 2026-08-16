@@ -7,7 +7,7 @@ import logging
 import os
 import signal
 
-logger = logging.getLogger("hermes")
+logger = logging.getLogger("usher")
 
 
 def schedule_clean_exit(delay_s: float = 2.0) -> None:

@@ -83,7 +83,7 @@ def _patch_httpx(monkeypatch, *, resp=None, exc=None):
 async def client(tmp_path, monkeypatch):
     # Seed a settings store with an admin set (so auth_middleware lets us in)
     # and a known webhook secret.
-    monkeypatch.delenv("HERMES_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("USHER_WEBHOOK_SECRET", raising=False)
     settings_path = tmp_path / "settings.json"
     store = webui.SettingsStore(settings_path)
     store.settings.admin.username = "admin"
@@ -109,7 +109,7 @@ async def client(tmp_path, monkeypatch):
 def _auth_cookies():
     return {
         webui.SESSION_COOKIE: _SESSION,
-        "hermes_csrf": CSRF,
+        "usher_csrf": CSRF,
     }
 
 
@@ -128,7 +128,7 @@ async def _body(resp):
 async def test_requires_login(client):
     # No session cookie -> middleware redirects to login (302).
     r = await client.post("/admin/test/seerr", data={"csrf_token": CSRF},
-                          cookies={"hermes_csrf": CSRF}, allow_redirects=False)
+                          cookies={"usher_csrf": CSRF}, allow_redirects=False)
     assert r.status == 302
 
 

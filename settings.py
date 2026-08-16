@@ -1,4 +1,4 @@
-"""Settings management for Hermes.
+"""Settings management for Usher.
 
 settings.json under /data is the source of truth. Env vars seed it on
 first run, then become inert.
@@ -21,7 +21,7 @@ from typing import Optional
 
 from fsutil import atomic_write_bytes
 
-logger = logging.getLogger("hermes.settings")
+logger = logging.getLogger("usher.settings")
 
 PBKDF2_ITERATIONS = 600_000
 SALT_BYTES = 16
@@ -61,7 +61,7 @@ DEFAULT_DAILY_AUTOFIX_LIMIT = 3
 class Settings:
     telegram_bot_token: str = ""
     admin_telegram_id: int = 0
-    hermes_public_url: str = ""
+    usher_public_url: str = ""
     seerr_url: str = ""
     seerr_api_key: str = ""
     seerr_public_url: str = ""
@@ -107,7 +107,10 @@ class Settings:
         return cls(
             telegram_bot_token=data.get("telegram_bot_token", "") or "",
             admin_telegram_id=admin_tg_id,
-            hermes_public_url=data.get("hermes_public_url", "") or "",
+            # settings.json written before the rename stores the old key;
+            # keep reading it so an in-place upgrade preserves the URL.
+            usher_public_url=(data.get("usher_public_url")
+                              or data.get("hermes_public_url") or ""),
             seerr_url=data.get("seerr_url", "") or "",
             seerr_api_key=data.get("seerr_api_key", "") or "",
             seerr_public_url=data.get("seerr_public_url", "") or "",
@@ -197,13 +200,16 @@ class SettingsStore:
             seerr_url=os.environ.get("SEERR_URL", "").strip(),
             seerr_api_key=os.environ.get("SEERR_API_KEY", "").strip(),
             seerr_public_url=os.environ.get("SEERR_PUBLIC_URL", "").strip(),
-            hermes_public_url=os.environ.get("HERMES_PUBLIC_URL", "").strip(),
+            # Pre-rename installs may still set the HERMES_* env names.
+            usher_public_url=(os.environ.get("USHER_PUBLIC_URL")
+                              or os.environ.get("HERMES_PUBLIC_URL") or "").strip(),
             radarr_url=os.environ.get("RADARR_URL", "").strip(),
             radarr_api_key=os.environ.get("RADARR_API_KEY", "").strip(),
             sonarr_url=os.environ.get("SONARR_URL", "").strip(),
             sonarr_api_key=os.environ.get("SONARR_API_KEY", "").strip(),
             allowed_autofix_telegram_ids=ids(os.environ.get("ALLOWED_AUTOFIX_TELEGRAM_IDS", "")),
-            webhook_secret=os.environ.get("HERMES_WEBHOOK_SECRET", "").strip(),
+            webhook_secret=(os.environ.get("USHER_WEBHOOK_SECRET")
+                            or os.environ.get("HERMES_WEBHOOK_SECRET") or "").strip(),
             admin=AdminAccount(),  # always unset on first run
         )
 

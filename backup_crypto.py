@@ -1,7 +1,7 @@
 """Optional passphrase-wrapped backup format.
 
 Layout:
-  MAGIC (12 bytes): b"HERMES-BAK1\\n"
+  MAGIC (11 bytes): b"USHER-BAK1\\n"
   SALT  (16 bytes): per-backup random salt
   TOKEN (variable): Fernet-encrypted plaintext (the original ZIP bytes)
 
@@ -17,7 +17,10 @@ from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-MAGIC = b"HERMES-BAK1\n"
+MAGIC = b"USHER-BAK1\n"
+# Backups written before the rename carry the old magic (12 bytes, so the
+# header length must be derived from whichever magic matched).
+LEGACY_MAGIC = b"HERMES-BAK1\n"
 SALT_LEN = 16
 PBKDF2_ITERATIONS = 600_000
 
@@ -40,17 +43,21 @@ def wrap(plain_zip: bytes, passphrase: str) -> bytes:
 
 
 def is_wrapped(blob: bytes) -> bool:
-    return blob.startswith(MAGIC)
+    return blob.startswith(MAGIC) or blob.startswith(LEGACY_MAGIC)
 
 
 def unwrap(blob: bytes, passphrase: str) -> bytes:
     """Raises ValueError on bad passphrase or malformed input."""
-    if not is_wrapped(blob):
+    if blob.startswith(MAGIC):
+        magic = MAGIC
+    elif blob.startswith(LEGACY_MAGIC):
+        magic = LEGACY_MAGIC
+    else:
         raise ValueError("Not a wrapped backup.")
-    header_end = len(MAGIC) + SALT_LEN
+    header_end = len(magic) + SALT_LEN
     if len(blob) < header_end:
         raise ValueError("Wrapped backup truncated.")
-    salt = blob[len(MAGIC):header_end]
+    salt = blob[len(magic):header_end]
     token = blob[header_end:]
     key = _derive_key(passphrase, salt)
     try:

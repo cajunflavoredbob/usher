@@ -1,4 +1,4 @@
-"""Shared fixtures for the Hermes test suite."""
+"""Shared fixtures for the Usher test suite."""
 from __future__ import annotations
 
 import sys
@@ -25,9 +25,9 @@ def tmp_db_path(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def fresh_fernet_key(monkeypatch) -> str:
-    """Set HERMES_ENCRYPTION_KEY to a fresh key for the duration of the test."""
+    """Set USHER_ENCRYPTION_KEY to a fresh key for the duration of the test."""
     key = Fernet.generate_key().decode()
-    monkeypatch.setenv("HERMES_ENCRYPTION_KEY", key)
+    monkeypatch.setenv("USHER_ENCRYPTION_KEY", key)
     return key
 
 

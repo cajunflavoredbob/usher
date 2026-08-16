@@ -1,9 +1,9 @@
 services:
-  hermes:
+  usher:
     # For local development: build .
-    # For published image: image: cajunflavoredbob/hermes:latest
+    # For published image: image: cajunflavoredbob/usher:latest
     build: .
-    container_name: hermes
+    container_name: usher
     restart: unless-stopped
     ports:
       - "8765:8765"
@@ -15,5 +15,5 @@ services:
     # should set TRUSTED_PROXIES when running behind a TLS reverse proxy
     # (see "Securing the admin UI" in the README):
     #   environment:
-    #     HERMES_ENCRYPTION_KEY: ${HERMES_ENCRYPTION_KEY}
+    #     USHER_ENCRYPTION_KEY: ${USHER_ENCRYPTION_KEY}
     #     TRUSTED_PROXIES: "172.18.0.0/16"

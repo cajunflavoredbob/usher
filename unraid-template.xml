@@ -1,19 +1,19 @@
 <?xml version="1.0"?>
 <Container version="2">
-  <Name>hermes</Name>
-  <Repository>cajunflavoredbob/hermes:latest</Repository>
-  <Registry>https://hub.docker.com/r/cajunflavoredbob/hermes</Registry>
+  <Name>usher</Name>
+  <Repository>cajunflavoredbob/usher:latest</Repository>
+  <Registry>https://hub.docker.com/r/cajunflavoredbob/usher</Registry>
   <Network>bridge</Network>
   <MyIP/>
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
-  <Support>https://github.com/cajunflavoredbob/hermes/issues</Support>
-  <Project>https://github.com/cajunflavoredbob/hermes</Project>
+  <Support>https://github.com/cajunflavoredbob/usher/issues</Support>
+  <Project>https://github.com/cajunflavoredbob/usher</Project>
   <Overview>A Telegram bot that lets your users report media issues to Seerr (the unified Overseerr/Jellyseerr successor), with optional self-service auto-fix that tells Radarr or Sonarr to delete the file and re-search. All configuration happens in a built-in admin web UI -- no environment variables required.</Overview>
   <Category>MediaApp:Other</Category>
   <WebUI>http://[IP]:[PORT:8765]/admin</WebUI>
-  <TemplateURL>https://raw.githubusercontent.com/cajunflavoredbob/hermes/main/unraid-template.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/cajunflavoredbob/hermes/main/icon.png</Icon>
+  <TemplateURL>https://raw.githubusercontent.com/cajunflavoredbob/usher/main/unraid-template.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/cajunflavoredbob/usher/main/icon.png</Icon>
   <Date>2026-08-16</Date>
   <Changes>### v0.13.0&#xD;
 - Security, reliability, and UX hardening: see the project CHANGELOG for details&#xD;
@@ -49,17 +49,17 @@
 **Enable comment-reply notifications (optional)**&#xD;
 1. In Seerr, go to Settings → Notifications → Webhook&#xD;
 2. Webhook URL: `http://&lt;unraid-ip&gt;:8765/webhook/seerr`&#xD;
-3. Authorization Header: paste the Webhook Secret from the Hermes web UI (mandatory -- Hermes rejects deliveries without it)&#xD;
+3. Authorization Header: paste the Webhook Secret from the Usher web UI (mandatory -- Usher rejects deliveries without it)&#xD;
 4. Enable the **Issue Reported**, **Issue Comment**, and **Issue Resolved** notification types&#xD;
-5. Click "Test" to confirm Hermes receives it&#xD;
+5. Click "Test" to confirm Usher receives it&#xD;
 &#xD;
-See the [project page](https://github.com/cajunflavoredbob/hermes) for full docs.</Description>
+See the [project page](https://github.com/cajunflavoredbob/usher) for full docs.</Description>
 
-  <Config Name="App Data" Target="/data" Default="/mnt/user/appdata/hermes" Mode="rw" Description="Stores settings.json, user mappings DB, encryption key, session secret." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/hermes</Config>
+  <Config Name="App Data" Target="/data" Default="/mnt/user/appdata/usher" Mode="rw" Description="Stores settings.json, user mappings DB, encryption key, session secret." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/usher</Config>
 
   <Config Name="Web UI / Webhook Port" Target="8765" Default="8765" Mode="tcp" Description="Port for both the admin web UI (/admin) and Seerr webhook receiver (/webhook/seerr)." Type="Port" Display="always" Required="true" Mask="false">8765</Config>
 
-  <Config Name="Encryption Key (advanced)" Target="HERMES_ENCRYPTION_KEY" Default="" Mode="" Description="Fernet key used to encrypt stored Plex tokens at rest. Leave blank for normal use -- Hermes generates one on first run and persists it to /data/encryption.key. Set this only if you need to control the key explicitly (e.g. migrating from another install). Generate with: python -c &quot;from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())&quot;" Type="Variable" Display="advanced" Required="false" Mask="true"/>
+  <Config Name="Encryption Key (advanced)" Target="USHER_ENCRYPTION_KEY" Default="" Mode="" Description="Fernet key used to encrypt stored Plex tokens at rest. Leave blank for normal use -- Usher generates one on first run and persists it to /data/encryption.key. Set this only if you need to control the key explicitly (e.g. migrating from another install). Generate with: python -c &quot;from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())&quot;" Type="Variable" Display="advanced" Required="false" Mask="true"/>
 
   <Config Name="Trusted Proxies (advanced)" Target="TRUSTED_PROXIES" Default="" Mode="" Description="Comma-separated IPs/CIDRs of reverse proxies allowed to set X-Forwarded-For / X-Forwarded-Proto (e.g. your Nginx Proxy Manager address). Leave blank when the admin UI is accessed directly -- forwarded headers are then ignored because clients can forge them. See 'Securing the admin UI' in the README." Type="Variable" Display="advanced" Required="false" Mask="false"/>
 </Container>

@@ -44,7 +44,7 @@ from const import (
     PLEX_WEAK_PIN_MAX_ITERS,
 )
 
-logger = logging.getLogger("hermes")
+logger = logging.getLogger("usher")
 
 async def _link_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Conversation_timeout handler. Clears link_active_loop so an abandoned
@@ -269,7 +269,7 @@ async def cmd_link_platform(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
             [InlineKeyboardButton("🌐 Open Plex authorization", url=pin.auth_url)],
             [InlineKeyboardButton("❌ Having trouble?", callback_data=LINK_HELP)],
         ])
-        text = "Authorize Hermes in Plex:\n\nSign in and tap Allow."
+        text = "Authorize Usher in Plex:\n\nSign in and tap Allow."
     else:  # mobile
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("📋 Copy auth link",
@@ -382,7 +382,7 @@ async def cmd_unlink(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if removed:
         await update.effective_message.reply_text(
             "🔓 Unlinked. I've removed your Plex token from my storage.\n\n"
-            "For extra safety, you can also remove 'Hermes' from your Plex "
+            "For extra safety, you can also remove 'Usher' from your Plex "
             "authorized devices at app.plex.tv → Settings → Authorized Devices."
         )
     else:

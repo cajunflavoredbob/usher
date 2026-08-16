@@ -31,7 +31,7 @@ from bot.shared import (
 )
 from const import RESOLVE_FLOW_TIMEOUT_S
 
-logger = logging.getLogger("hermes")
+logger = logging.getLogger("usher")
 
 
 async def _resolve_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:

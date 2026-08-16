@@ -22,7 +22,7 @@ from bot.shared import (
     record_btn,
 )
 
-logger = logging.getLogger("hermes")
+logger = logging.getLogger("usher")
 
 
 async def handle_seerr_comment(app: Application, payload: dict) -> None:
@@ -159,7 +159,7 @@ async def handle_seerr_resolved(app: Application, payload: dict) -> None:
     mapping = await store.find_by_plex_username(reporter_username)
     if mapping is None:
         logger.info(
-            "Webhook resolved on issue #%d: reporter '%s' not linked in Hermes",
+            "Webhook resolved on issue #%d: reporter '%s' not linked in Usher",
             issue_id, reporter_username,
         )
 

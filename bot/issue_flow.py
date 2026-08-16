@@ -74,7 +74,7 @@ from const import (
     TYPE_BUTTONS_PER_ROW,
 )
 
-logger = logging.getLogger("hermes")
+logger = logging.getLogger("usher")
 
 # --- Issue conversation ------------------------------------------------------
 

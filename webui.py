@@ -74,11 +74,11 @@ from http_util import user_friendly_message
 from radarr import RadarrClient
 from seerr import SeerrClient
 from sonarr import SonarrClient
-from _version import __version__ as HERMES_VERSION
+from _version import __version__ as USHER_VERSION
 
-logger = logging.getLogger("hermes.webui")
+logger = logging.getLogger("usher.webui")
 
-SESSION_COOKIE = "hermes_session"
+SESSION_COOKIE = "usher_session"
 SESSION_TTL_SECONDS = 7 * 24 * 3600
 
 ReloadCallback = Callable[[], Awaitable[None]]
@@ -212,57 +212,112 @@ def _esc(s) -> str:
 
 
 CSS = """
+/* Dracula Pro variants (facelessuser/sublime-dracula-scheme):
+   Van Helsing (near-black, blue accent) is the default; Alucard (light,
+   purple accent) is applied via data-theme on <html>, persisted by JS. */
+:root {
+  --bg: #0b0d0f;
+  --fg: #f8f8f2;
+  --surface: #16191d;
+  --border: #304050;
+  --muted: #708ca9;
+  --label: #9580ff;
+  --accent: #80bfff;
+  --accent-hover: #80ffea;
+  --on-accent: #0b0d0f;
+  --btn-2: #2b333b;
+  --btn-2-hover: #414c58;
+  --btn-2-fg: #f8f8f2;
+  --input-bg: #0b0d0f;
+  --input-locked-bg: #08090b;
+  --code-bg: #23292f;
+  --green: #8aff80;
+  --red: #ff9580;
+  --yellow: #ffff80;
+  --on-status: #0b0d0f;
+  --warn-bg: #26261b;
+  --link: #80bfff;
+}
+:root[data-theme="alucard"] {
+  --bg: #f5f5f5;
+  --fg: #1f1f1f;
+  --surface: #ffffff;
+  --border: #cfcfde;
+  --muted: #635d97;
+  --label: #644ac9;
+  --accent: #644ac9;
+  --accent-hover: #4f3a9f;
+  --on-accent: #ffffff;
+  --btn-2: #dcdeef;
+  --btn-2-hover: #cfcfde;
+  --btn-2-fg: #1f1f1f;
+  --input-bg: #ffffff;
+  --input-locked-bg: #e9e9ef;
+  --code-bg: #e9e9ef;
+  --green: #14720a;
+  --red: #cb3a2a;
+  --yellow: #836e15;
+  --on-status: #ffffff;
+  --warn-bg: #f4eed3;
+  --link: #3654c2;
+}
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-       background: #1e1e2e; color: #cdd6f4; margin: 0; padding: 20px; line-height: 1.5; }
+       background: var(--bg); color: var(--fg); margin: 0; padding: 20px; line-height: 1.5; }
 .container { max-width: 760px; margin: 0 auto; }
-h1, h2 { color: #f5e0dc; }
-h2 { margin-top: 0; border-bottom: 1px solid #45475a; padding-bottom: 6px; }
-form { background: #313244; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-label { display: block; margin: 12px 0 4px; font-weight: 600; color: #cba6f7; }
+h1, h2 { color: var(--fg); }
+h2 { margin-top: 0; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+form { background: var(--surface); padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+label { display: block; margin: 12px 0 4px; font-weight: 600; color: var(--label); }
 input[type="text"], input[type="password"], input[type="file"], textarea {
   width: 100%; box-sizing: border-box; padding: 8px;
-  border: 1px solid #45475a; border-radius: 4px;
-  background: #1e1e2e; color: #cdd6f4; font-size: 14px; }
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--input-bg); color: var(--fg); font-size: 14px; }
 button {
-  background: #89b4fa; color: #1e1e2e; border: none;
+  background: var(--accent); color: var(--on-accent); border: none;
   padding: 10px 20px; border-radius: 4px; cursor: pointer;
   font-weight: 600; margin-top: 16px; font-size: 14px; }
-button:hover { background: #74c7ec; }
-button.danger { background: #f38ba8; }
-button.danger:hover { background: #eba0ac; }
-.error { background: #f38ba8; color: #1e1e2e; padding: 10px 14px; border-radius: 4px; margin-bottom: 14px; }
-.success { background: #a6e3a1; color: #1e1e2e; padding: 10px 14px; border-radius: 4px; margin-bottom: 14px; }
-.note { color: #a6adc8; font-size: 13px; margin-top: 4px; }
-.banner-warn { background: #45402a; border: 1px solid #f9e2af; color: #f9e2af;
+button:hover { background: var(--accent-hover); }
+button.danger { background: var(--red); color: var(--on-status); }
+button.danger:hover { background: var(--red); opacity: 0.85; }
+.error { background: var(--red); color: var(--on-status); padding: 10px 14px; border-radius: 4px; margin-bottom: 14px; }
+.success { background: var(--green); color: var(--on-status); padding: 10px 14px; border-radius: 4px; margin-bottom: 14px; }
+.note { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.banner-warn { background: var(--warn-bg); border: 1px solid var(--yellow); color: var(--yellow);
                padding: 12px 14px; border-radius: 6px; margin-bottom: 14px;
                font-size: 14px; line-height: 1.5; }
-.banner-warn button { background: #f9e2af; color: #1e1e2e; border: none;
+.banner-warn button { background: var(--yellow); color: var(--on-status); border: none;
                       padding: 4px 12px; border-radius: 4px; font-weight: 600;
                       cursor: pointer; margin-left: 8px; }
-a { color: #89b4fa; }
-code { background: #45475a; padding: 2px 6px; border-radius: 3px; font-size: 13px; }
+a { color: var(--link); }
+code { background: var(--code-bg); padding: 2px 6px; border-radius: 3px; font-size: 13px; }
 
 .topbar { display: flex; justify-content: flex-end; align-items: center;
           gap: 14px; margin-bottom: 14px; }
-.topbar .version { color: #a6adc8; font-size: 13px;
+.topbar .version { color: var(--muted); font-size: 13px;
                    font-family: ui-monospace, Menlo, monospace; }
 .topbar .logout-form { background: none; padding: 0; margin: 0; display: inline; }
 .topbar .logout {
-  background: #45475a; color: #cdd6f4; text-decoration: none; border: none;
+  background: var(--btn-2); color: var(--btn-2-fg); text-decoration: none; border: none;
   cursor: pointer; font-family: inherit; width: auto;
   padding: 6px 14px; border-radius: 4px; font-size: 13px; font-weight: 600;
 }
-.topbar .logout:hover { background: #585b70; color: #f5e0dc; }
-.intro { color: #a6adc8; margin: 0 0 14px 0; font-size: 14px; }
+.topbar .logout:hover { background: var(--btn-2-hover); }
+.topbar .theme-toggle {
+  background: var(--btn-2); color: var(--btn-2-fg); border: none; cursor: pointer;
+  width: auto; min-width: 34px; padding: 6px 10px; border-radius: 4px;
+  font-size: 13px; margin-top: 0; line-height: 1.5;
+}
+.topbar .theme-toggle:hover { background: var(--btn-2-hover); }
+.intro { color: var(--muted); margin: 0 0 14px 0; font-size: 14px; }
 .saved-marker {
   display: inline-block; margin-left: 12px; font-weight: 600; font-size: 13px;
   vertical-align: middle;
 }
 .saved-marker.ok {
-  color: #a6e3a1;
+  color: var(--green);
   animation: fade-out 1s ease-in-out 3s forwards;
 }
-.saved-marker.err { color: #f38ba8; }
+.saved-marker.err { color: var(--red); }
 @keyframes fade-out {
   to { opacity: 0; visibility: hidden; }
 }
@@ -270,21 +325,21 @@ code { background: #45475a; padding: 2px 6px; border-radius: 3px; font-size: 13p
 /* Tabs (CSS-only via radio inputs) */
 .tabs > input[type="radio"] { position: absolute; left: -9999px; }
 .tab-labels { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 0;
-              border-bottom: 2px solid #45475a; }
+              border-bottom: 2px solid var(--border); }
 .tab-labels label {
   display: inline-block; padding: 10px 18px; cursor: pointer;
-  background: #313244; color: #a6adc8; font-weight: 600;
+  background: var(--surface); color: var(--muted); font-weight: 600;
   border-radius: 6px 6px 0 0; margin: 0; user-select: none;
   border: 1px solid transparent; border-bottom: none;
 }
-.tab-labels label:hover { color: #cdd6f4; }
+.tab-labels label:hover { color: var(--fg); }
 #tab-telegram:checked ~ .tab-labels label[for="tab-telegram"],
 #tab-seerr:checked    ~ .tab-labels label[for="tab-seerr"],
 #tab-autofix:checked  ~ .tab-labels label[for="tab-autofix"],
 #tab-webhook:checked  ~ .tab-labels label[for="tab-webhook"],
 #tab-account:checked  ~ .tab-labels label[for="tab-account"] {
-  background: #313244; color: #f5e0dc; border-color: #45475a;
-  border-bottom: 2px solid #313244; margin-bottom: -2px;
+  background: var(--surface); color: var(--fg); border-color: var(--border);
+  border-bottom: 2px solid var(--surface); margin-bottom: -2px;
 }
 .tab-content { display: none; }
 #tab-telegram:checked ~ .tab-contents .tab-c-telegram,
@@ -292,43 +347,48 @@ code { background: #45475a; padding: 2px 6px; border-radius: 3px; font-size: 13p
 #tab-autofix:checked  ~ .tab-contents .tab-c-autofix,
 #tab-webhook:checked  ~ .tab-contents .tab-c-webhook,
 #tab-account:checked  ~ .tab-contents .tab-c-account { display: block; }
+/* The first card in a pane attaches to the tab strip: squared top corners
+   so the active tab meets the panel edge instead of a rounded notch. */
+.tab-content > form:first-of-type {
+  border-top-left-radius: 0; border-top-right-radius: 0;
+}
 .url-box {
-  background: #1e1e2e; border: 1px solid #45475a; border-radius: 4px;
+  background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;
   padding: 10px 12px; font-family: ui-monospace, Menlo, monospace; font-size: 13px;
-  color: #a6e3a1; word-break: break-all;
+  color: var(--green); word-break: break-all;
 }
 
 /* Test buttons + generate/copy row */
 .btn-row { display: flex; align-items: center; gap: 10px;
            margin-top: 16px; flex-wrap: wrap; }
 .btn-row button { margin-top: 0; }
-.btn-row.divided { border-top: 1px solid #45475a;
+.btn-row.divided { border-top: 1px solid var(--border);
                    margin-top: 20px; padding-top: 20px; }
-button.secondary { background: #585b70; color: #cdd6f4; }
-button.secondary:hover { background: #6c7086; }
+button.secondary { background: var(--btn-2); color: var(--btn-2-fg); }
+button.secondary:hover { background: var(--btn-2-hover); }
 .test-btn { position: relative; overflow: hidden;
-            background: #585b70; color: #cdd6f4; }
-.test-btn:hover { background: #6c7086; }
+            background: var(--btn-2); color: var(--btn-2-fg); }
+.test-btn:hover { background: var(--btn-2-hover); }
 .test-btn:disabled { cursor: default; opacity: 0.9; }
 .test-overlay {
   position: absolute; inset: 0; display: flex; align-items: center;
   justify-content: center; gap: 6px; font-weight: 700; pointer-events: none;
-  background: #585b70; color: #cdd6f4; border-radius: 4px;
+  background: var(--btn-2); color: var(--btn-2-fg); border-radius: 4px;
 }
-.test-overlay.pass { background: #a6e3a1; color: #1e1e2e; }
-.test-overlay.fail { background: #f38ba8; color: #1e1e2e; }
+.test-overlay.pass { background: var(--green); color: var(--on-status); }
+.test-overlay.fail { background: var(--red); color: var(--on-status); }
 .test-overlay.show { animation: test-fade 5s ease-out forwards; }
 @keyframes test-fade { 0%, 80% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }
-.test-detail { font-size: 13px; color: #a6adc8; }
-.copied-note { font-size: 13px; color: #a6e3a1; opacity: 0; transition: opacity .2s; }
+.test-detail { font-size: 13px; color: var(--muted); }
+.copied-note { font-size: 13px; color: var(--green); opacity: 0; transition: opacity .2s; }
 .copied-note.show { opacity: 1; }
 
 /* Inline checkbox toggles (allow-all / unlimited) */
 .inline-check { display: flex; align-items: center; gap: 8px;
-                margin: 12px 0 4px; font-weight: 400; color: #cdd6f4;
+                margin: 12px 0 4px; font-weight: 400; color: var(--fg);
                 cursor: pointer; }
 .inline-check input[type="checkbox"] { width: auto; margin: 0; cursor: pointer; }
-input.locked { opacity: 0.5; background: #181825; cursor: not-allowed; }
+input.locked { opacity: 0.5; background: var(--input-locked-bg); cursor: not-allowed; }
 """
 
 
@@ -404,6 +464,24 @@ SCRIPT = """
   }
   bindLock('autofix-allow-all', 'allowed-ids');
   bindLock('daily-unlimited', 'daily-limit');
+  // Theme toggle: swaps Van Helsing (dark) <-> Alucard (light) on <html> and
+  // persists the choice; THEME_BOOT reads it back before paint on every page.
+  var themeBtn = document.getElementById('theme-toggle');
+  function themeSync() {
+    var dark = document.documentElement.getAttribute('data-theme') !== 'alucard';
+    themeBtn.textContent = dark ? '\\u2600' : '\\u263D';
+    themeBtn.title = dark ? 'Switch to Alucard (light)' : 'Switch to Van Helsing (dark)';
+  }
+  if (themeBtn) {
+    themeBtn.addEventListener('click', function () {
+      var next = document.documentElement.getAttribute('data-theme') === 'alucard'
+        ? 'van-helsing' : 'alucard';
+      document.documentElement.setAttribute('data-theme', next);
+      try { localStorage.setItem('usher-theme', next); } catch (e) {}
+      themeSync();
+    });
+    themeSync();
+  }
   var copy = document.getElementById('wh-copy');
   if (copy) copy.addEventListener('click', async function () {
     var inp = document.getElementById('webhook_secret');
@@ -449,12 +527,23 @@ SCRIPT = """
 """
 
 
+# Runs before the stylesheet so the saved theme applies pre-paint (no white
+# flash when Alucard users load a page).
+THEME_BOOT = """
+<script>(function () {
+  var t; try { t = localStorage.getItem('usher-theme'); } catch (e) {}
+  document.documentElement.setAttribute(
+    'data-theme', t === 'alucard' ? 'alucard' : 'van-helsing');
+})();</script>
+"""
+
+
 def _page(title: str, body: str) -> str:
     return (
         "<!doctype html>\n"
-        f"<html><head><meta charset=\"utf-8\"><title>{_esc(title)} - Hermes</title>"
+        f"<html><head><meta charset=\"utf-8\"><title>{_esc(title)} - Usher</title>"
         f"<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        f"<style>{CSS}</style></head><body><div class=\"container\">{body}"
+        f"{THEME_BOOT}<style>{CSS}</style></head><body><div class=\"container\">{body}"
         f"</div>{SCRIPT}</body></html>"
     )
 
@@ -521,8 +610,8 @@ def _settings_page(
   <input type="password" name="telegram_bot_token" value="{_esc(s.telegram_bot_token)}" autocomplete="off" required>
   <label>Admin Telegram User ID <span class="note">(DM @userinfobot)</span></label>
   <input type="text" name="admin_telegram_id" value="{_esc(admin_tg_val)}" inputmode="numeric" pattern="[0-9]+" required>
-  <label>Hermes Admin UI URL <span class="note">(optional)</span></label>
-  <input type="text" name="hermes_public_url" value="{_esc(s.hermes_public_url)}" placeholder="http://192.168.1.15:8765 or https://hermes.example.com">
+  <label>Usher Admin UI URL <span class="note">(optional)</span></label>
+  <input type="text" name="usher_public_url" value="{_esc(s.usher_public_url)}" placeholder="http://192.168.1.15:8765 or https://usher.example.com">
   <div class="note">Used in the bot's startup DM to point you back here. Leave blank to fall back to a generic placeholder.</div>
   <div class="btn-row divided">
     <button type="button" class="test-btn" data-test="telegram" data-form="telegram-form">Test</button>
@@ -533,18 +622,18 @@ def _settings_page(
 """
 
     seerr_form = f"""
-<div id="newplex-banner" class="banner-warn" hidden>
-  <b>⚠️ Seerr's "Enable New Plex Sign-In" is turned on.</b>
-  Any Plex account with access to your Plex server becomes a Seerr user the
-  first time they sign in - including through this bot's /link, which anyone
-  who finds the bot can start. If that's not what you want, disable it in
-  Seerr under Settings &rarr; Users. (Hermes already turns away sign-ins
-  Seerr rejects, so disabling it won't break anything here.)
-  <button type="button" id="newplex-dismiss">Dismiss</button>
-</div>
 <form id="seerr-form" method="POST" action="/admin/seerr">
   {csrf}
   <h2>Seerr</h2>
+  <div id="newplex-banner" class="banner-warn" hidden>
+    <b>⚠️ Seerr's "Enable New Plex Sign-In" is turned on.</b>
+    Any Plex account with access to your Plex server becomes a Seerr user the
+    first time they sign in - including through this bot's /link, which anyone
+    who finds the bot can start. If that's not what you want, disable it in
+    Seerr under Settings &rarr; Users. (Usher already turns away sign-ins
+    Seerr rejects, so disabling it won't break anything here.)
+    <button type="button" id="newplex-dismiss">Dismiss</button>
+  </div>
   <label>Seerr URL</label>
   <input type="text" name="seerr_url" value="{_esc(s.seerr_url)}" placeholder="http://192.168.1.10:5056" required>
   <label>Seerr API Key</label>
@@ -563,7 +652,7 @@ def _settings_page(
 <form id="autofix-form" method="POST" action="/admin/autofix">
   {csrf}
   <h2>Auto-fix</h2>
-  <p class="intro">When a user reports a Video, Audio, or Subtitles issue, Hermes can ask Radarr or Sonarr to delete the current file and trigger a new search. Configure the URLs and API keys below, then list the Telegram users allowed to use it. The admin always bypasses the per-day limit.</p>
+  <p class="intro">When a user reports a Video, Audio, or Subtitles issue, Usher can ask Radarr or Sonarr to delete the current file and trigger a new search. Configure the URLs and API keys below, then list the Telegram users allowed to use it. The admin always bypasses the per-day limit.</p>
 
   <label>Radarr URL <span class="note">(optional)</span></label>
   <input type="text" name="radarr_url" value="{_esc(s.radarr_url)}" placeholder="http://192.168.1.10:7878">
@@ -603,13 +692,13 @@ def _settings_page(
 <form id="webhook-form" method="POST" action="/admin/webhook">
   {csrf}
   <h2>Webhook</h2>
-  <p>Hermes receives webhook events from Seerr on this URL:</p>
+  <p>Usher receives webhook events from Seerr on this URL:</p>
   <div class="url-box">{_esc(webhook_url)}</div>
-  <div class="note">Configure in Seerr: Settings → Notifications → Webhook. Set the URL above and enable the <strong>Issue Reported</strong>, <strong>Issue Comment</strong>, and <strong>Issue Resolved</strong> events (Hermes handles all three).</div>
+  <div class="note">Configure in Seerr: Settings → Notifications → Webhook. Set the URL above and enable the <strong>Issue Reported</strong>, <strong>Issue Comment</strong>, and <strong>Issue Resolved</strong> events (Usher handles all three).</div>
 
   <label>Webhook Secret</label>
   <input type="password" id="webhook_secret" name="webhook_secret" value="{_esc(s.webhook_secret)}" autocomplete="off">
-  <div class="note">Paste the same value into Seerr's Webhook <code>Authorization Header</code> field. Hermes rejects requests without a matching header. <strong>Test</strong> sends a synthetic event to the URL above using the currently <em>saved</em> secret, so Generate &rarr; Save &rarr; Test.</div>
+  <div class="note">Paste the same value into Seerr's Webhook <code>Authorization Header</code> field. Usher rejects requests without a matching header. <strong>Test</strong> sends a synthetic event to the URL above using the currently <em>saved</em> secret, so Generate &rarr; Save &rarr; Test.</div>
   <div class="btn-row">
     <button type="button" class="secondary" id="wh-show">Show</button>
     <button type="button" class="secondary" id="wh-generate">Generate</button>
@@ -652,7 +741,7 @@ def _settings_page(
 <form method="POST" action="/admin/restore" enctype="multipart/form-data">
   {csrf}
   <h2>Restore from Backup</h2>
-  <input type="file" name="backup" accept=".zip,.hermes-backup" required>
+  <input type="file" name="backup" accept=".zip,.usher-backup,.hermes-backup" required>
   <label>Passphrase <span class="note">(required only if the backup was wrapped)</span></label>
   <input type="password" name="passphrase" placeholder="Leave blank for plain ZIP">
   <div class="note">Overwrites settings, mappings DB, and encryption key after validating. A backup is created before restoring.</div>
@@ -662,7 +751,8 @@ def _settings_page(
 
     return _page("Admin", f"""
 <div class="topbar">
-  <span class="version">Hermes v{_esc(HERMES_VERSION)}</span>
+  <span class="version">Usher v{_esc(USHER_VERSION)}</span>
+  <button type="button" id="theme-toggle" class="theme-toggle" aria-label="Switch theme"></button>
   <form method="POST" action="/admin/logout" class="logout-form">{csrf}
     <button type="submit" class="logout">Log out</button>
   </form>
@@ -699,8 +789,8 @@ def _webhook_url_from_request(request: web.Request) -> str:
     URL receives secret-bearing webhooks, so a spoofable header must not
     shape it."""
     s = request.app["settings_store"].settings
-    if s.hermes_public_url:
-        return f"{s.hermes_public_url.rstrip('/')}/webhook/seerr"
+    if s.usher_public_url:
+        return f"{s.usher_public_url.rstrip('/')}/webhook/seerr"
     scheme = "https" if request_is_secure(request) else (request.scheme or "http")
     return f"{scheme}://{request.host}/webhook/seerr"
 
@@ -725,13 +815,13 @@ async def setup_get(request: web.Request) -> web.Response:
         token_field = """
   <h2>Setup Token</h2>
   <p class="note">A one-time setup token was printed to the container logs on first run.
-  Paste it here to prove you have host access (run <code>docker logs hermes | grep "setup token"</code>).</p>
+  Paste it here to prove you have host access (run <code>docker logs usher | grep "setup token"</code>).</p>
   <label>Setup token</label>
   <input type="text" name="setup_token" required autocomplete="off">
 """
 
     body = _page("Setup", f"""
-<h1>Hermes First-Time Setup</h1>
+<h1>Usher First-Time Setup</h1>
 <p>Configure the minimum settings needed to bring the bot online. You can change everything later from the admin UI.</p>
 <form method="POST" action="/admin/setup">
   {_csrf_input(csrf)}
@@ -756,7 +846,7 @@ async def setup_get(request: web.Request) -> web.Response:
   <label>Seerr API Key</label>
   <input type="password" name="seerr_api_key" value="{_esc(s.seerr_api_key)}" required>
 
-  <button type="submit">Save &amp; Start Hermes</button>
+  <button type="submit">Save &amp; Start Usher</button>
   <div class="note">After saving, the container will restart to bring the bot online.</div>
 </form>
 """)
@@ -841,7 +931,7 @@ async def setup_post(request: web.Request) -> web.Response:
 
     body = _page("Setup", """
 <h1>Setup Complete</h1>
-<p>Hermes is restarting to bring the bot online. Refresh in about 10 seconds and log in.</p>
+<p>Usher is restarting to bring the bot online. Refresh in about 10 seconds and log in.</p>
 """)
     return web.Response(text=body, content_type="text/html")
 
@@ -854,7 +944,7 @@ async def login_get(request: web.Request) -> web.Response:
         return web.HTTPFound("/admin")
     csrf = csrf_for_request(request)
     body = _page("Login", f"""
-<h1>Hermes Admin</h1>
+<h1>Usher Admin</h1>
 <form method="POST" action="/admin/login">
   {_csrf_input(csrf)}
   <label>Username</label>
@@ -1063,11 +1153,11 @@ async def telegram_post(request: web.Request) -> web.Response:
                                 csrf_token=csrf_for_request(request)),
             content_type="text/html", status=400,
         )
-    public_url = (form.get("hermes_public_url") or "").strip()
+    public_url = (form.get("usher_public_url") or "").strip()
     url_err = validate_public_url(public_url)
     if url_err:
         return web.Response(
-            text=_settings_page(s, error=f"Hermes Public URL: {url_err}",
+            text=_settings_page(s, error=f"Usher Public URL: {url_err}",
                                 active_tab="telegram",
                                 webhook_url=_webhook_url_from_request(request),
                                 csrf_token=csrf_for_request(request)),
@@ -1075,7 +1165,7 @@ async def telegram_post(request: web.Request) -> web.Response:
         )
     s.telegram_bot_token = token
     s.admin_telegram_id = admin_tg
-    s.hermes_public_url = public_url
+    s.usher_public_url = public_url
     restart_needed = (token != _orig_token) or (admin_tg != _orig_admin)
     return await _save_and_render(
         request, active_tab="telegram",
@@ -1091,7 +1181,7 @@ async def seerr_post(request: web.Request) -> web.Response:
     if csrf_resp is not None:
         return csrf_resp
     s = store.settings
-    # Same validation as hermes_public_url (one field class had two
+    # Same validation as usher_public_url (one field class had two
     # behaviors); non-empty URLs must parse, empty stays allowed where the
     # field is optional.
     for field_name, label in (("seerr_url", "Seerr URL"),
@@ -1322,7 +1412,7 @@ async def backup_download(request: web.Request) -> web.Response:
     if passphrase:
         # 600k-iteration PBKDF2: off the event loop like the ZIP build above.
         blob = await asyncio.to_thread(wrap, raw_zip, passphrase)
-        ext = "hermes-backup"
+        ext = "usher-backup"
         ctype = "application/octet-stream"
     else:
         blob = raw_zip
@@ -1336,7 +1426,7 @@ async def backup_download(request: web.Request) -> web.Response:
         body=blob,
         headers={
             "Content-Type": ctype,
-            "Content-Disposition": f'attachment; filename="hermes-backup-{ts}.{ext}"',
+            "Content-Disposition": f'attachment; filename="usher-backup-{ts}.{ext}"',
         },
     )
 

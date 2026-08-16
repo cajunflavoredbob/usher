@@ -106,7 +106,7 @@ def _fake_request(*, cookies: dict, scheme: str = "http", headers: dict | None =
 
 
 def _signed_request(token: str, secret: bytes = b"s" * 32):
-    req = _fake_request(cookies={"hermes_csrf": token})
+    req = _fake_request(cookies={"usher_csrf": token})
     req.app["session_secret"] = secret
     return req
 
@@ -138,7 +138,7 @@ def test_validate_csrf_missing_cookie_returns_false():
 
 
 def test_validate_csrf_missing_form_value_returns_false():
-    req = _fake_request(cookies={"hermes_csrf": "abc"})
+    req = _fake_request(cookies={"usher_csrf": "abc"})
     assert validate_csrf(req, None) is False
     assert validate_csrf(req, "") is False
 
@@ -147,7 +147,7 @@ def test_validate_csrf_missing_form_value_returns_false():
 
 
 def test_setup_token_generated_on_first_call(tmp_path: Path, caplog):
-    caplog.set_level("WARNING", logger="hermes.auth")
+    caplog.set_level("WARNING", logger="usher.auth")
     token = load_or_create_setup_token(tmp_path)
     assert token
     assert (tmp_path / "setup_token").read_text().strip() == token

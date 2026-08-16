@@ -69,7 +69,7 @@ from bot.shared import (
     user_in_conversation,
 )
 
-logger = logging.getLogger("hermes")
+logger = logging.getLogger("usher")
 
 # Cap the reply thread rendered in a ticket detail view so a long-running
 # conversation can't push the message past Telegram's ~4096-char limit.

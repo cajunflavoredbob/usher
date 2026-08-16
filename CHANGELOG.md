@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-08-16
+
+The project is now **Usher** (formerly Hermes). Upgrades are in-place: old
+settings keys, `HERMES_*` environment variables, and passphrase-wrapped
+backups from earlier versions are still read.
+
+### Changed
+- **Renamed to Usher** across the bot, web UI, images, docs, and Unraid
+  template. Published images move to `cajunflavoredbob/usher` (Docker Hub)
+  and `ghcr.io/cajunflavoredbob/usher`.
+  - `settings.json` upgrades transparently: `hermes_public_url` is read as a
+    fallback and written back as `usher_public_url`.
+  - `USHER_ENCRYPTION_KEY`, `USHER_PUBLIC_URL`, and `USHER_WEBHOOK_SECRET`
+    replace the `HERMES_*` names; the old names still work.
+  - Wrapped backups now use a `USHER-BAK1` header and a `.usher-backup`
+    extension; restoring `HERMES-BAK1` / `.hermes-backup` files keeps
+    working.
+  - Session and CSRF cookies are renamed, so everyone is signed out of the
+    admin UI once after upgrading.
+  - New Plex links are authorized as "Usher"; devices linked earlier keep
+    showing "Hermes" in Plex's authorized-device list until relinked.
+- **The admin UI is now themed with Dracula Pro variants**: Van Helsing
+  (near-black, blue accent) by default, with a light/dark toggle in the top
+  bar that switches to Alucard (light, purple accent). The choice persists
+  in the browser and applies before first paint.
+
+### Fixed
+- The active settings tab now meets the panel squarely instead of floating
+  over the panel's rounded corner, and the Seerr sign-in warning banner
+  moved inside the Seerr panel so the attachment holds when it appears.
+
 ## [0.13.0] - 2026-08-16
 
 Hardening across security, backend reliability, UX, and maintainability. No
@@ -148,7 +179,7 @@ consistency, and code hygiene.
   Specials naming logic, `PlexUser.id`/`email` (a gratuitous PII fetch
   nothing read), the never-assigned `"autofix"` user_data key.
 - Consistency: Seerr/Radarr/Sonarr URLs get the same save-time validation
-  as the public URL; all root modules log under the `hermes.*` namespace
+  as the public URL; all root modules log under the `usher.*` namespace
   so filtering catches the API clients; unparseable callback data is
   logged instead of silently dropped; hand-edited string ids in the
   autofix allowlist are coerced to int on load (they previously never
@@ -621,12 +652,12 @@ Post-autofix resolve chain fixes: it was broken end to end.
 ## [0.11.4] - 2026-05-28
 
 ### Security
-- **CSRF tokens on every admin POST.** Double-submit cookie pattern: a `hermes_csrf` cookie (SameSite=Strict) is set on every form-rendering page; every POST validates the cookie matches a hidden `csrf_token` form field via `hmac.compare_digest`. Pre-auth flows (`/admin/setup`, `/admin/login`) and authenticated flows (`/admin/*`) both gated. Validation lives in `auth_util.validate_csrf`.
+- **CSRF tokens on every admin POST.** Double-submit cookie pattern: a `usher_csrf` cookie (SameSite=Strict) is set on every form-rendering page; every POST validates the cookie matches a hidden `csrf_token` form field via `hmac.compare_digest`. Pre-auth flows (`/admin/setup`, `/admin/login`) and authenticated flows (`/admin/*`) both gated. Validation lives in `auth_util.validate_csrf`.
 - **Login throttling.** 5 failed login attempts per IP within a 5-minute sliding window returns HTTP 429 with `Retry-After`; success resets the counter. `auth_util.LoginThrottle` is process-local in-memory.
 - **First-run setup token.** On a fresh install (no admin account, no `/data/setup_token` file), `auth_util.load_or_create_setup_token` generates a random token, persists it to `/data/setup_token` (chmod 600), and logs it at WARNING level. `/admin/setup` rejects submissions without a matching token, so the first visitor on a LAN-exposed port can't claim the admin account silently. Token is cleared on successful setup. Existing installs (admin already configured) skip the token check entirely.
-- **Audit log.** Dedicated `hermes.audit` logger records `login_success`, `login_fail`, `login_throttled`, `login_csrf_fail`, `setup_csrf_fail`, `setup_token_fail`, `setup_complete`, `password_changed`, `backup_download`, `restore_complete`, `admin_csrf_fail`, `logout` with `user`, `ip`, and event-specific fields. Searchable with `grep hermes.audit`.
+- **Audit log.** Dedicated `usher.audit` logger records `login_success`, `login_fail`, `login_throttled`, `login_csrf_fail`, `setup_csrf_fail`, `setup_token_fail`, `setup_complete`, `password_changed`, `backup_download`, `restore_complete`, `admin_csrf_fail`, `logout` with `user`, `ip`, and event-specific fields. Searchable with `grep usher.audit`.
 - **`Secure` cookie flag when behind HTTPS.** Session and CSRF cookies set `Secure=True` when `request.scheme == "https"` or `X-Forwarded-Proto: https` is present. Plain-HTTP LAN installs keep working unchanged.
-- **Backup ZIP can be wrapped with a passphrase.** New `backup_crypto.py`: PBKDF2(SHA-256, 600k iters) over the passphrase → 32-byte key → Fernet (AES-128-CBC + HMAC-SHA256). Output format: 12-byte magic `HERMES-BAK1\n` + 16-byte salt + Fernet token. File extension changes to `.hermes-backup`. Restore detects the format by magic prefix and prompts for the passphrase. The Account tab adds an optional "Passphrase" field to both backup and restore forms.
+- **Backup ZIP can be wrapped with a passphrase.** New `backup_crypto.py`: PBKDF2(SHA-256, 600k iters) over the passphrase → 32-byte key → Fernet (AES-128-CBC + HMAC-SHA256). Output format: 12-byte magic `USHER-BAK1\n` + 16-byte salt + Fernet token. File extension changes to `.usher-backup`. Restore detects the format by magic prefix and prompts for the passphrase. The Account tab adds an optional "Passphrase" field to both backup and restore forms.
 - **`restore_upload` validates uploads before overwriting.** Each member of the uploaded ZIP is sanity-checked: `settings.json` must parse and accept into the `Settings` dataclass; `encryption.key` must initialize a `Fernet(key)` without raising; `mappings.sqlite` is written to a tempfile and validated with `PRAGMA integrity_check` (must return `ok`). Current `settings.json`, `mappings.sqlite`, and `encryption.key` are copied to `/data/pre-restore-YYYYMMDD-HHMMSS/` before the new files land.
 
 ### Changed
@@ -699,7 +730,7 @@ Post-autofix resolve chain fixes: it was broken end to end.
 ### Added
 - **Webhook body size cap (128KB).** The parent aiohttp app keeps its 32MB ceiling for admin backup restores; the webhook handler now enforces a 128KB ceiling via Content-Length check + read-time check, so unauthenticated clients can't force 32MB allocations per request.
 - **Webhook deduplication.** A 60-second / 256-entry bounded SHA-256 body-hash cache drops duplicate deliveries (e.g., Seerr retries after a transient blip). The dedupe cache lives in the handler closure and evicts on TTL + size.
-- **`hermes_public_url` scheme validation.** The webui's Telegram tab now rejects URLs that don't start with `http://` or `https://`. Empty is still acceptable (means "not configured"). New `settings.validate_public_url(url)` helper.
+- **`usher_public_url` scheme validation.** The webui's Telegram tab now rejects URLs that don't start with `http://` or `https://`. Empty is still acceptable (means "not configured"). New `settings.validate_public_url(url)` helper.
 
 ### Fixed
 - **Webhook handlers no longer return 500 on internal exceptions.** Previously a transient Telegram 429 or DB lock inside `handle_seerr_*` returned 500, Seerr retried on backoff, and once throttling cleared the admin got duplicate DMs for the same event. Now: log the exception, return 200. We'd rather lose one notification than spam the admin with five.
@@ -758,7 +789,7 @@ Post-autofix resolve chain fixes: it was broken end to end.
 - Button tracking applies to `/tickets`-flow messages (list, detail, sub-menus) and webhook DMs (new-issue admin, comment-reply). `/issue` and `/link` flows aren't yet tracked — those are bounded conversations that self-clean on completion or timeout, so staleness is less of a concern. Easy to extend later.
 
 ### Changed
-- Hermes version now reported in the "Bot is online" status block as a regular bullet alongside Seerr/Radarr/Sonarr (e.g. `• Hermes: ✅ 0.10.3`) instead of being prefixed to the header line. Consistent style with the other services.
+- Usher version now reported in the "Bot is online" status block as a regular bullet alongside Seerr/Radarr/Sonarr (e.g. `• Usher: ✅ 0.10.3`) instead of being prefixed to the header line. Consistent style with the other services.
 
 ## [0.10.2] - 2026-05-27
 
@@ -771,8 +802,8 @@ Post-autofix resolve chain fixes: it was broken end to end.
 - **Multi-line search-result buttons.** Long media titles no longer get hard-truncated at ~60 chars. A `\n` is inserted near the middle of long labels so Telegram renders the button on two lines, doubling visible width before any truncation kicks in (cap is now 90 chars).
 - **Specials (S00) included in the TV season picker** as a "Specials" entry. Anime movies / OVAs / tie-in specials often live there; users were previously locked out of reporting issues on them. Discovered via a tester case (Demon Slayer: Infinity Castle = S00E16 of the parent show).
 - **Parent-show re-search fallback.** When a search query contains a separator (`:`, ` - `, ` — `, ` | `) AND every Seerr result is out-of-library, the bot offers a `🔍 Search "..." instead` button using the part before the separator. Same button also shows on the "title isn't in your library" error message, so the user can pivot without restarting `/issue`. Refactored `issue_title` and the new `issue_research_parent` callback to share a `_show_search_results` helper.
-- **Hermes version in the "Bot is online" startup DM.** Header is now `👋 Hermes vX.Y.Z is online.`
-- **Admin also DM'd on resolved issues.** `handle_seerr_resolved` now sends a notification to the admin (in addition to the reporter) whenever a ticket is resolved, unless the admin IS the reporter. Format: `✅ Issue #N resolved\n<title>\nReported by: <user>`. Filled the gap left when we disabled Seerr's built-in Telegram notification integration in favor of Hermes's webhook.
+- **Usher version in the "Bot is online" startup DM.** Header is now `👋 Usher vX.Y.Z is online.`
+- **Admin also DM'd on resolved issues.** `handle_seerr_resolved` now sends a notification to the admin (in addition to the reporter) whenever a ticket is resolved, unless the admin IS the reporter. Format: `✅ Issue #N resolved\n<title>\nReported by: <user>`. Filled the gap left when we disabled Seerr's built-in Telegram notification integration in favor of Usher's webhook.
 
 ### Fixed
 - **New-issue admin DMs were silently dropped.** v0.10.0 looked for `notification_type == "ISSUE_REPORTED"`, but Seerr's webhook payload uses the enum name `ISSUE_CREATED` (the UI label "Issue Reported" is just a display string). The receiver now accepts both spellings. Also bumped the "unhandled notification_type" log from `DEBUG` to `INFO` so future payload-name mismatches surface immediately.
@@ -896,10 +927,10 @@ Post-autofix resolve chain fixes: it was broken end to end.
 ## [0.8.2] - 2026-05-25
 
 ### Added
-- **Hermes Admin UI URL** setting on the Telegram tab. When set, the bot's startup DM links you back to the actual host (LAN IP, reverse-proxy URL, etc.) instead of the generic `<host>` placeholder. Tolerates URLs entered with or without a trailing `/admin`.
+- **Usher Admin UI URL** setting on the Telegram tab. When set, the bot's startup DM links you back to the actual host (LAN IP, reverse-proxy URL, etc.) instead of the generic `<host>` placeholder. Tolerates URLs entered with or without a trailing `/admin`.
 - **Per-user daily auto-fix limit** is now configurable on the Auto-fix tab (was hardcoded to 3). Validates positive integer. Admin still bypasses the limit.
 - Auto-fix tab now has a short explanation of what auto-fix does, so the field set isn't context-free.
-- Webui shows the Hermes version (`v0.8.2`) in the top-right alongside a Log out button. Single source of truth in `_version.py`.
+- Webui shows the Usher version (`v0.8.2`) in the top-right alongside a Log out button. Single source of truth in `_version.py`.
 
 ### Changed
 - Removed the nav bar with "Settings" / "Log out" links. Top-right corner of the page is now: version + log out. Tab list immediately under.
@@ -919,7 +950,7 @@ Post-autofix resolve chain fixes: it was broken end to end.
 - First-run setup page now collects: admin username + password, Telegram bot token, Admin Telegram User ID, Seerr URL, Seerr API key. Submission writes everything to `/data/settings.json` and restarts the container so the bot comes online.
 - Settings page exposes Telegram bot token + Admin Telegram User ID. Changes to either trigger a 2-second container exit so Docker restarts the process with the new identity.
 - Bot now runs in two modes: **setup-only** (just the aiohttp web UI, no Telegram polling) when settings are incomplete, and **full** (PTB + web UI + webhook) when configured.
-- Unraid template stripped down to: App Data path, port mapping, optional `HERMES_ENCRYPTION_KEY` (advanced). No more required env vars to fill in / re-enter every time the template is edited.
+- Unraid template stripped down to: App Data path, port mapping, optional `USHER_ENCRYPTION_KEY` (advanced). No more required env vars to fill in / re-enter every time the template is edited.
 - `docker-compose.yml` mirrors the same: no env vars required by default.
 
 ### Migration
@@ -940,7 +971,7 @@ Post-autofix resolve chain fixes: it was broken end to end.
 
 ### Changed
 - Most settings moved from env vars to `/data/settings.json`. Env vars are still read once on first run as initial seeds, then ignored. **Existing installs upgrade transparently** -- current env vars get baked into `settings.json` on the next start.
-- `SEERR_URL` and `SEERR_API_KEY` no longer required env vars; Hermes will start with no Seerr configured and prompt users in Telegram + admin UI to fill them in
+- `SEERR_URL` and `SEERR_API_KEY` no longer required env vars; Usher will start with no Seerr configured and prompt users in Telegram + admin UI to fill them in
 - Unified the webhook and webui under a single aiohttp `web.Application` and single HTTP server. One port covers everything.
 - Webhook secret is now read from settings on every request (rotates without a restart)
 
@@ -951,14 +982,14 @@ Post-autofix resolve chain fixes: it was broken end to end.
 ## [0.6.0] - 2026-05-25
 
 ### Added
-- **Comment-reply notifications via Seerr webhook.** When someone replies to an issue inside Seerr's UI, Hermes DMs the reporter on Telegram with the comment text and a link to the issue. Configure in Seerr: Settings → Notifications → Webhook, point at `http://<host>:8765/webhook/seerr`, enable the **Issue Comment** event.
-- New aiohttp webhook server inside Hermes, listening on `/webhook/seerr` (port `8765` by default). Also exposes `/healthz` for liveness checks.
-- New env vars: `WEBHOOK_PORT` (default `8765`), `WEBHOOK_BIND` (default `0.0.0.0`), `HERMES_WEBHOOK_SECRET` (optional; if set, requires matching Authorization header on incoming webhooks).
+- **Comment-reply notifications via Seerr webhook.** When someone replies to an issue inside Seerr's UI, Usher DMs the reporter on Telegram with the comment text and a link to the issue. Configure in Seerr: Settings → Notifications → Webhook, point at `http://<host>:8765/webhook/seerr`, enable the **Issue Comment** event.
+- New aiohttp webhook server inside Usher, listening on `/webhook/seerr` (port `8765` by default). Also exposes `/healthz` for liveness checks.
+- New env vars: `WEBHOOK_PORT` (default `8765`), `WEBHOOK_BIND` (default `0.0.0.0`), `USHER_WEBHOOK_SECRET` (optional; if set, requires matching Authorization header on incoming webhooks).
 - `UserStore.find_by_plex_username` for mapping Seerr's `reportedBy_username` back to a linked Telegram user.
 
 ### Notes
-- Hermes silently drops webhook events for users it doesn't have a Telegram mapping for. Users on legacy username-only links still work for this -- as long as `plex_username` is on the record, comment notifications will route.
-- Hermes skips notifying the reporter when the commenter IS the reporter (no echo-back).
+- Usher silently drops webhook events for users it doesn't have a Telegram mapping for. Users on legacy username-only links still work for this -- as long as `plex_username` is on the record, comment notifications will route.
+- Usher skips notifying the reporter when the commenter IS the reporter (no echo-back).
 - Added `aiohttp==3.10.10` dependency.
 
 ## [0.5.2] - 2026-05-25
@@ -984,14 +1015,14 @@ Post-autofix resolve chain fixes: it was broken end to end.
 
 ### Changed
 - `/link` consent text trimmed down. No more wall of security text — just a one-liner about what it does and a mention of `/unlink` to revoke.
-- `/unlink` reply now explicitly tells the user the Plex token is removed from Hermes's storage, and points to Plex's authorized-devices page if they want full revocation.
+- `/unlink` reply now explicitly tells the user the Plex token is removed from Usher's storage, and points to Plex's authorized-devices page if they want full revocation.
 
 ## [0.4.0] - 2026-05-26
 
 ### Added
 - **Plex OAuth (PIN flow) for per-user Seerr attribution.** `/link` now walks the user through Plex's PIN authorization, stores the resulting Plex token (encrypted at rest via Fernet), and uses it to authenticate to Seerr per user. Issues, comments, and resolves are now correctly attributed to the actual reporting user in Seerr's UI -- not the admin.
 - Consent prompt before linking, with explicit disclosure that the Plex token is stored and grants Plex account access.
-- New `HERMES_ENCRYPTION_KEY` env var. If unset, Hermes generates a Fernet key on first run and persists to `/data/encryption.key`.
+- New `USHER_ENCRYPTION_KEY` env var. If unset, Usher generates a Fernet key on first run and persists to `/data/encryption.key`.
 - New `plex.py` module (Plex OAuth + user info).
 
 ### Changed
@@ -1016,7 +1047,7 @@ Post-autofix resolve chain fixes: it was broken end to end.
 ## [0.2.0] - 2026-05-26
 
 ### Added
-- Completion notifications for auto-fix. When an auto-fix triggers a re-download, Hermes now polls Radarr/Sonarr every 60s and DMs (or replies in the originating chat) when the new file is imported. Sends a timeout notification after 6h if nothing arrives.
+- Completion notifications for auto-fix. When an auto-fix triggers a re-download, Usher now polls Radarr/Sonarr every 60s and DMs (or replies in the originating chat) when the new file is imported. Sends a timeout notification after 6h if nothing arrives.
 - Pending auto-fixes persist in SQLite (`pending_autofixes` table) and survive container restarts.
 
 ### Changed

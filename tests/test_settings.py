@@ -23,7 +23,7 @@ def test_from_dict_to_dict_roundtrip_full():
     s = Settings(
         telegram_bot_token="abc",
         admin_telegram_id=12345,
-        hermes_public_url="https://hermes.example.com",
+        usher_public_url="https://usher.example.com",
         seerr_url="http://seerr:5056",
         seerr_api_key="key",
         seerr_public_url="https://seerr.example.com",
@@ -138,7 +138,7 @@ def test_validate_public_url_rejects(url):
 
 def test_store_seeds_and_persists_webhook_secret(tmp_settings_path: Path, monkeypatch):
     # Ensure no env webhook secret leaks in.
-    monkeypatch.delenv("HERMES_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("USHER_WEBHOOK_SECRET", raising=False)
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("ADMIN_TELEGRAM_ID", raising=False)
 
@@ -152,7 +152,7 @@ def test_store_seeds_and_persists_webhook_secret(tmp_settings_path: Path, monkey
 def test_store_auto_generates_secret_on_upgrade(tmp_settings_path: Path, monkeypatch):
     # Simulate a pre-0.11.0 settings.json with no webhook_secret.
     tmp_settings_path.write_text(json.dumps({"telegram_bot_token": "x", "admin_telegram_id": 1}))
-    monkeypatch.delenv("HERMES_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("USHER_WEBHOOK_SECRET", raising=False)
 
     store = SettingsStore(tmp_settings_path)
     assert store.settings.webhook_secret
@@ -161,7 +161,7 @@ def test_store_auto_generates_secret_on_upgrade(tmp_settings_path: Path, monkeyp
 
 
 def test_store_preserves_existing_secret(tmp_settings_path: Path, monkeypatch):
-    monkeypatch.delenv("HERMES_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("USHER_WEBHOOK_SECRET", raising=False)
     existing = "preserved-secret-abc"
     tmp_settings_path.write_text(json.dumps({"webhook_secret": existing}))
 
@@ -170,7 +170,7 @@ def test_store_preserves_existing_secret(tmp_settings_path: Path, monkeypatch):
 
 
 def test_store_save_roundtrip(tmp_settings_path: Path, monkeypatch):
-    monkeypatch.delenv("HERMES_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("USHER_WEBHOOK_SECRET", raising=False)
     store = SettingsStore(tmp_settings_path)
     store.settings.telegram_bot_token = "new-token"
     store.save()
@@ -182,7 +182,7 @@ def test_store_save_roundtrip(tmp_settings_path: Path, monkeypatch):
 
 
 def _quiet_env(monkeypatch):
-    for var in ("HERMES_WEBHOOK_SECRET", "TELEGRAM_BOT_TOKEN", "ADMIN_TELEGRAM_ID"):
+    for var in ("USHER_WEBHOOK_SECRET", "TELEGRAM_BOT_TOKEN", "ADMIN_TELEGRAM_ID"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -321,3 +321,36 @@ def test_session_secret_preserves_whitespace_bytes(tmp_path: Path):
     loaded = load_or_create_session_secret(p)
     assert loaded == seeded
     assert len(loaded) == 32
+
+
+def test_from_dict_reads_legacy_hermes_public_url():
+    s = Settings.from_dict({"hermes_public_url": "http://box:8765"})
+    assert s.usher_public_url == "http://box:8765"
+    # and it is written back under the new key only
+    d = s.to_dict()
+    assert d.get("usher_public_url") == "http://box:8765"
+    assert "hermes_public_url" not in d
+
+
+def test_from_dict_prefers_new_public_url_key():
+    s = Settings.from_dict({"usher_public_url": "http://new:1",
+                            "hermes_public_url": "http://old:2"})
+    assert s.usher_public_url == "http://new:1"
+
+
+def test_env_falls_back_to_legacy_hermes_names(monkeypatch):
+    for var in ("USHER_PUBLIC_URL", "USHER_WEBHOOK_SECRET",
+                "USHER_ENCRYPTION_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HERMES_PUBLIC_URL", "http://legacy:8765")
+    monkeypatch.setenv("HERMES_WEBHOOK_SECRET", "legacy-secret")
+    s = SettingsStore._seed_from_env()
+    assert s.usher_public_url == "http://legacy:8765"
+    assert s.webhook_secret == "legacy-secret"
+
+
+def test_env_prefers_new_usher_names(monkeypatch):
+    monkeypatch.setenv("USHER_PUBLIC_URL", "http://new:8765")
+    monkeypatch.setenv("HERMES_PUBLIC_URL", "http://legacy:8765")
+    s = SettingsStore._seed_from_env()
+    assert s.usher_public_url == "http://new:8765"

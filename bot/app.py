@@ -28,7 +28,7 @@ from sonarr import SonarrClient
 from store import TokenCrypto, UserStore
 from webhook import attach_webhook, start_http_server
 from webui import attach_webui
-from _version import __version__ as HERMES_VERSION
+from _version import __version__ as USHER_VERSION
 
 from bot.autofix_poll import poll_pending_autofixes
 from bot.callback_prefixes import (
@@ -78,7 +78,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s | %(message)s",
     level=logging.INFO,
 )
-logger = logging.getLogger("hermes")
+logger = logging.getLogger("usher")
 
 
 # --- App setup ---------------------------------------------------------------
@@ -174,7 +174,7 @@ def _build_clients_from_settings(app: Application) -> None:
 async def _check_connections(app: Application) -> dict[str, str]:
     """Probe configured services via each client's `ping()`. No private-attr
     access. Returns dict of service -> status string."""
-    out: dict[str, str] = {"Hermes": f"✅ {HERMES_VERSION}"}
+    out: dict[str, str] = {"Usher": f"✅ {USHER_VERSION}"}
     for key, label in (("seerr", "Seerr"), ("radarr", "Radarr"), ("sonarr", "Sonarr")):
         client = app.bot_data.get(key)
         if client is None:
@@ -424,7 +424,7 @@ async def _post_init(app: Application) -> None:
         logger.exception("Startup autofix-history prune failed (non-fatal)")
 
     admin_id = app.bot_data["admin_id"]
-    base = (settings_store.settings.hermes_public_url or "").strip().rstrip("/")
+    base = (settings_store.settings.usher_public_url or "").strip().rstrip("/")
     if base:
         if base.endswith("/admin"):
             base = base[: -len("/admin")]
@@ -436,7 +436,7 @@ async def _post_init(app: Application) -> None:
     # them makes Telegram reject the whole message -- exactly when a
     # service is failing and the admin most needs the DM.
     msg = (
-        f"👋 Bot is online (v{html.escape(HERMES_VERSION)}).\n\n"
+        f"👋 Bot is online (v{html.escape(USHER_VERSION)}).\n\n"
         f"{format_status(summary)}\n\n"
         f"Admin UI: {html.escape(admin_url)}\n"
         "Run /link to authorize with Plex (per-user issue attribution)."
@@ -480,7 +480,7 @@ async def _post_init(app: Application) -> None:
             f"⚠️ {n_failed} stored Plex link{plural} can't be decrypted with the "
             "current encryption key. Affected users will see a 'link broken' "
             "message and need to /unlink + /link again. Likely cause: the "
-            "encryption key rotated or HERMES_ENCRYPTION_KEY changed."
+            "encryption key rotated or USHER_ENCRYPTION_KEY changed."
         )
         try:
             await app.bot.send_message(chat_id=admin_id, text=warn)

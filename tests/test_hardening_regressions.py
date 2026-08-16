@@ -39,16 +39,16 @@ def test_csrf_token_bound_to_session_rejected_for_other_session():
     token_a = generate_csrf_token(SECRET, bind_a)
 
     # Same session: valid.
-    ok = _req({webui.SESSION_COOKIE: session_a, "hermes_csrf": token_a})
+    ok = _req({webui.SESSION_COOKIE: session_a, "usher_csrf": token_a})
     assert validate_csrf(ok, token_a) is True
 
     # Planted against a different session: rejected.
-    bad = _req({webui.SESSION_COOKIE: session_b, "hermes_csrf": token_a})
+    bad = _req({webui.SESSION_COOKIE: session_b, "usher_csrf": token_a})
     assert validate_csrf(bad, token_a) is False
 
 
 def test_csrf_unsigned_token_rejected():
-    req = _req({"hermes_csrf": "planted-value"})
+    req = _req({"usher_csrf": "planted-value"})
     assert validate_csrf(req, "planted-value") is False
 
 

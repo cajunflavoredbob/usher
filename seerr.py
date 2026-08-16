@@ -13,7 +13,7 @@ import httpx
 from const import CLIENT_CLOSE_GRACE_S, SEARCH_RESULT_LIMIT
 from http_util import APIError, PermanentAPIError, execute, json_or_raise
 
-logger = logging.getLogger("hermes." + __name__)
+logger = logging.getLogger("usher." + __name__)
 
 _SERVICE = "Seerr"
 

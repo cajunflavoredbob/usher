@@ -3,7 +3,7 @@ first-run setup token, audit logging, and Secure-cookie detection.
 
 Single-process in-memory state for throttle counters. Persisted state
 (setup token file) lives under data_dir. Audit lines go to the
-`hermes.audit` logger so they can be filtered separately from
+`usher.audit` logger so they can be filtered separately from
 operational logs.
 """
 from __future__ import annotations
@@ -20,8 +20,8 @@ from typing import Optional
 
 from fsutil import atomic_write_text
 
-logger = logging.getLogger("hermes.auth")
-audit_logger = logging.getLogger("hermes.audit")
+logger = logging.getLogger("usher.auth")
+audit_logger = logging.getLogger("usher.audit")
 
 # Sliding-window failure counter. A given IP gets at most THROTTLE_MAX_FAILURES
 # failed logins inside THROTTLE_WINDOW_S seconds; further attempts return 429
@@ -99,12 +99,12 @@ class LoginThrottle:
 
 # --- CSRF tokens ---
 
-CSRF_COOKIE = "hermes_csrf"
+CSRF_COOKIE = "usher_csrf"
 CSRF_FORM_FIELD = "csrf_token"
 # Must match webui.SESSION_COOKIE. Used only to bind CSRF tokens to the
 # session that minted them (see _session_binding); a divergence would just
 # make every authenticated CSRF token look session-less, forcing a re-mint.
-SESSION_COOKIE_NAME = "hermes_session"
+SESSION_COOKIE_NAME = "usher_session"
 
 
 def _session_binding(request) -> str:
@@ -238,7 +238,7 @@ def _audit_safe(value) -> str:
 
 
 def audit(event: str, *, user: str = "-", ip: str = "-", **extra) -> None:
-    """Structured audit log entry. Filter with `grep hermes.audit` in logs."""
+    """Structured audit log entry. Filter with `grep usher.audit` in logs."""
     fields = (" ".join(f"{k}={_audit_safe(v)}" for k, v in extra.items())
               if extra else "")
     audit_logger.warning("event=%s user=%s ip=%s %s",

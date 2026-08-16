@@ -10,15 +10,15 @@ from urllib.parse import urlencode
 
 import httpx
 
-from _version import __version__ as HERMES_VERSION
+from _version import __version__ as USHER_VERSION
 from fsutil import atomic_write_text
 from http_util import execute, json_or_raise
 
-logger = logging.getLogger("hermes." + __name__)
+logger = logging.getLogger("usher." + __name__)
 
 _SERVICE = "Plex"
 
-PRODUCT_NAME = "Hermes"
+PRODUCT_NAME = "Usher"
 DEVICE_NAME = "Telegram Bot"
 PLATFORM = "Linux"
 PLEX_API_BASE = "https://plex.tv/api/v2"
@@ -34,7 +34,7 @@ class PlexPin:
 
 @dataclass
 class PlexUser:
-    """Only the fields Hermes stores. id and email were previously fetched
+    """Only the fields Usher stores. id and email were previously fetched
     too -- a gratuitous PII pull nothing read; dropped in 0.12.0."""
     uuid: str
     username: str
@@ -54,7 +54,7 @@ class PlexClient:
                 "X-Plex-Device-Name": DEVICE_NAME,
                 "X-Plex-Platform": PLATFORM,
                 # The real app version (was frozen at "0.4.0").
-                "X-Plex-Version": HERMES_VERSION,
+                "X-Plex-Version": USHER_VERSION,
             },
         )
 

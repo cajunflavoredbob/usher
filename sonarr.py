@@ -10,7 +10,7 @@ import httpx
 from fix_result import FixResult
 from http_util import APIError, execute, json_or_raise
 
-logger = logging.getLogger("hermes." + __name__)
+logger = logging.getLogger("usher." + __name__)
 
 _SERVICE = "Sonarr"
 

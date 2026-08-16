@@ -35,7 +35,7 @@ def webui_client(tmp_path: Path, monkeypatch):
     """An aiohttp TestClient running the webui against a tmp SettingsStore
     with a known admin password. Disables the throttle so repeated runs
     in a session don't lock out the test."""
-    monkeypatch.delenv("HERMES_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("USHER_WEBHOOK_SECRET", raising=False)
     settings_path = tmp_path / "settings.json"
     store = SettingsStore(settings_path)
     # Skip the throttle. Module-level singleton so we reset its state.
@@ -65,13 +65,13 @@ async def _login(store: SettingsStore, password: str = "hunter2-test"):
         sc: SimpleCookie = SimpleCookie()
         for set_cookie in get.headers.getall("Set-Cookie", []):
             sc.load(set_cookie)
-        csrf = sc["hermes_csrf"].value
+        csrf = sc["usher_csrf"].value
         post = await client.post(
             "/admin/login",
             data={"username": store.settings.admin.username,
                   "password": password,
                   "csrf_token": csrf},
-            cookies={"hermes_csrf": csrf},
+            cookies={"usher_csrf": csrf},
             allow_redirects=False,
         )
         return post
@@ -87,14 +87,14 @@ async def test_current_iters_hash_is_not_rehashed(webui_client, caplog):
     store.save()
     original_hash = store.settings.admin.password_hash
 
-    caplog.set_level(logging.WARNING, logger="hermes.audit")
+    caplog.set_level(logging.WARNING, logger="usher.audit")
     resp = await _login(store)
     assert resp.status == 302  # redirect to /admin
     # Reload from disk to confirm no rewrite.
     fresh = SettingsStore(store.path)
     assert fresh.settings.admin.password_hash == original_hash
     # No password_rehashed audit entry.
-    audit_msgs = [r.getMessage() for r in caplog.records if r.name == "hermes.audit"]
+    audit_msgs = [r.getMessage() for r in caplog.records if r.name == "usher.audit"]
     assert not any("password_rehashed" in m for m in audit_msgs)
 
 
@@ -109,7 +109,7 @@ async def test_stale_iters_hash_is_rehashed(webui_client, caplog):
     store.save()
     original_hash = store.settings.admin.password_hash
 
-    caplog.set_level(logging.WARNING, logger="hermes.audit")
+    caplog.set_level(logging.WARNING, logger="usher.audit")
     resp = await _login(store)
     assert resp.status == 302
 
@@ -121,7 +121,7 @@ async def test_stale_iters_hash_is_rehashed(webui_client, caplog):
     # New hash still verifies the same password.
     assert verify_password("hunter2-test", new_hash)
     # Audit log captures the upgrade.
-    audit_msgs = [r.getMessage() for r in caplog.records if r.name == "hermes.audit"]
+    audit_msgs = [r.getMessage() for r in caplog.records if r.name == "usher.audit"]
     assert any("password_rehashed" in m and f"from_iters={stale_iters}" in m
                and f"to_iters={PBKDF2_ITERATIONS}" in m
                for m in audit_msgs), audit_msgs

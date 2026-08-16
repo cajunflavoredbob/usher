@@ -23,7 +23,7 @@ from procutil import schedule_clean_exit  # noqa: F401  (re-export for bot.*)
 from bot.callback_prefixes import RELINK, TK_CLOSE, TK_FIX, TK_REPLY
 from const import RELINK_RESUME_TTL_S
 
-logger = logging.getLogger("hermes")
+logger = logging.getLogger("usher")
 
 # --- Conversation states ----------------------------------------------------
 
@@ -306,12 +306,12 @@ async def require_seerr(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Optio
         if update.effective_user.id == ctx.bot_data.get("admin_id"):
             port = ctx.bot_data.get("http_port", 8765)
             await update.effective_message.reply_text(
-                f"Hermes isn't configured yet. Fill in Seerr settings at "
+                f"Usher isn't configured yet. Fill in Seerr settings at "
                 f"http://<host>:{port}/admin",
             )
         else:
             await update.effective_message.reply_text(
-                "Hermes isn't set up yet — ask the admin to finish configuration.",
+                "Usher isn't set up yet — ask the admin to finish configuration.",
             )
     return seerr
 

@@ -23,7 +23,7 @@ CSRF = webui.generate_csrf_token(SECRET, _SESSION.rsplit(".", 1)[-1])
 
 @pytest.fixture
 async def client(tmp_path, monkeypatch):
-    monkeypatch.delenv("HERMES_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("USHER_WEBHOOK_SECRET", raising=False)
     settings_path = tmp_path / "settings.json"
     store = webui.SettingsStore(settings_path)
     store.settings.admin.username = "admin"
@@ -46,7 +46,7 @@ async def client(tmp_path, monkeypatch):
 def _cookies():
     return {
         webui.SESSION_COOKIE: _SESSION,
-        "hermes_csrf": CSRF,
+        "usher_csrf": CSRF,
     }
 
 

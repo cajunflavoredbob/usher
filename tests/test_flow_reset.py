@@ -59,7 +59,7 @@ def test_command_name_parses_bot_command():
 
 def test_command_name_strips_at_botname():
     msg = SimpleNamespace(
-        text="/issue@HermesBot foo",
+        text="/issue@UsherBot foo",
         entities=(SimpleNamespace(type=MessageEntity.BOT_COMMAND, offset=0, length=16),),
     )
     assert command_name(msg) == "issue"

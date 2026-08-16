@@ -29,7 +29,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from const import AUTOFIX_TIMEOUT_HOURS
 from fsutil import atomic_write_bytes
 
-logger = logging.getLogger("hermes." + __name__)
+logger = logging.getLogger("usher." + __name__)
 
 T = TypeVar("T")
 
@@ -56,17 +56,19 @@ class TokenCrypto:
 
     def __init__(self, key_path: str | Path = "/data/encryption.key"):
         self.key_path = Path(key_path)
-        env_key = os.environ.get("HERMES_ENCRYPTION_KEY", "").strip()
+        # Pre-rename installs may still set the HERMES_* env name.
+        env_key = (os.environ.get("USHER_ENCRYPTION_KEY")
+                   or os.environ.get("HERMES_ENCRYPTION_KEY") or "").strip()
         if env_key:
             self.key = env_key.encode()
-            logger.info("Using HERMES_ENCRYPTION_KEY from env")
+            logger.info("Using encryption key from env")
         else:
             self.key = self._load_or_create_key()
         try:
             self.fernet = Fernet(self.key)
         except Exception as exc:
             raise SystemExit(
-                "Invalid encryption key. HERMES_ENCRYPTION_KEY must be a valid "
+                "Invalid encryption key. USHER_ENCRYPTION_KEY must be a valid "
                 "urlsafe-base64-encoded 32-byte Fernet key. "
                 f"Generate one with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'. ({exc})"
             )

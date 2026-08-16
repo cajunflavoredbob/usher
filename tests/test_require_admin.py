@@ -44,10 +44,10 @@ async def test_admin_passes_through():
 async def test_non_admin_toasts_and_returns_false(caplog):
     q = _make_q(user_id=42)
     ctx = _make_ctx(admin_id=999)
-    caplog.set_level(logging.WARNING, logger="hermes.audit")
+    caplog.set_level(logging.WARNING, logger="usher.audit")
     assert await _require_admin(q, ctx, action_label="tk_close_direct") is False
     assert q.answers == [("Admin only.", False)]
-    audit_records = [r for r in caplog.records if r.name == "hermes.audit"]
+    audit_records = [r for r in caplog.records if r.name == "usher.audit"]
     assert audit_records, "expected an audit log entry for the blocked admin callback"
     entry = audit_records[-1].getMessage()
     assert "admin_callback_blocked" in entry

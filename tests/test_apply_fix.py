@@ -30,14 +30,14 @@ def _issue(*, media_type: str = "movie", tmdb_id: int = 12345,
 async def test_non_admin_blocked_with_toast_and_audit(caplog):
     upd = make_update(callback_data="tkfd:42", user_id=42)  # not admin
     ctx = make_ctx(admin_id=999)
-    caplog.set_level(logging.WARNING, logger="hermes.audit")
+    caplog.set_level(logging.WARNING, logger="usher.audit")
     await _apply_fix(upd, ctx, strategy="redownload")
     # Two answer() calls happen: first the empty ack at handler entry,
     # second the "Admin only." toast from _require_admin.
     toast_texts = [text for text, _alert in upd.callback_query.answers]
     assert "Admin only." in toast_texts
     # Audit event
-    audit_msgs = [r.getMessage() for r in caplog.records if r.name == "hermes.audit"]
+    audit_msgs = [r.getMessage() for r in caplog.records if r.name == "usher.audit"]
     assert any("admin_callback_blocked" in m for m in audit_msgs)
     # get_issue NEVER called
     ctx.bot_data["seerr"].get_issue.assert_not_called()

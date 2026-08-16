@@ -28,7 +28,7 @@ _CSRF1 = _csrf_bound(_SESSION1)
 
 @pytest.fixture
 async def client(tmp_path, monkeypatch):
-    monkeypatch.delenv("HERMES_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("USHER_WEBHOOK_SECRET", raising=False)
     settings_path = tmp_path / "settings.json"
     store = webui.SettingsStore(settings_path)
     store.settings.admin.username = "admin"
@@ -52,8 +52,8 @@ async def client(tmp_path, monkeypatch):
 
 def _cookies(pwd_ver: int = 0):
     if pwd_ver == 1:
-        return {webui.SESSION_COOKIE: _SESSION1, "hermes_csrf": _CSRF1}
-    return {webui.SESSION_COOKIE: _SESSION0, "hermes_csrf": CSRF}
+        return {webui.SESSION_COOKIE: _SESSION1, "usher_csrf": _CSRF1}
+    return {webui.SESSION_COOKIE: _SESSION0, "usher_csrf": CSRF}
 
 
 # --- sessions die on password change ------------------------------------------
@@ -147,4 +147,4 @@ async def test_backup_with_passphrase_needs_no_ack(client):
                              data={"csrf_token": CSRF, "passphrase": "hunter22"},
                              cookies=_cookies())
     assert resp.status == 200
-    assert "hermes-backup" in resp.headers["Content-Disposition"]
+    assert "usher-backup" in resp.headers["Content-Disposition"]

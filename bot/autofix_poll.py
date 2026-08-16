@@ -25,7 +25,7 @@ from bot.callback_prefixes import RESOLVE
 from bot.shared import record_btn
 from const import AUTOFIX_TIMEOUT_HOURS
 
-logger = logging.getLogger("hermes")
+logger = logging.getLogger("usher")
 
 # Module-level set of fix IDs currently being processed by a tick. If a single
 # tick's await chain stretches past the next 60s mark (slow Sonarr/Radarr), the

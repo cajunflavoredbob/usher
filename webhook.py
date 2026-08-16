@@ -21,7 +21,7 @@ from aiohttp import web
 
 from auth_util import client_ip
 
-logger = logging.getLogger("hermes.webhook")
+logger = logging.getLogger("usher.webhook")
 
 CommentHandler = Callable[[dict], Awaitable[None]]
 ResolvedHandler = Callable[[dict], Awaitable[None]]

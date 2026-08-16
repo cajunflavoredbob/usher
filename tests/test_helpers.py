@@ -46,7 +46,7 @@ def test_format_age_warns_once_per_prefix(caplog):
     # Clear the module-level seen set so this test is order-independent.
     from bot.shared import _FORMAT_AGE_WARNED
     _FORMAT_AGE_WARNED.clear()
-    caplog.set_level("WARNING", logger="hermes")
+    caplog.set_level("WARNING", logger="usher")
     # First two calls share the same prefix -> one WARN.
     format_age("garbage-1234567890")
     format_age("garbage-1234567890")
