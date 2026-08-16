@@ -298,7 +298,7 @@ code { background: var(--code-bg); padding: 2px 6px; border-radius: 3px; font-si
 .topbar .logout-form { background: none; padding: 0; margin: 0; display: inline; }
 .topbar .logout {
   background: var(--btn-2); color: var(--btn-2-fg); text-decoration: none; border: none;
-  cursor: pointer; font-family: inherit; width: auto;
+  cursor: pointer; font-family: inherit; width: auto; margin-top: 0;
   padding: 6px 14px; border-radius: 4px; font-size: 13px; font-weight: 600;
 }
 .topbar .logout:hover { background: var(--btn-2-hover); }

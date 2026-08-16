@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-08-16
+
+### Fixed
+- The top-bar Log out button sits on the same line as the version and theme
+  toggle instead of riding lower (it inherited the generic button's top
+  margin).
+
 ## [0.14.1] - 2026-08-16
 
 ### Fixed

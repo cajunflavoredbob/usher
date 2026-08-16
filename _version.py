@@ -1,2 +1,2 @@
 """Single source of truth for the Usher version string."""
-__version__ = "0.14.1"
+__version__ = "0.14.2"
