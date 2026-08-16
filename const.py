@@ -22,8 +22,19 @@ AUTOFIX_POLL_FIRST_DELAY_S: Final = 30
 AUTOFIX_TIMEOUT_HOURS: Final = 6
 
 # --- UI keyboard limits -----------------------------------------------------
-# Maximum buttons per row before titles get illegible on iOS Telegram.
+# Maximum buttons per row for the search-results keycap keyboard (1️⃣..9️⃣)
+# before titles get illegible on iOS Telegram.
 KB_BUTTONS_PER_ROW: Final = 3
+# Short fixed-width buttons ("S3" / "E12" / "#41") tolerate wider rows.
+SEASON_BUTTONS_PER_ROW: Final = 4
+EPISODE_BUTTONS_PER_ROW: Final = 5
+TICKET_BUTTONS_PER_ROW: Final = 4
+# Labeled type buttons ("🎥 Video") wrap at 2 so labels never truncate.
+TYPE_BUTTONS_PER_ROW: Final = 2
+# Episode picker page size: 8 rows of 5. Long-running seasons (anime, soaps)
+# can top 100 episodes, and Telegram rejects reply markup past 100 buttons,
+# which used to kill the flow and leave a dead season keyboard.
+EPISODE_PICKER_PAGE_SIZE: Final = 40
 # Default search result count. Keycap-emoji buttons (1️⃣..9️⃣) are the
 # hard ceiling; 5 is the practical UX default that keeps the search list
 # compact while still surfacing useful alternates.
@@ -31,6 +42,25 @@ SEARCH_RESULT_LIMIT: Final = 5
 
 # --- HTTP upload caps -------------------------------------------------------
 ADMIN_UPLOAD_MAX_BYTES: Final = 32 * 1024 * 1024  # 32 MB for backup restores
+# Per-member decompressed ceiling for restore ZIPs. The upload cap above only
+# bounds COMPRESSED size; deflate can expand ~1000:1, so a crafted 32 MB zip
+# could otherwise balloon into multi-GB allocations and OOM the container.
+RESTORE_MEMBER_MAX_BYTES: Final = 512 * 1024 * 1024  # 512 MB
+
+# --- Client lifecycle -------------------------------------------------------
+# Grace before an evicted/retired httpx client is actually closed, so an
+# in-flight request on a captured reference isn't killed. Must outlive a full
+# retry chain (with_retry: ~4 x 15s + backoff). Shared by the Seerr user-client
+# cache and bot/app.py's hot-reload close.
+CLIENT_CLOSE_GRACE_S: Final = 90.0
+
+# --- Account credentials ----------------------------------------------------
+# Minimum admin-password length, enforced by the setup and change-password
+# forms (client minlength + server check) so the number has one owner.
+ADMIN_PASSWORD_MIN_CHARS: Final = 8
+# Server-side floor for the backup passphrase; matches the admin-password
+# minimum.
+MIN_BACKUP_PASSPHRASE_CHARS: Final = ADMIN_PASSWORD_MIN_CHARS
 
 # --- Conversation timeouts (seconds) ---------------------------------------
 TICKET_REPLY_TIMEOUT_S: Final = 600    # 10 min

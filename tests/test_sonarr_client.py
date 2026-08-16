@@ -36,7 +36,7 @@ async def test_lookup_returns_none_when_only_wrong_series_returned():
 
 
 async def test_mark_failed_pages_history_until_grab_found():
-    """Audit P2-5: a churn-heavy episode can push the grabbed event past the
+    """A churn-heavy episode can push the grabbed event past the
     newest history page; the blocklist step must page deeper, not silently
     fall back to 'no prior grab' and re-grab the same release."""
     from sonarr import _HISTORY_PAGE_SIZE

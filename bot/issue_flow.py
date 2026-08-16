@@ -17,6 +17,7 @@ from telegram.ext import (
     ContextTypes,
     ConversationHandler,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 
@@ -32,6 +33,7 @@ from bot.callback_prefixes import (
     ISSUE_AUTOFIX_OFFER,
     ISSUE_CANCEL,
     ISSUE_EPISODE,
+    ISSUE_EPISODE_PAGE,
     ISSUE_MEDIA,
     ISSUE_RESEARCH_PARENT,
     ISSUE_SEASON,
@@ -63,9 +65,13 @@ from bot.shared import (
 from bot.tickets import _run_arr_action
 from const import (
     AUTOFIX_TIMEOUT_HOURS,
+    EPISODE_BUTTONS_PER_ROW,
+    EPISODE_PICKER_PAGE_SIZE,
     ISSUE_FLOW_TIMEOUT_S,
     KB_BUTTONS_PER_ROW,
     SEARCH_RESULT_LIMIT,
+    SEASON_BUTTONS_PER_ROW,
+    TYPE_BUTTONS_PER_ROW,
 )
 
 logger = logging.getLogger("hermes")
@@ -75,29 +81,70 @@ logger = logging.getLogger("hermes")
 async def _issue_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Conversation_timeout handler. Clears every user_data key the issue
     flow can populate so an abandoned conversation doesn't leak state for
-    the life of the process."""
+    the life of the process (a stale research_parent otherwise resurfaces
+    as a wrong search suggestion in the next /issue)."""
     for key in ("media", "search_results", "seasons", "season", "episode",
-                "issue_type", "description"):
+                "issue_type", "description", "research_parent",
+                "search_version"):
         ctx.user_data.pop(key, None)
+    # Without a notice, text typed after the timeout hits a bot that forgot
+    # the conversation and answers nothing at all.
+    try:
+        if update is not None and update.effective_chat is not None:
+            await ctx.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="⏱️ The /issue flow timed out. Start again with /issue.",
+            )
+    except Exception:
+        logger.debug("issue-timeout notice failed (non-fatal)", exc_info=True)
     return ConversationHandler.END
+
+
+async def _issue_expect_text_title(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Non-text (photo/sticker/voice) sent where a title is expected. Without
+    this the message vanished with no response at all."""
+    await update.effective_message.reply_text(
+        "I can only read text here — type the title, or /cancel to stop.")
+    return TITLE
+
+
+async def _issue_expect_text_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Non-text sent where the description is expected (screenshots are the
+    common case)."""
+    await update.effective_message.reply_text(
+        "I can only read text here — describe the problem in words "
+        "(screenshots don't reach Seerr), or /cancel to stop.")
+    return DESCRIPTION
 
 
 def _issue_conversation() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[CommandHandler("issue", issue_start)],
         states={
-            TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, issue_title)],
+            TITLE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, issue_title),
+                MessageHandler(~filters.COMMAND, _issue_expect_text_title),
+            ],
             PICK_MEDIA: [
                 CallbackQueryHandler(issue_pick_media, pattern=fr"^{ISSUE_MEDIA}:"),
                 CallbackQueryHandler(issue_research_parent, pattern=fr"^{ISSUE_RESEARCH_PARENT}$"),
             ],
             PICK_SEASON: [CallbackQueryHandler(issue_pick_season, pattern=fr"^{ISSUE_SEASON}:")],
-            PICK_EPISODE: [CallbackQueryHandler(issue_pick_episode, pattern=fr"^{ISSUE_EPISODE}:")],
+            PICK_EPISODE: [
+                CallbackQueryHandler(issue_episode_page, pattern=fr"^{ISSUE_EPISODE_PAGE}:"),
+                CallbackQueryHandler(issue_pick_episode, pattern=fr"^{ISSUE_EPISODE}:"),
+            ],
             PICK_TYPE: [CallbackQueryHandler(issue_pick_type, pattern=fr"^{ISSUE_TYPE}:")],
-            DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, issue_description)],
+            DESCRIPTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, issue_description),
+                MessageHandler(~filters.COMMAND, _issue_expect_text_description),
+            ],
             OFFER_AUTOFIX: [CallbackQueryHandler(issue_offer_autofix, pattern=fr"^{ISSUE_AUTOFIX_OFFER}:")],
             CONFIRM_AUTOFIX: [CallbackQueryHandler(issue_confirm_autofix, pattern=fr"^{ISSUE_AUTOFIX_CONFIRM}:")],
-            ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, _issue_timeout)],
+            # TypeHandler, not MessageHandler(filters.ALL): PTB's message filters
+            # reject callback-query updates, so a MessageHandler TIMEOUT
+            # never fires when the flow was abandoned at a button step.
+            ConversationHandler.TIMEOUT: [TypeHandler(Update, _issue_timeout)],
         },
         fallbacks=[
             CommandHandler("cancel", issue_cancel),
@@ -344,12 +391,13 @@ async def _show_season_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         return ConversationHandler.END
     ctx.user_data["media"]["tvdb_id"] = tvdb_id
     ctx.user_data["seasons"] = {s.season_number: s for s in seasons}
-    # Lay out season buttons in rows of 4
     rows = []
     row = []
     for s in seasons:
-        row.append(InlineKeyboardButton(f"S{s.season_number}", callback_data=f"{ISSUE_SEASON}:{s.season_number}"))
-        if len(row) == 4:
+        # Season 0 is the Specials bucket; "S0" reads like a glitch.
+        btn_label = "Specials" if s.season_number == 0 else f"S{s.season_number}"
+        row.append(InlineKeyboardButton(btn_label, callback_data=f"{ISSUE_SEASON}:{s.season_number}"))
+        if len(row) == SEASON_BUTTONS_PER_ROW:
             rows.append(row)
             row = []
     if row:
@@ -382,24 +430,74 @@ async def issue_pick_season(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     ctx.user_data["season"] = season
     season_obj = ctx.user_data["seasons"].get(season)
     ep_count = season_obj.episode_count if season_obj else 0
-    rows = []
-    row = []
-    # Up to ep_count buttons; "Whole season" option last
-    for ep in range(1, ep_count + 1):
+    if ep_count <= 0:
+        # No episode list available (announced season, or Seerr/Sonarr didn't
+        # report a count): a picker would show only "Whole season" + Cancel,
+        # so skip straight to the whole-season selection.
+        ctx.user_data["episode"] = None
+        return await _show_type_picker(update, ctx)
+    return await _show_episode_page(update, ctx, season, ep_count, page=0)
+
+
+def _episode_page_keyboard(season: int, ep_count: int, page: int) -> InlineKeyboardMarkup:
+    """One page of episode buttons. Paginated: Telegram rejects reply markup
+    past 100 buttons, and long-running seasons (anime, soaps) can top that,
+    which used to kill the flow and strand a dead season keyboard."""
+    last_page = max(0, (ep_count - 1) // EPISODE_PICKER_PAGE_SIZE)
+    page = max(0, min(page, last_page))
+    start = page * EPISODE_PICKER_PAGE_SIZE + 1
+    end = min(ep_count, start + EPISODE_PICKER_PAGE_SIZE - 1)
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for ep in range(start, end + 1):
         row.append(InlineKeyboardButton(f"E{ep}", callback_data=f"{ISSUE_EPISODE}:{ep}"))
-        if len(row) == 5:
+        if len(row) == EPISODE_BUTTONS_PER_ROW:
             rows.append(row)
             row = []
     if row:
         rows.append(row)
+    if last_page > 0:
+        nav: list[InlineKeyboardButton] = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(
+                "⬅️ Earlier", callback_data=f"{ISSUE_EPISODE_PAGE}:{page - 1}"))
+        if page < last_page:
+            nav.append(InlineKeyboardButton(
+                "➡️ Later", callback_data=f"{ISSUE_EPISODE_PAGE}:{page + 1}"))
+        rows.append(nav)
     rows.append([InlineKeyboardButton("📦 Whole season", callback_data=f"{ISSUE_EPISODE}:0")])
     rows.append([InlineKeyboardButton("🛑 Cancel", callback_data=ISSUE_CANCEL)])
+    return InlineKeyboardMarkup(rows)
+
+
+async def _show_episode_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
+                             season: int, ep_count: int, page: int) -> int:
+    q = update.callback_query
+    season_label = "Specials" if season == 0 else f"Season {season}"
     sent = await q.edit_message_text(
-        f"Season {season} — which episode?",
-        reply_markup=InlineKeyboardMarkup(rows),
+        f"{season_label} — which episode?",
+        reply_markup=_episode_page_keyboard(season, ep_count, page),
     )
     record_btn(ctx.application, update.effective_user.id, sent)
     return PICK_EPISODE
+
+
+async def issue_episode_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query
+    await q.answer()
+    try:
+        page = int(q.data.split(":")[1])
+    except (ValueError, IndexError):
+        await q.edit_message_text("Couldn't parse selection. /issue to start over.")
+        return ConversationHandler.END
+    season = ctx.user_data.get("season")
+    if season is None:
+        # State evaporated (error-handler cleanup, restart) between pages.
+        await q.edit_message_text("That selection expired. /issue to start over.")
+        return ConversationHandler.END
+    season_obj = (ctx.user_data.get("seasons") or {}).get(season)
+    ep_count = season_obj.episode_count if season_obj else 0
+    return await _show_episode_page(update, ctx, season, ep_count, page)
 
 
 async def issue_pick_episode(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
@@ -417,10 +515,12 @@ async def issue_pick_episode(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
 
 async def _show_type_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
-    rows = [[
+    type_buttons = [
         InlineKeyboardButton(f"{e} {n}", callback_data=f"{ISSUE_TYPE}:{i}")
         for i, (e, n) in ISSUE_TYPES.items()
-    ]]
+    ]
+    rows = [type_buttons[i:i + TYPE_BUTTONS_PER_ROW]
+            for i in range(0, len(type_buttons), TYPE_BUTTONS_PER_ROW)]
     rows.append([InlineKeyboardButton("🛑 Cancel", callback_data=ISSUE_CANCEL)])
     media = ctx.user_data["media"]
     label = media["title"]
@@ -429,10 +529,13 @@ async def _show_type_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     if media["type"] == "tv":
         season = ctx.user_data.get("season")
         ep = ctx.user_data.get("episode")
+        season_label = "Specials" if season == 0 else f"S{int(season or 0):02d}"
         if ep is None:
-            label += f" — S{season} (whole season)"
+            label += f" — {season_label} (whole season)"
         else:
-            label += f" — S{season}E{ep}"
+            # Zero-padded like format_media_label so the same selection
+            # doesn't change format between consecutive screens.
+            label += f" — S{int(season or 0):02d}E{int(ep):02d}"
     # HTML + escape for the same reason as the season screen: raw titles
     # break Markdown entity parsing and kill the flow mid-edit.
     sent = await q.edit_message_text(
@@ -659,6 +762,22 @@ async def _submit_issue_inner(
     # an admin fix and a user auto-fix racing on the same media must not
     # interleave delete/blocklist/search.
     if autofix:
+        # Re-check the daily quota at execution time: the offer-time check
+        # can be raced by the same user confirming concurrently in two
+        # chats (conversations are per-chat), and the delete+search below
+        # is destructive.
+        tg_id = update.effective_user.id
+        if tg_id != ctx.bot_data.get("admin_id"):
+            s_cfg = ctx.bot_data["settings_store"].settings
+            if not s_cfg.daily_autofix_unlimited:
+                used = await store.count_autofix_24h(tg_id)
+                if used >= s_cfg.daily_autofix_limit:
+                    autofix = False
+                    lines.append(
+                        f"⚠️ Auto-fix skipped: you've used your "
+                        f"{s_cfg.daily_autofix_limit} auto-fixes today."
+                    )
+    if autofix:
         media_key = media_action_key(media)
         if not try_begin_action(ctx, media_key):
             lines.append("⚠️ Auto-fix skipped: another fix for this title is already running.")
@@ -691,10 +810,11 @@ async def _submit_issue_inner(
                             if media["type"] == "movie":
                                 kwargs["radarr_movie_id"] = poll_info.get("movie_id")
                             else:
+                                # poll_info only ever carries series_id/episode_id (the
+                                # whole-season workflow died in 0.12.0); the season /
+                                # expected-episodes kwargs were always None and are gone.
                                 kwargs["sonarr_series_id"] = poll_info.get("series_id")
                                 kwargs["sonarr_episode_id"] = poll_info.get("episode_id")
-                                kwargs["sonarr_season"] = poll_info.get("season")
-                                kwargs["expected_episode_ids"] = poll_info.get("expected_episode_ids") or []
                             await store.add_pending_autofix(**kwargs)
                             prefix = "🔧" if result.ok else "⚠️"
                             lines.append(f"{prefix} Auto-fix: {result.message}")
@@ -725,7 +845,7 @@ async def _resume_submit_issue(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     _submit_issue's own guard handles the case where it got clobbered."""
     # If the user started a NEW /issue while re-linking, user_data now holds
     # that conversation's half-built draft; auto-submitting it would file a
-    # partial report (same shape as the audit).
+    # partial report.
     if user_in_conversation(ctx, update, "issue"):
         await update.effective_message.reply_text(
             "You've started a new /issue since then, so I didn't auto-submit "

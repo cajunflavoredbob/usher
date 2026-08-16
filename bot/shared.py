@@ -5,10 +5,8 @@ module can pull from it without circular imports.
 """
 from __future__ import annotations
 
-import asyncio
+import html
 import logging
-import os
-import signal
 import time
 from datetime import datetime, timezone
 from typing import Callable, Final, Optional
@@ -22,7 +20,7 @@ from store import UserStore
 
 from procutil import schedule_clean_exit  # noqa: F401  (re-export for bot.*)
 
-from bot.callback_prefixes import RELINK
+from bot.callback_prefixes import RELINK, TK_CLOSE, TK_FIX, TK_REPLY
 from const import RELINK_RESUME_TTL_S
 
 logger = logging.getLogger("hermes")
@@ -55,8 +53,8 @@ AUTOFIX_ELIGIBLE_TYPES = {1, 2, 3}
 ISSUE_TYPE_LABELS: Final = {
     "VIDEO": ("🎥", "Video"),
     "AUDIO": ("🔊", "Audio"),
-    "SUBTITLES": ("📝", "Subtitle"),
-    "SUBTITLE": ("📝", "Subtitle"),
+    "SUBTITLES": ("📝", "Subtitles"),
+    "SUBTITLE": ("📝", "Subtitles"),
     "OTHER": ("❓", "Other"),
 }
 
@@ -106,7 +104,13 @@ def format_age(created_at_iso: str) -> str:
 
 
 def format_status(summary: dict[str, str]) -> str:
-    return "\n".join(f"  • *{k}*: {v}" for k, v in summary.items())
+    """HTML-formatted status block. Emits <b> tags and escapes the values
+    (which carry upstream error text); callers send it with parse_mode=HTML
+    and must NOT re-escape it (that would show the tags literally)."""
+    return "\n".join(
+        f"  • <b>{html.escape(k)}</b>: {html.escape(v)}"
+        for k, v in summary.items()
+    )
 
 
 def format_media_label(
@@ -128,12 +132,14 @@ def format_media_label(
     base = title or "(unknown)"
     if year:
         base = f"{base} ({year})"
-    if season:
-        s = int(season)
-        if episode:
-            base += f" — S{s:02d}E{int(episode):02d}"
-        else:
-            base += f" — S{s:02d}"
+    # Season 0 is ambiguous: with an episode it's a specials episode
+    # (S00Exx, render it); WITHOUT one it's Seerr's "all seasons" scope and
+    # must render nothing extra. A truthiness test alone dropped picked
+    # specials episodes from confirmations and ticket lists.
+    if season is not None and episode:
+        base += f" — S{int(season):02d}E{int(episode):02d}"
+    elif season:
+        base += f" — S{int(season):02d}"
     return base
 
 
@@ -292,14 +298,21 @@ async def format_media_title_line(
 # --- Seerr-required gate ----------------------------------------------------
 
 async def require_seerr(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Optional[SeerrClient]:
-    """Bail out gracefully if Seerr isn't configured yet."""
+    """Bail out gracefully if Seerr isn't configured yet. The admin gets the
+    settings URL hint; regular users get a next step they can actually take
+    (a placeholder URL and port number are useless to them)."""
     seerr: Optional[SeerrClient] = ctx.bot_data.get("seerr")
     if seerr is None:
-        port = ctx.bot_data.get("http_port", 8765)
-        await update.effective_message.reply_text(
-            f"Hermes isn't configured yet. The admin needs to fill in Seerr settings at "
-            f"http://<host>:{port}/admin",
-        )
+        if update.effective_user.id == ctx.bot_data.get("admin_id"):
+            port = ctx.bot_data.get("http_port", 8765)
+            await update.effective_message.reply_text(
+                f"Hermes isn't configured yet. Fill in Seerr settings at "
+                f"http://<host>:{port}/admin",
+            )
+        else:
+            await update.effective_message.reply_text(
+                "Hermes isn't set up yet — ask the admin to finish configuration.",
+            )
     return seerr
 
 
@@ -356,6 +369,34 @@ async def token_for(
 BTN_HISTORY_MAX = 3
 
 
+# How often the btn_msgs map is swept for users whose tracked buttons have
+# all expired. Without the sweep the map gains a permanent per-user entry for
+# every account the bot ever sent a keyboard to (any stranger can trigger
+# that via /link), growing unbounded on attacker-controlled keys.
+_BTN_PRUNE_INTERVAL_S = 3600
+
+
+def _prune_btn_history(app, history: dict) -> None:
+    now = datetime.now(timezone.utc)
+    last = app.bot_data.get("_btn_msgs_pruned_at")
+    if last is not None and (now - last).total_seconds() < _BTN_PRUNE_INTERVAL_S:
+        return
+    app.bot_data["_btn_msgs_pruned_at"] = now
+    for uid in list(history):
+        fresh = []
+        for e in history[uid]:
+            try:
+                sent = datetime.fromisoformat(e["sent_at"])
+            except (KeyError, TypeError, ValueError):
+                continue  # unparseable entry: drop it
+            if (now - sent).total_seconds() <= BTN_TTL_SECONDS:
+                fresh.append(e)
+        if fresh:
+            history[uid] = fresh
+        else:
+            history.pop(uid, None)
+
+
 def record_btn(app, user_id: int, message) -> None:
     """Record `message` as a button-bearing bot message for `user_id`. The
     global button gate admits callbacks whose source message matches any of
@@ -370,6 +411,7 @@ def record_btn(app, user_id: int, message) -> None:
     if message is None or getattr(message, "message_id", None) is None:
         return
     history: dict = app.bot_data.setdefault("btn_msgs", {})
+    _prune_btn_history(app, history)
     entry = {
         "chat_id": message.chat_id,
         "message_id": message.message_id,
@@ -402,8 +444,8 @@ DECRYPT_FAILED_MSG = (
 
 
 async def send_typing(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Best-effort typing indicator before a slow network read (the audit:
-    ticket list / title search / submit looked frozen). Never fatal."""
+    """Best-effort typing indicator before a slow network read (ticket
+    list / title search / submit otherwise look frozen). Never fatal."""
     try:
         await ctx.bot.send_chat_action(chat_id=update.effective_chat.id,
                                        action="typing")
@@ -411,7 +453,7 @@ async def send_typing(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         logger.debug("send_chat_action failed", exc_info=True)
 
 
-# --- Per-media action serialization (the audit / P2-4) -----------------------
+# --- Per-media action serialization -----------------------------------------
 
 def media_action_key(media: dict) -> str:
     """Serialization key for destructive arr workflows on one title."""
@@ -518,6 +560,12 @@ async def run_relink_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> b
     if not marker:
         return False
     if time.time() - marker.get("saved_at", 0) > RELINK_RESUME_TTL_S:
+        # The prompt promised "I'll pick up where you left off"; when the
+        # marker aged out, honesty beats silence.
+        await update.effective_message.reply_text(
+            "That was a while ago, so I didn't repeat your earlier action — "
+            "start it again with /issue or /tickets if you still need it."
+        )
         return False
     executor = RELINK_RESUME_EXECUTORS.get(marker.get("kind"))
     if executor is None:
@@ -621,8 +669,10 @@ async def reset_stale_flows(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
             if job is not None:
                 job.schedule_removal()
     # Drop free-text flow markers so a pending ticket reply / close-comment is
-    # abandoned too (its conversation was just ended above).
-    for marker in ("tk_reply_id", "tk_close_after"):
+    # abandoned too (its conversation was just ended above). link_active_loop
+    # also goes: it's the kill switch for an in-flight Plex PIN poll, which
+    # must not outlive its conversation.
+    for marker in ("tk_reply_id", "tk_close_after", "link_active_loop"):
         ctx.user_data.pop(marker, None)
 
 
@@ -631,9 +681,6 @@ async def reset_stale_flows(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
 def ticket_detail_kb(issue_id: int, is_admin: bool) -> InlineKeyboardMarkup:
     """Top-level row for a ticket's detail view. Reply goes straight to the
     reply input (no submenu); only Close and Fix have submenus."""
-    # Local import avoids a circular dep at module load (callback_prefixes is
-    # a leaf module so this is cheap).
-    from bot.callback_prefixes import TK_CLOSE, TK_FIX, TK_REPLY
     row = [InlineKeyboardButton("💬 Reply", callback_data=f"{TK_REPLY}:{issue_id}")]
     if is_admin:
         row.append(InlineKeyboardButton("🔧 Fix", callback_data=f"{TK_FIX}:{issue_id}"))

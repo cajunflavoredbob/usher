@@ -28,6 +28,7 @@ from telegram.ext import (
     ContextTypes,
     ConversationHandler,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 
@@ -47,7 +48,7 @@ from bot.callback_prefixes import (
     TK_OPEN,
     TK_REPLY,
 )
-from const import TICKET_REPLY_TIMEOUT_S
+from const import TICKET_BUTTONS_PER_ROW, TICKET_REPLY_TIMEOUT_S
 from bot.shared import (
     DECRYPT_FAILED_MSG,
     AWAIT_TICKET_REPLY,
@@ -121,8 +122,13 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     store: UserStore = ctx.bot_data["store"]
     mapping = await store.get(user_id)
 
-    # Eligibility check for non-admin users
+    # Eligibility check for non-admin users. decrypt_failed is
+    # distinguished like every sibling gate: telling that user to "/link
+    # first" is the wrong remedy (they need /unlink then /link).
     if not is_admin:
+        if mapping and mapping.plex_token_decrypt_failed:
+            await update.effective_message.reply_text(DECRYPT_FAILED_MSG)
+            return
         if not mapping or not mapping.plex_token:
             await update.effective_message.reply_text(
                 "DM me /link first so I know which Plex account is yours."
@@ -133,7 +139,6 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         issues, total = await seerr.list_issues(
             filter="open",
-            take=25,
             as_plex_token=None if is_admin else mapping.plex_token,
         )
     except PlexTokenInvalidError:
@@ -182,12 +187,12 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     lines.append("Tap a ticket number below to manage it.")
     text = _truncate_message("\n".join(lines))
 
-    # Inline keyboard: one button per ticket (#N), 4 per row
+    # Inline keyboard: one button per ticket (#N)
     button_rows: list[list[InlineKeyboardButton]] = []
     current: list[InlineKeyboardButton] = []
     for issue in issues:
         current.append(InlineKeyboardButton(f"#{issue.id}", callback_data=f"{TK_OPEN}:{issue.id}"))
-        if len(current) == 4:
+        if len(current) == TICKET_BUTTONS_PER_ROW:
             button_rows.append(current)
             current = []
     if current:
@@ -384,7 +389,12 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         ],
         [InlineKeyboardButton("⬅️ Back", callback_data=f"{TK_BACK}:{issue_id}")],
     ])
-    await q.edit_message_text(f"🔧 Fix #{issue_id} — how?", reply_markup=kb)
+    await q.edit_message_text(
+        f"🔧 Fix #{issue_id} — how?\n"
+        "⚠️ Both options delete the current file from disk before searching "
+        "for a replacement.",
+        reply_markup=kb,
+    )
     record_btn(ctx.application, update.effective_user.id, q.message)
 
 
@@ -403,7 +413,7 @@ class _FixContext:
     """Resolved context for an admin Fix / Mark Failed action.
 
     Carries everything _apply_fix needs to dispatch + render: the issue id
-    (for messages + audit + poll-tracking row), the media dict the arr
+    (for messages + audit-log + poll-tracking row), the media dict the arr
     clients expect, the season/episode (for label + workflow), and the
     pre-built label for the success/failure DM."""
     issue_id: int
@@ -430,7 +440,10 @@ async def _resolve_fix_context(
     season = issue.problem_season
     episode = issue.problem_episode
 
-    if media_type == "tv" and not episode:
+    # season may be None on garbage/fork payloads even when episode is set;
+    # letting that through would query Sonarr with an empty seasonNumber
+    # filter (= every episode in the series) ahead of a delete workflow.
+    if media_type == "tv" and (season is None or not episode):
         return None, (
             f"{action_name} only works on individual episodes or movies — not "
             f"whole seasons or shows. For #{issue_id}, fix it in Sonarr directly."
@@ -477,10 +490,11 @@ async def _enqueue_fix_completion(
     if fix.media["type"] == "movie":
         kwargs["radarr_movie_id"] = poll_info.get("movie_id")
     else:
+        # poll_info only ever carries series_id/episode_id (the
+        # whole-season workflow died in 0.12.0); the season /
+        # expected-episodes kwargs were always None and are gone.
         kwargs["sonarr_series_id"] = poll_info.get("series_id")
         kwargs["sonarr_episode_id"] = poll_info.get("episode_id")
-        kwargs["sonarr_season"] = poll_info.get("season")
-        kwargs["expected_episode_ids"] = poll_info.get("expected_episode_ids") or []
     await store.add_pending_autofix(**kwargs)
 
 
@@ -719,7 +733,10 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
             f"💬 Reply posted on #{issue_id}. "
             "(You've started a new reply since then — that one's still active.)"
         )
-        return ConversationHandler.END
+        # Return None, not END: the shared (chat,user) conversation now belongs
+        # to the NEW reply flow; ending it here would kill the flow the user
+        # just started and silently swallow their next message.
+        return None
     if close_after:
         try:
             await seerr.resolve_issue(issue_id, as_plex_token=None)
@@ -771,10 +788,27 @@ async def tk_reply_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
 
 async def _tk_reply_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Conversation_timeout handler. Clear ticket-reply state so an abandoned
-    conversation doesn't leak user_data for the life of the process."""
+    conversation doesn't leak user_data for the life of the process, and tell
+    the user (the flow explicitly solicited text, so silence loses their
+    later reply with no explanation)."""
     ctx.user_data.pop("tk_reply_id", None)
     ctx.user_data.pop("tk_close_after", None)
+    try:
+        if update is not None and update.effective_chat is not None:
+            await ctx.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="⏱️ Timed out waiting for your reply. Tap Reply on the "
+                     "ticket again from /tickets.",
+            )
+    except Exception:
+        logger.debug("tk-reply-timeout notice failed (non-fatal)", exc_info=True)
     return ConversationHandler.END
+
+
+async def _tk_reply_expect_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.effective_message.reply_text(
+        "I can only read text here — type your reply, or /cancel to stop.")
+    return AWAIT_TICKET_REPLY
 
 
 def _ticket_conversation() -> ConversationHandler:
@@ -786,9 +820,13 @@ def _ticket_conversation() -> ConversationHandler:
         states={
             AWAIT_TICKET_REPLY: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, tk_reply_text),
+                MessageHandler(~filters.COMMAND, _tk_reply_expect_text),
             ],
+            # TypeHandler, not MessageHandler(filters.ALL): message filters
+            # reject callback-query updates, so the timeout never fired when
+            # the flow's last update was a button tap.
             ConversationHandler.TIMEOUT: [
-                MessageHandler(filters.ALL, _tk_reply_timeout),
+                TypeHandler(Update, _tk_reply_timeout),
             ],
         },
         fallbacks=[CommandHandler("cancel", tk_reply_cancel)],

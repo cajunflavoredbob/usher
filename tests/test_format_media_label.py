@@ -36,11 +36,16 @@ def test_zero_pads_two_digit_season_and_episode():
     assert format_media_label("X", "", season=12, episode=34) == "X — S12E34"
 
 
-def test_season_zero_renders_specials_style():
-    # season 0 is falsy in Python, so the helper SKIPS adding the suffix.
-    # The Specials season is handled separately at the picker level; here
-    # documenting the behavior so future readers know it isn't a bug.
-    assert format_media_label("Foo", "", season=0, episode=1) == "Foo"
+def test_season_zero_with_episode_renders_specials_episode():
+    # Season 0 + an episode is a picked specials episode: render S00Exx so
+    # confirmations and ticket lists keep the selected scope.
+    assert format_media_label("Foo", "", season=0, episode=1) == "Foo — S00E01"
+
+
+def test_season_zero_without_episode_renders_nothing():
+    # A bare season 0 is Seerr's "all seasons" scope, not the Specials
+    # season: rendering "S00" would mislabel whole-series tickets.
+    assert format_media_label("Foo", "", season=0, episode=None) == "Foo"
 
 
 @pytest.mark.parametrize("season,episode,expected_suffix", [

@@ -28,6 +28,12 @@ T = TypeVar("T")
 # Implemented (a permanent "this endpoint doesn't exist" signal).
 RETRYABLE_STATUSES = {408, 429, 500, 502, 503, 504}
 
+# Hard total deadline for one request attempt (connect + send + full body).
+# The httpx client timeout is per-phase, so without this a drip-fed response
+# body has no upper bound. Sized well above the largest per-phase timeout
+# (15s) times the phases a healthy request can spend.
+ATTEMPT_DEADLINE_S = 60.0
+
 # Methods with no server-side side effect, or whose effect is identical on
 # repeat -- safe to retry freely. POST/PATCH are absent on purpose.
 IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE", "TRACE"})
@@ -176,11 +182,49 @@ async def execute(
         idempotent = method.upper() in IDEMPOTENT_METHODS
 
     async def _do() -> httpx.Response:
-        r = await client.request(method, url, **kwargs)
+        # Total per-attempt deadline. The client's httpx timeout is
+        # per-phase (connect/read/write each), so a server dripping bytes
+        # just under the read timeout could stretch one request unboundedly.
+        # with_retry treats the resulting TransientAPIError like any other
+        # post-send transient: retried when idempotent, raised otherwise.
+        try:
+            async with asyncio.timeout(ATTEMPT_DEADLINE_S):
+                r = await client.request(method, url, **kwargs)
+        except TimeoutError as exc:
+            raise TransientAPIError(
+                f"{service} request exceeded {ATTEMPT_DEADLINE_S:.0f}s total",
+                service=service,
+            ) from exc
         classify_response(r, service=service)
         return r
     return await with_retry(_do, service=service, retries=retries,
                             idempotent=idempotent)
+
+
+def json_or_raise(r: httpx.Response, *, service: str, what: str,
+                  expect: Optional[type] = dict, exc_factory=None):
+    """Parse a 2xx body; raise a clean error instead of a bare
+    ValueError/AttributeError when the body isn't JSON (e.g. a reverse proxy
+    serving an HTML error page with status 200) or isn't the expected shape.
+    execute() only guarantees the status code, not the body.
+
+    exc_factory(message) builds the raised exception; defaults to
+    PermanentAPIError. Callers whose endpoint has a side effect pass a
+    factory for an error that signals "may have landed, don't blind-retry"
+    (e.g. seerr's AmbiguousResponseError)."""
+    def _raise(message: str, cause=None):
+        if exc_factory is not None:
+            exc = exc_factory(message)
+        else:
+            exc = PermanentAPIError(message, service=service)
+        raise exc from cause
+    try:
+        data = r.json()
+    except Exception as exc:
+        _raise(f"returned an unreadable response for {what}", exc)
+    if expect is not None and not isinstance(data, expect):
+        _raise(f"returned an unexpected response shape for {what}")
+    return data
 
 
 def user_friendly_message(exc: BaseException) -> str:
@@ -196,4 +240,6 @@ def user_friendly_message(exc: BaseException) -> str:
     if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException,
                         httpx.RemoteProtocolError)):
         return "(connection problem — try again in a moment.)"
-    return "(unexpected error — check the bot logs.)"
+    # Regular users can't read the logs, so keep the advice actionable for
+    # them; the full exception is already in the logs for the admin.
+    return "(unexpected error — try again in a moment. If it keeps happening, tell the admin.)"

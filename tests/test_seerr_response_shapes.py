@@ -1,4 +1,4 @@
-"""Wire-level tests for the audit / P2-3 fixes: 2xx responses with
+"""Wire-level tests for 2xx responses with
 garbage bodies must raise a clean AmbiguousResponseError (never look like a
 retryable failure after a write landed), and list_issues must report Seerr's
 full matching count so /tickets can be honest about truncation."""

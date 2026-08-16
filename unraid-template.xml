@@ -14,15 +14,18 @@
   <WebUI>http://[IP]:[PORT:8765]/admin</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/cajunflavoredbob/hermes/main/unraid-template.xml</TemplateURL>
   <Icon>https://raw.githubusercontent.com/cajunflavoredbob/hermes/main/icon.png</Icon>
-  <Date>2026-05-25</Date>
-  <Changes>### v0.8.0&#xD;
-- All settings moved to the admin web UI. No environment variables required to install -- start the container, open the web UI, finish setup.&#xD;
+  <Date>2026-08-16</Date>
+  <Changes>### v0.13.0&#xD;
+- Security, reliability, and UX hardening: see the project CHANGELOG for details&#xD;
 &#xD;
-### v0.7.0&#xD;
-- Slim admin web UI at /admin (settings, backup/restore, password change)&#xD;
+### v0.12.x&#xD;
+- Follow-up DMs carry the ticket's real scope; crash-loop and backup fixes&#xD;
 &#xD;
-### v0.6.0&#xD;
-- Comment-reply notifications via Seerr webhook</Changes>
+### v0.11.x&#xD;
+- Mandatory webhook secret, crash-safe settings writes, ticket management&#xD;
+&#xD;
+### v0.8.0&#xD;
+- All settings moved to the admin web UI. No environment variables required to install -- start the container, open the web UI, finish setup.</Changes>
   <Requires/>
   <DonateText/>
   <DonateLink/>
@@ -46,8 +49,8 @@
 **Enable comment-reply notifications (optional)**&#xD;
 1. In Seerr, go to Settings → Notifications → Webhook&#xD;
 2. Webhook URL: `http://&lt;unraid-ip&gt;:8765/webhook/seerr`&#xD;
-3. Authorization Header: paste the Webhook Secret from the Hermes web UI (leave blank if no secret)&#xD;
-4. Enable the **Issue Comment** notification type&#xD;
+3. Authorization Header: paste the Webhook Secret from the Hermes web UI (mandatory -- Hermes rejects deliveries without it)&#xD;
+4. Enable the **Issue Reported**, **Issue Comment**, and **Issue Resolved** notification types&#xD;
 5. Click "Test" to confirm Hermes receives it&#xD;
 &#xD;
 See the [project page](https://github.com/cajunflavoredbob/hermes) for full docs.</Description>

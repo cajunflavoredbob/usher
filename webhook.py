@@ -132,6 +132,12 @@ def attach_webhook(
             logger.warning("Webhook rejected: body %d bytes > %d after read", len(body), MAX_BODY_BYTES)
             return web.Response(status=413, text="payload too large")
 
+        # Dedupe on the raw body hash. Known tradeoff: Seerr's payload
+        # carries no comment id or timestamp, so two byte-identical events
+        # inside the TTL (a user posting the same comment text twice within
+        # a minute) collapse into one DM. Accepted: Seerr's retry storms are
+        # the common case and far more harmful than the rare identical
+        # double-comment.
         body_hash = hashlib.sha256(body).hexdigest()
         if _seen_recently(body_hash):
             logger.info("Webhook deduped: identical body within %ds window", DEDUPE_TTL_S)
@@ -173,6 +179,9 @@ def attach_webhook(
             except Exception:
                 logger.exception("on_reported handler failed (returning 200 to suppress Seerr retry)")
             return web.Response(status=200, text="ok")
+        # ISSUE_REOPENED lands here too: deliberately unhandled for now
+        # (notifying the reporter on reopen is a product decision, not an
+        # oversight -- see the tracked backlog).
         logger.info("Webhook received notification_type=%s (unhandled)", nt)
         return web.Response(status=200, text="ok")
 

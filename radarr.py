@@ -8,7 +8,7 @@ from typing import Optional
 import httpx
 
 from fix_result import FixResult
-from http_util import APIError, execute
+from http_util import APIError, execute, json_or_raise
 
 logger = logging.getLogger("hermes." + __name__)
 
@@ -38,13 +38,13 @@ class RadarrClient:
     async def ping(self) -> str:
         """Return Radarr's version string. Raises APIError on failure."""
         r = await execute(self._client, "GET", "/system/status", service=_SERVICE)
-        return r.json().get("version", "?")
+        return json_or_raise(r, service=_SERVICE, what="system status").get("version", "?")
 
     async def get_movie_by_tmdb(self, tmdb_id: int) -> Optional[RadarrMovie]:
         """Find a movie in Radarr's library by TMDb ID. None if not present."""
         r = await execute(self._client, "GET", "/movie", service=_SERVICE,
                           params={"tmdbId": tmdb_id})
-        items = r.json()
+        items = json_or_raise(r, service=_SERVICE, what="movie lookup", expect=list)
         # Identity guard: this result feeds a blocklist+delete workflow, and
         # Radarr silently ignores query params it doesn't recognize (the
         # /history movieId bug all over again). Never trust items[0] -- scan
@@ -72,7 +72,7 @@ class RadarrClient:
     async def movie_has_file(self, movie_id: int) -> bool:
         r = await execute(self._client, "GET", f"/movie/{movie_id}",
                           service=_SERVICE)
-        return bool(r.json().get("hasFile"))
+        return bool(json_or_raise(r, service=_SERVICE, what="movie detail").get("hasFile"))
 
     async def _run_movie_workflow(
         self, *, movie: RadarrMovie, blocklist: bool,
@@ -98,7 +98,7 @@ class RadarrClient:
                     self._client, "GET", "/history/movie", service=_SERVICE,
                     params={"movieId": movie.id},
                 )
-                records = r.json() or []
+                records = json_or_raise(r, service=_SERVICE, what="movie history", expect=list) or []
                 grab = next((rec for rec in records if rec.get("eventType") == "grabbed"), None)
                 if grab is not None:
                     await execute(self._client, "POST", f"/history/failed/{grab['id']}",

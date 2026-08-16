@@ -71,18 +71,24 @@ The user's Plex account must be shared into your Seerr instance. If it isn't, th
 
 ```
 user: /issue
-bot:  What movie or show is the issue with?
+bot:  What movie or show is the issue with? (Reply with the title.)
 user: solo
 bot:  Pick which one:
-      [🎬 Solo: A Star Wars Story (2018)]
-      [🎬 Solo (1996)]
-      [Cancel]
-user: (taps Solo: A Star Wars Story)
+
+      1. 🎬 Solo: A Star Wars Story (2018)
+      2. 🎬 Solo (1996)
+      [1️⃣] [2️⃣]
+      [🛑 Cancel]
+user: (taps 1️⃣)
 bot:  Selected: Solo: A Star Wars Story (2018)
+
       What kind of issue?
-      [🎥 Video] [🔊 Audio] [📝 Subtitles] [❓ Other]
+      [🎥 Video] [🔊 Audio]
+      [📝 Subtitles] [❓ Other]
+      [🛑 Cancel]
 user: (taps Audio)
 bot:  Type: 🔊 Audio
+
       Now briefly describe what's wrong:
 user: Audio goes out of sync after about 30 minutes
 bot:  Try to auto-fix? This will delete the file and trigger a new search.
@@ -92,11 +98,12 @@ user: (taps Try auto-fix)
 bot:  ⚠️ This will delete the current file from disk and trigger a new download. Confirm?
       [⚠️ Yes, delete & re-search] [No, just report]
 user: (taps Yes)
-bot:  ✅ Reported as issue #14
+bot:  ✅ Reported as ticket #14
         🔊 Audio — Solo: A Star Wars Story (2018)
       🔧 Auto-fix: Deleted file (if any) and triggered re-search for 'Solo: A Star Wars Story'.
+      🔔 I'll DM you when the new file finishes downloading (or after 6h timeout).
 
-      View: http://seerr.example.com/issues/14
+      Use /tickets to manage it.
 ```
 
 ## Webhook setup
@@ -104,7 +111,7 @@ bot:  ✅ Reported as issue #14
 Hermes receives events from Seerr so issue comments and resolutions reach the user in Telegram.
 
 1. In `/admin` → **Webhook** tab, copy the webhook URL and the secret (use **Show**/**Copy**; **Generate** rolls a new one). A secret is mandatory and auto-generated on first run — Hermes rejects unauthenticated webhook POSTs.
-2. In Seerr → Settings → Notifications → **Webhook**: set the URL, paste the secret into the **Authorization Header** field, and enable the **Issue Comment** event.
+2. In Seerr → Settings → Notifications → **Webhook**: set the URL, paste the secret into the **Authorization Header** field, and enable the **Issue Reported**, **Issue Comment**, and **Issue Resolved** events (Hermes handles all three; enabling only one silently drops the other notification types).
 3. Use the Webhook tab's **Test** button to confirm the round-trip.
 
 Seerr reaches Hermes on its LAN address and port — no public URL is required, but Seerr must be able to reach the Hermes port.
@@ -139,7 +146,7 @@ Because users sign in with Plex, Hermes authenticates to Seerr **as the user** (
 - Offered only to Telegram IDs in the allowlist (defaults to just the admin).
 - **Per-user daily limit** (default 3 per 24h), configurable in the Auto-fix tab. The admin bypasses it.
 - Explicit confirmation required before deletion.
-- For TV: per-episode auto-fix **or** "whole season" (deletes all episode files in that season + a season-wide search).
+- For TV: **per-episode only**. Whole-season and whole-show tickets are reported to Seerr but never auto-fixed (the season-wide delete workflow was removed in 0.12.0).
 - Hermes polls the *arr after triggering and DMs the user when the new file lands (or on timeout).
 - If the media isn't managed by Radarr/Sonarr, Hermes reports "not in Radarr/Sonarr" without touching the issue.
 - All auto-fix events are recorded in the `autofix_events` SQLite table.

@@ -1,5 +1,5 @@
 """Process-lifecycle helpers shared by the bot and the web UI (they were
-verbatim copies before 0.12.0; the audit)."""
+verbatim copies before 0.12.0)."""
 from __future__ import annotations
 
 import asyncio

@@ -1,6 +1,5 @@
-"""Tests for the stage-5 audit fixes: session invalidation on password change
-(P2-10), the loopback-only webhook self-test (P2-1), and the unencrypted-
-backup acknowledgement gate (P2-11)."""
+"""Tests for session invalidation on password change, the loopback-only
+webhook self-test, and the unencrypted-backup acknowledgement gate."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -12,7 +11,19 @@ from aiohttp.test_utils import TestClient, TestServer
 import webui
 
 SECRET = b"0123456789abcdef0123456789abcdef"
-CSRF = "csrf-token-value"
+# CSRF tokens are HMAC-signed AND session-bound since 0.13.0. Pin one
+# session cookie per pwd_ver so its signature (which includes exp) is stable
+# across the test, and bind the CSRF token to it.
+def _csrf_bound(session_cookie: str) -> str:
+    return webui.generate_csrf_token(SECRET, session_cookie.rsplit(".", 1)[-1])
+
+
+_SESSION0 = webui._make_session_cookie(SECRET, "admin", 0)
+_SESSION1 = webui._make_session_cookie(SECRET, "admin", 1)
+# One fixed token per session (generate_csrf_token randomizes each call, so
+# the cookie and the form value must be the SAME pinned token to double-submit).
+CSRF = _csrf_bound(_SESSION0)
+_CSRF1 = _csrf_bound(_SESSION1)
 
 
 @pytest.fixture
@@ -40,13 +51,12 @@ async def client(tmp_path, monkeypatch):
 
 
 def _cookies(pwd_ver: int = 0):
-    return {
-        webui.SESSION_COOKIE: webui._make_session_cookie(SECRET, "admin", pwd_ver),
-        "hermes_csrf": CSRF,
-    }
+    if pwd_ver == 1:
+        return {webui.SESSION_COOKIE: _SESSION1, "hermes_csrf": _CSRF1}
+    return {webui.SESSION_COOKIE: _SESSION0, "hermes_csrf": CSRF}
 
 
-# --- P2-10: sessions die on password change --------------------------------------
+# --- sessions die on password change ------------------------------------------
 
 
 def test_session_invalidated_by_password_version_bump():
@@ -87,7 +97,7 @@ async def test_password_change_kills_old_session(client):
     assert resp3.status == 200
 
 
-# --- P2-1: webhook self-test hits loopback only ------------------------------------
+# --- webhook self-test hits loopback only -------------------------------------
 
 
 async def test_webhook_selftest_posts_to_loopback(client, monkeypatch):
@@ -122,7 +132,7 @@ async def test_webhook_selftest_posts_to_loopback(client, monkeypatch):
     assert captured["auth"] == "s3cret"
 
 
-# --- P2-11: unencrypted backup needs explicit acknowledgement -----------------------
+# --- unencrypted backup needs explicit acknowledgement ------------------------
 
 
 async def test_backup_without_passphrase_or_ack_is_refused(client):

@@ -12,7 +12,7 @@ import httpx
 
 from _version import __version__ as HERMES_VERSION
 from fsutil import atomic_write_text
-from http_util import execute
+from http_util import execute, json_or_raise
 
 logger = logging.getLogger("hermes." + __name__)
 
@@ -80,7 +80,7 @@ class PlexClient:
         r = await execute(self._http, "POST", f"{PLEX_API_BASE}/pins",
                           service=_SERVICE,
                           params={"strong": "true" if strong else "false"})
-        d = r.json()
+        d = json_or_raise(r, service=_SERVICE, what="PIN request")
         pin_id = d["id"]
         code = d["code"]
         params = {
@@ -97,13 +97,13 @@ class PlexClient:
         """Return auth token once user has authorized, else None."""
         r = await execute(self._http, "GET", f"{PLEX_API_BASE}/pins/{pin_id}",
                           service=_SERVICE)
-        return r.json().get("authToken")
+        return json_or_raise(r, service=_SERVICE, what="PIN poll").get("authToken")
 
     async def get_user(self, auth_token: str) -> PlexUser:
         r = await execute(self._http, "GET", f"{PLEX_API_BASE}/user",
                           service=_SERVICE,
                           headers={"X-Plex-Token": auth_token})
-        d = r.json()
+        d = json_or_raise(r, service=_SERVICE, what="user lookup")
         return PlexUser(
             uuid=d.get("uuid", ""),
             username=d.get("username", "") or d.get("title", ""),

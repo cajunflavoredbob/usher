@@ -1,6 +1,6 @@
-"""Tests for the stage-3 audit fixes: double-tap / per-media serialization
-(P1-6, P2-4), the expired-keyboard catch-all (P1-4), the cross-conversation
-text-capture guard (P1-5), and the HTML escaping conversions (P1-3)."""
+"""Tests for double-tap / per-media serialization, the expired-keyboard
+catch-all, the cross-conversation text-capture guard, and the HTML escaping
+conversions."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -48,7 +48,7 @@ def test_try_begin_action_claims_once():
     assert try_begin_action(ctx, "movie:1") is True
 
 
-# --- P1-6 / P2-4: destructive-action guards -------------------------------------
+# --- destructive-action guards -------------------------------------------------
 
 
 async def test_apply_fix_strips_buttons_before_network_calls():
@@ -110,7 +110,7 @@ async def test_double_submit_is_noop():
     ctx.bot_data["seerr"].create_issue.assert_not_called()
 
 
-# --- P1-4: expired-keyboard catch-all -------------------------------------------
+# --- expired-keyboard catch-all ------------------------------------------------
 
 
 async def test_unmatched_callback_answers_and_strips_keyboard():
@@ -122,7 +122,7 @@ async def test_unmatched_callback_answers_and_strips_keyboard():
     assert upd.callback_query.markup_edits == [None]
 
 
-# --- P1-5: cross-conversation text-capture guard ---------------------------------
+# --- cross-conversation text-capture guard -------------------------------------
 
 
 def test_user_in_conversation_matches_chat_user_key():
@@ -170,7 +170,7 @@ async def test_resume_submit_refused_while_new_issue_flow_active():
     assert "didn't auto-submit" in upd.effective_message.reply_calls[0]["text"]
 
 
-# --- P1-3: HTML escaping ----------------------------------------------------------
+# --- HTML escaping -------------------------------------------------------------
 
 
 async def test_finalize_link_uses_html_and_escapes_display_name():

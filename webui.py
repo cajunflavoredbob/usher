@@ -3,7 +3,7 @@
 Routes (auth middleware covers everything except setup/login):
   GET/POST /admin/setup      -- first-run admin account creation
   GET/POST /admin/login      -- session login
-  GET      /admin/logout
+  POST     /admin/logout
   GET      /admin            -- settings page
   POST     /admin/telegram | /admin/seerr | /admin/autofix | /admin/webhook
                              -- save one settings tab each
@@ -28,10 +28,10 @@ import json
 import logging
 import os
 import shutil
-import signal
 import sqlite3
 import tempfile
 import time
+import uuid
 import zipfile
 from hashlib import sha256
 from pathlib import Path
@@ -42,6 +42,8 @@ from aiohttp import web
 
 from auth_util import (
     CSRF_FORM_FIELD,
+    THROTTLE_IP_MAX_FAILURES,
+    _SETUP_TOKEN_UNREADABLE,
     LoginThrottle,
     attach_csrf_cookie,
     audit,
@@ -53,6 +55,8 @@ from auth_util import (
     request_is_secure,
     validate_csrf,
 )
+from const import (ADMIN_PASSWORD_MIN_CHARS, ADMIN_UPLOAD_MAX_BYTES,
+                   MIN_BACKUP_PASSPHRASE_CHARS, RESTORE_MEMBER_MAX_BYTES)
 from fsutil import atomic_write_bytes
 from procutil import schedule_clean_exit
 from backup_crypto import is_wrapped, unwrap, wrap
@@ -62,6 +66,7 @@ from settings import (
     Settings,
     SettingsStore,
     hash_password,
+    iterations_of,
     validate_public_url,
     verify_password,
 )
@@ -80,6 +85,14 @@ ReloadCallback = Callable[[], Awaitable[None]]
 
 # Single in-memory throttle shared by all login_post invocations in this process.
 _throttle = LoginThrottle()
+# Coarser per-IP throttle checked before any PBKDF2, so a username-rotating
+# flood can't drive unbounded password hashing on the event loop.
+_ip_throttle = LoginThrottle(max_failures=THROTTLE_IP_MAX_FAILURES)
+
+# Verified against instead of the real hash when the username doesn't match,
+# so wrong-username and wrong-password attempts cost the same PBKDF2 work
+# (no timing oracle on the admin username). Computed once at import.
+_TIMING_EQUALIZER_HASH = hash_password("timing-equalizer-not-a-real-password")
 
 
 def _set_session_cookie(resp, cookie_value: str, *, secure: bool) -> None:
@@ -90,8 +103,8 @@ def _set_session_cookie(resp, cookie_value: str, *, secure: bool) -> None:
     )
 
 
-# _schedule_clean_exit moved to procutil.schedule_clean_exit (the audit:
-# it was a verbatim copy between here and bot/shared.py).
+# _schedule_clean_exit moved to procutil.schedule_clean_exit (it was a
+# verbatim copy between here and bot/shared.py).
 
 
 def _csrf_input(token: str) -> str:
@@ -145,9 +158,42 @@ def _verify_session_cookie(secret: bytes, cookie: str,
     return payload.get("u")
 
 
+# Sessions are stateless HMAC cookies, so logout needs a server-side
+# denylist or the cookie stays valid for its full TTL after "logging out".
+# Keyed by cookie signature -> expiry epoch; entries drop once the cookie
+# would have expired anyway. In-memory: a restart forgets revocations, but
+# also invalidates nothing else -- acceptable for a single-admin app, and
+# strictly better than no revocation at all.
+_revoked_sessions: dict[str, float] = {}
+
+
+def _revoke_session(cookie: str) -> None:
+    try:
+        body, sig = cookie.split(".")
+        exp = json.loads(_b64d(body)).get("exp", 0)
+    except Exception:
+        return
+    now = time.time()
+    for k, e in list(_revoked_sessions.items()):
+        if e < now:
+            _revoked_sessions.pop(k, None)
+    _revoked_sessions[sig] = exp
+
+
+def _session_revoked(cookie: str) -> bool:
+    try:
+        sig = cookie.split(".")[1]
+    except IndexError:
+        return False
+    exp = _revoked_sessions.get(sig)
+    return exp is not None and exp >= time.time()
+
+
 def _current_user(request: web.Request) -> Optional[str]:
     cookie = request.cookies.get(SESSION_COOKIE)
     if not cookie:
+        return None
+    if _session_revoked(cookie):
         return None
     store: SettingsStore = request.app["settings_store"]
     return _verify_session_cookie(request.app["session_secret"], cookie,
@@ -200,8 +246,10 @@ code { background: #45475a; padding: 2px 6px; border-radius: 3px; font-size: 13p
           gap: 14px; margin-bottom: 14px; }
 .topbar .version { color: #a6adc8; font-size: 13px;
                    font-family: ui-monospace, Menlo, monospace; }
+.topbar .logout-form { background: none; padding: 0; margin: 0; display: inline; }
 .topbar .logout {
-  background: #45475a; color: #cdd6f4; text-decoration: none;
+  background: #45475a; color: #cdd6f4; text-decoration: none; border: none;
+  cursor: pointer; font-family: inherit; width: auto;
   padding: 6px 14px; border-radius: 4px; font-size: 13px; font-weight: 600;
 }
 .topbar .logout:hover { background: #585b70; color: #f5e0dc; }
@@ -515,7 +563,7 @@ def _settings_page(
 <form id="autofix-form" method="POST" action="/admin/autofix">
   {csrf}
   <h2>Auto-fix</h2>
-  <p class="intro">When a user reports a Video, Audio, or Subtitle issue, Hermes can ask Radarr or Sonarr to delete the current file and trigger a new search. Configure the URLs and API keys below, then list the Telegram users allowed to use it. The admin always bypasses the per-day limit.</p>
+  <p class="intro">When a user reports a Video, Audio, or Subtitles issue, Hermes can ask Radarr or Sonarr to delete the current file and trigger a new search. Configure the URLs and API keys below, then list the Telegram users allowed to use it. The admin always bypasses the per-day limit.</p>
 
   <label>Radarr URL <span class="note">(optional)</span></label>
   <input type="text" name="radarr_url" value="{_esc(s.radarr_url)}" placeholder="http://192.168.1.10:7878">
@@ -557,7 +605,7 @@ def _settings_page(
   <h2>Webhook</h2>
   <p>Hermes receives webhook events from Seerr on this URL:</p>
   <div class="url-box">{_esc(webhook_url)}</div>
-  <div class="note">Configure in Seerr: Settings → Notifications → Webhook. Set the URL above and enable the <strong>Issue Comment</strong> event.</div>
+  <div class="note">Configure in Seerr: Settings → Notifications → Webhook. Set the URL above and enable the <strong>Issue Reported</strong>, <strong>Issue Comment</strong>, and <strong>Issue Resolved</strong> events (Hermes handles all three).</div>
 
   <label>Webhook Secret</label>
   <input type="password" id="webhook_secret" name="webhook_secret" value="{_esc(s.webhook_secret)}" autocomplete="off">
@@ -584,9 +632,9 @@ def _settings_page(
   <label>Current password</label>
   <input type="password" name="current" required>
   <label>New password</label>
-  <input type="password" name="new" required minlength="8">
+  <input type="password" name="new" required minlength="{ADMIN_PASSWORD_MIN_CHARS}">
   <label>Confirm new password</label>
-  <input type="password" name="confirm" required minlength="8">
+  <input type="password" name="confirm" required minlength="{ADMIN_PASSWORD_MIN_CHARS}">
   <button type="submit">Change Password</button>{marker("account")}
 </form>
 
@@ -598,7 +646,7 @@ def _settings_page(
   <label>Passphrase <span class="note">(strongly recommended)</span></label>
   <input type="password" name="passphrase" placeholder="Encrypts the backup">
   <label><input type="checkbox" name="unencrypted_ok" value="1"> I understand the risk; download WITHOUT a passphrase</label>
-  <button type="submit">Download Backup</button>
+  <button type="submit">Download Backup</button>{marker("backup")}
 </form>
 
 <form method="POST" action="/admin/restore" enctype="multipart/form-data">
@@ -615,7 +663,9 @@ def _settings_page(
     return _page("Admin", f"""
 <div class="topbar">
   <span class="version">Hermes v{_esc(HERMES_VERSION)}</span>
-  <a href="/admin/logout" class="logout">Log out</a>
+  <form method="POST" action="/admin/logout" class="logout-form">{csrf}
+    <button type="submit" class="logout">Log out</button>
+  </form>
 </div>
 <div class="tabs">
   <input type="radio" name="tab" id="tab-telegram"{chk('telegram')}>
@@ -642,11 +692,17 @@ def _settings_page(
 
 
 def _webhook_url_from_request(request: web.Request) -> str:
-    """Construct the webhook URL using the request's Host header so users see
-    the actual host:port they hit (works behind reverse proxies that set Host)."""
-    scheme = request.headers.get("X-Forwarded-Proto") or request.scheme or "http"
-    host = request.host
-    return f"{scheme}://{host}/webhook/seerr"
+    """Construct the webhook URL the admin is told to paste into Seerr.
+    Prefers the configured public URL; otherwise falls back to the request's
+    Host header so users see the host:port they hit. X-Forwarded-Proto is
+    honored only via request_is_secure (trusted proxies), never raw -- this
+    URL receives secret-bearing webhooks, so a spoofable header must not
+    shape it."""
+    s = request.app["settings_store"].settings
+    if s.hermes_public_url:
+        return f"{s.hermes_public_url.rstrip('/')}/webhook/seerr"
+    scheme = "https" if request_is_secure(request) else (request.scheme or "http")
+    return f"{scheme}://{request.host}/webhook/seerr"
 
 
 # --- Route handlers ---------------------------------------------------------
@@ -656,6 +712,10 @@ async def setup_get(request: web.Request) -> web.Response:
     if store.settings.admin.is_set():
         return web.HTTPFound("/admin/login")
     setup_token = load_or_create_setup_token(request.app["data_dir"])
+    if setup_token == _SETUP_TOKEN_UNREADABLE:
+        return web.Response(
+            text="Setup token file is unreadable; fix its permissions and retry.",
+            status=503)
     csrf = csrf_for_request(request)
     s = store.settings
     admin_tg_val = str(s.admin_telegram_id) if s.admin_telegram_id else ""
@@ -680,9 +740,9 @@ async def setup_get(request: web.Request) -> web.Response:
   <label>Username</label>
   <input type="text" name="username" required autofocus>
   <label>Password <span class="note">(min 8 characters)</span></label>
-  <input type="password" name="password" required minlength="8">
+  <input type="password" name="password" required minlength="{ADMIN_PASSWORD_MIN_CHARS}">
   <label>Confirm password</label>
-  <input type="password" name="confirm" required minlength="8">
+  <input type="password" name="confirm" required minlength="{ADMIN_PASSWORD_MIN_CHARS}">
 
   <h2>Telegram</h2>
   <label>Telegram Bot Token <span class="note">(from @BotFather)</span></label>
@@ -715,6 +775,10 @@ async def setup_post(request: web.Request) -> web.Response:
         return web.Response(text="CSRF token mismatch.", status=403)
 
     setup_token = load_or_create_setup_token(request.app["data_dir"])
+    if setup_token == _SETUP_TOKEN_UNREADABLE:
+        return web.Response(
+            text="Setup token file is unreadable; fix its permissions and retry.",
+            status=503)
     if setup_token:
         submitted = (form.get("setup_token") or "").strip()
         if not submitted or not hmac.compare_digest(submitted, setup_token):
@@ -734,7 +798,7 @@ async def setup_post(request: web.Request) -> web.Response:
     errors: list[str] = []
     if not username:
         errors.append("Username required.")
-    if len(password) < 8 or password != confirm:
+    if len(password) < ADMIN_PASSWORD_MIN_CHARS or password != confirm:
         errors.append("Password must be at least 8 chars and match confirm.")
     if not bot_token:
         errors.append("Telegram bot token required.")
@@ -761,7 +825,7 @@ async def setup_post(request: web.Request) -> web.Response:
     s.admin_telegram_id = admin_tg
     s.seerr_url = seerr_url
     s.seerr_api_key = seerr_api_key
-    store.save()
+    await store.save_async()
     clear_setup_token(request.app["data_dir"])
     audit("setup_complete", user=username, ip=client_ip(request))
     logger.info("Setup complete; admin '%s' created, bot token + seerr configured", username)
@@ -813,40 +877,60 @@ async def login_post(request: web.Request) -> web.Response:
         return web.Response(text="CSRF token mismatch.", status=403)
 
     ip = client_ip(request)
-    locked = _throttle.is_locked(ip)
-    if locked is not None:
-        audit("login_throttled", ip=ip, seconds_left=int(locked))
+    username = (form.get("username") or "").strip()
+    password = form.get("password") or ""
+
+    def _locked_response(locked: float) -> web.Response:
         body = _page("Login", _flash(
             error=f"Too many failed attempts. Try again in {int(locked)}s."
         ) + '<p><a href="/admin/login">Back</a></p>')
         return web.Response(text=body, content_type="text/html", status=429,
                             headers={"Retry-After": str(int(locked))})
 
-    username = (form.get("username") or "").strip()
-    password = form.get("password") or ""
+    # Per-IP aggregate gate FIRST, before any password hashing: a
+    # username-rotating flood would otherwise dodge the per-(ip,username)
+    # lockout and drive unbounded PBKDF2 work on the event loop.
+    ip_locked = _ip_throttle.is_locked(ip)
+    if ip_locked is not None:
+        audit("login_throttled_ip", ip=ip, seconds_left=int(ip_locked))
+        return _locked_response(ip_locked)
+
+    # Then the tighter per-(ip, username) lockout: with a misconfigured
+    # reverse proxy every client shares the proxy's IP, so an ip-only key
+    # would let anyone lock the admin out of the login page entirely.
+    throttle_key = f"{ip}|{username.lower()}"
+    locked = _throttle.is_locked(throttle_key)
+    if locked is not None:
+        audit("login_throttled", user=username or "-", ip=ip,
+              seconds_left=int(locked))
+        return _locked_response(locked)
+
     admin = store.settings.admin
-    if (not admin.is_set() or username != admin.username
-            or not verify_password(password, admin.password_hash)):
-        _throttle.record_failure(ip)
+    username_ok = admin.is_set() and username == admin.username
+    # Constant-work verification: run PBKDF2 even on a wrong username so
+    # response timing can't enumerate the admin username. Off the event loop
+    # (600k iterations) so it can't stall the webhook receiver / bot HTTP.
+    stored = admin.password_hash if username_ok else _TIMING_EQUALIZER_HASH
+    password_ok = await asyncio.to_thread(verify_password, password, stored)
+    if not (username_ok and password_ok):
+        _throttle.record_failure(throttle_key)
+        _ip_throttle.record_failure(ip)
         audit("login_fail", user=username or "-", ip=ip)
         body = _page("Login", _flash(error="Invalid credentials.") +
                      '<p><a href="/admin/login">Try again</a></p>')
         return web.Response(text=body, content_type="text/html", status=401)
 
-    _throttle.record_success(ip)
+    _throttle.record_success(throttle_key)
+    _ip_throttle.record_success(ip)
     audit("login_success", user=username, ip=ip)
 
     # PBKDF2 auto-upgrade: if the stored hash uses a stale
-    # iteration count, rehash with the current count and persist. Hash
-    # format is "pbkdf2_sha256$<iters>$<salt_hex>$<hash_hex>".
-    try:
-        stored_iters = int(admin.password_hash.split("$")[1])
-    except (IndexError, ValueError):
-        stored_iters = 0
+    # iteration count, rehash with the current count and persist.
+    stored_iters = iterations_of(admin.password_hash)
     if stored_iters and stored_iters < PBKDF2_ITERATIONS:
         try:
             admin.password_hash = hash_password(password)
-            store.save()
+            await store.save_async()
             audit("password_rehashed",
                   user=username, ip=ip,
                   from_iters=stored_iters, to_iters=PBKDF2_ITERATIONS)
@@ -859,13 +943,26 @@ async def login_post(request: web.Request) -> web.Response:
                                   store.settings.admin.password_version)
     resp = web.HTTPFound("/admin")
     _set_session_cookie(resp, cookie, secure=secure)
-    # Rotate CSRF cookie after privilege change.
-    attach_csrf_cookie(resp, generate_csrf_token(), secure=secure)
+    # Rotate CSRF cookie after privilege change, bound to the NEW session
+    # cookie's signature so it validates on the first authenticated POST.
+    new_binding = cookie.rsplit(".", 1)[-1]
+    attach_csrf_cookie(
+        resp, generate_csrf_token(request.app["session_secret"], new_binding),
+        secure=secure)
     return resp
 
 
 async def logout(request: web.Request) -> web.Response:
     user = _current_user(request)
+    form = await request.post()
+    if not validate_csrf(request, form.get(CSRF_FORM_FIELD)):
+        audit("logout_csrf_fail", ip=client_ip(request))
+        return web.Response(text="CSRF token mismatch.", status=403)
+    cookie = request.cookies.get(SESSION_COOKIE)
+    if cookie and user:
+        # Only revoke cookies that verified: recording arbitrary submitted
+        # strings would let an unauthenticated client grow the denylist.
+        _revoke_session(cookie)
     audit("logout", user=user or "-", ip=client_ip(request))
     resp = web.HTTPFound("/admin/login")
     resp.del_cookie(SESSION_COOKIE)
@@ -899,7 +996,7 @@ async def _save_and_render(
 ) -> web.Response:
     """Common epilogue: persist, trigger hot reload, render the current tab."""
     store: SettingsStore = request.app["settings_store"]
-    store.save()
+    await store.save_async()
     msg = success_msg
     err = error
     if not skip_hot_reload:
@@ -994,7 +1091,7 @@ async def seerr_post(request: web.Request) -> web.Response:
     if csrf_resp is not None:
         return csrf_resp
     s = store.settings
-    # Same validation as hermes_public_url (P3-7: one field class had two
+    # Same validation as hermes_public_url (one field class had two
     # behaviors); non-empty URLs must parse, empty stays allowed where the
     # field is optional.
     for field_name, label in (("seerr_url", "Seerr URL"),
@@ -1111,7 +1208,7 @@ async def change_password(request: web.Request) -> web.Response:
                                 csrf_token=csrf_for_request(request)),
             content_type="text/html", status=400,
         )
-    if len(new) < 8 or new != confirm:
+    if len(new) < ADMIN_PASSWORD_MIN_CHARS or new != confirm:
         return web.Response(
             text=_settings_page(store.settings, error="New password must be >= 8 chars and match confirm.",
                                 active_tab="account",
@@ -1124,21 +1221,28 @@ async def change_password(request: web.Request) -> web.Response:
     # Invalidate every outstanding session: a stolen cookie
     # must die when the admin rotates the password in response to it.
     admin.password_version += 1
-    store.save()
+    await store.save_async()
     audit("password_changed", user=user, ip=client_ip(request))
+    # Re-issue THIS session at the new version so the admin who changed the
+    # password isn't logged out mid-page. The session signature changes, so
+    # the browser's CSRF cookie is no longer bound to it: mint ONE new
+    # bound token and use it for both the cookie and the rendered form, or
+    # the next POST on this page would 403.
+    secure = request_is_secure(request)
+    cookie = _make_session_cookie(request.app["session_secret"],
+                                  admin.username, admin.password_version)
+    new_binding = cookie.rsplit(".", 1)[-1]
+    new_csrf = generate_csrf_token(request.app["session_secret"], new_binding)
     resp = web.Response(
         text=_settings_page(store.settings,
                             message="Password changed. All other sessions are signed out.",
                             active_tab="account",
                             webhook_url=_webhook_url_from_request(request),
-                            csrf_token=csrf_for_request(request)),
+                            csrf_token=new_csrf),
         content_type="text/html",
     )
-    # Re-issue THIS session at the new version so the admin who changed the
-    # password isn't logged out mid-page.
-    cookie = _make_session_cookie(request.app["session_secret"],
-                                  admin.username, admin.password_version)
-    _set_session_cookie(resp, cookie, secure=request_is_secure(request))
+    _set_session_cookie(resp, cookie, secure=secure)
+    attach_csrf_cookie(resp, new_csrf, secure=secure)
     return resp
 
 
@@ -1153,48 +1257,71 @@ async def backup_download(request: web.Request) -> web.Response:
     csrf_resp = _csrf_check_or_403(request, form)
     if csrf_resp is not None:
         return csrf_resp
+    def _backup_error(message: str, status: int = 400) -> web.Response:
+        return web.Response(
+            text=_settings_page(store.settings, error=message,
+                                active_tab="account",
+                                marker_target="backup",
+                                webhook_url=_webhook_url_from_request(request),
+                                csrf_token=csrf_for_request(request)),
+            content_type="text/html", status=status,
+        )
+
     passphrase = form.get("passphrase") or ""
     # Server-side gate for the unencrypted download: with an
     # empty passphrase the ZIP is a total-compromise artifact (encryption
     # key + the DB it decrypts + every API key/token), so it requires the
     # explicit acknowledgement checkbox.
     if not passphrase and not form.get("unencrypted_ok"):
-        return web.Response(
-            text=_settings_page(store.settings,
-                                error="Set a passphrase, or tick the acknowledgement "
-                                      "to download an unencrypted backup.",
-                                active_tab="account",
-                                webhook_url=_webhook_url_from_request(request),
-                                csrf_token=csrf_for_request(request)),
-            content_type="text/html", status=400,
-        )
+        return _backup_error("Set a passphrase, or tick the acknowledgement "
+                             "to download an unencrypted backup.")
+    # A 1-character passphrase would pass the gate above while wrapping a
+    # total-compromise artifact PBKDF2 can't save from a tiny keyspace.
+    if passphrase and len(passphrase) < MIN_BACKUP_PASSPHRASE_CHARS:
+        return _backup_error(
+            f"Backup passphrase must be at least "
+            f"{MIN_BACKUP_PASSPHRASE_CHARS} characters.")
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        if settings_path.exists():
-            zf.write(settings_path, "settings.json")
-        if db_path.exists():
-            # The store runs in WAL mode: copying the bare .sqlite file
-            # misses uncheckpointed commits (recent links, pending fixes)
-            # and a mid-checkpoint copy can be torn.
-            # VACUUM INTO produces a complete, consistent snapshot.
-            snap = db_path.with_name(f".backup-snapshot-{os.getpid()}.sqlite")
-            try:
-                snap.unlink(missing_ok=True)
-                conn = sqlite3.connect(db_path)
+    def _build_zip() -> bytes:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            if settings_path.exists():
+                zf.write(settings_path, "settings.json")
+            if db_path.exists():
+                # The store runs in WAL mode: copying the bare .sqlite file
+                # misses uncheckpointed commits (recent links, pending fixes)
+                # and a mid-checkpoint copy can be torn.
+                # VACUUM INTO produces a complete, consistent snapshot.
+                # Unique name per request: a PID-keyed name collides when two
+                # backups run concurrently (first one's cleanup deletes the
+                # file out from under the second's vacuum).
+                snap = db_path.with_name(
+                    f".backup-snapshot-{os.getpid()}-{uuid.uuid4().hex}.sqlite")
                 try:
-                    conn.execute("VACUUM INTO ?", (str(snap),))
+                    conn = sqlite3.connect(db_path)
+                    try:
+                        conn.execute("VACUUM INTO ?", (str(snap),))
+                    finally:
+                        conn.close()
+                    zf.write(snap, "mappings.sqlite")
                 finally:
-                    conn.close()
-                zf.write(snap, "mappings.sqlite")
-            finally:
-                snap.unlink(missing_ok=True)
-        if enc_key_path.exists():
-            zf.write(enc_key_path, "encryption.key")
-    raw_zip = buf.getvalue()
+                    snap.unlink(missing_ok=True)
+            if enc_key_path.exists():
+                zf.write(enc_key_path, "encryption.key")
+        return buf.getvalue()
+
+    try:
+        # VACUUM INTO can take a while on a big DB and sqlite3 is
+        # synchronous: run off the event loop so the webhook receiver and
+        # bot keep servicing requests during the backup.
+        raw_zip = await asyncio.to_thread(_build_zip)
+    except Exception as exc:
+        logger.exception("Backup build failed")
+        return _backup_error(f"Backup failed: {exc}", status=500)
 
     if passphrase:
-        blob = wrap(raw_zip, passphrase)
+        # 600k-iteration PBKDF2: off the event loop like the ZIP build above.
+        blob = await asyncio.to_thread(wrap, raw_zip, passphrase)
         ext = "hermes-backup"
         ctype = "application/octet-stream"
     else:
@@ -1246,7 +1373,28 @@ async def restore_upload(request: web.Request) -> web.Response:
         elif field.name == "passphrase":
             passphrase = await field.text()
         elif field.name == "backup":
-            file_bytes = await field.read()
+            # multipart()/BodyPartReader don't honor client_max_size, so cap
+            # the streamed read ourselves; otherwise a multi-GB body OOMs the
+            # container before validation runs.
+            chunks: list[bytes] = []
+            read_total = 0
+            too_big = False
+            while True:
+                chunk = await field.read_chunk(size=64 * 1024)
+                if not chunk:
+                    break
+                read_total += len(chunk)
+                if read_total > ADMIN_UPLOAD_MAX_BYTES:
+                    too_big = True
+                    break
+                chunks.append(chunk)
+            if too_big:
+                return _restore_error(
+                    request,
+                    f"Backup upload exceeds the "
+                    f"{ADMIN_UPLOAD_MAX_BYTES // (1024 * 1024)}MB limit.",
+                    status=413)
+            file_bytes = b"".join(chunks)
 
     if not validate_csrf(request, csrf_form_value):
         audit("admin_csrf_fail", user=_current_user(request) or "-",
@@ -1261,7 +1409,8 @@ async def restore_upload(request: web.Request) -> web.Response:
         if not passphrase:
             return _restore_error(request, "This backup is passphrase-protected. Provide the passphrase.")
         try:
-            file_bytes = unwrap(file_bytes, passphrase)
+            # 600k-iteration PBKDF2: off the event loop.
+            file_bytes = await asyncio.to_thread(unwrap, file_bytes, passphrase)
         except ValueError as exc:
             return _restore_error(request, f"Couldn't decrypt backup: {exc}")
 
@@ -1271,6 +1420,15 @@ async def restore_upload(request: web.Request) -> web.Response:
             names = set(zf.namelist())
             if "settings.json" not in names and "mappings.sqlite" not in names:
                 raise ValueError("Backup must contain settings.json and/or mappings.sqlite")
+            # The upload cap bounds compressed size only; a zip bomb can
+            # deflate ~1000:1. Check declared decompressed sizes before any
+            # zf.read pulls a member fully into memory.
+            for info in zf.infolist():
+                if info.file_size > RESTORE_MEMBER_MAX_BYTES:
+                    raise ValueError(
+                        f"Backup member {info.filename} decompresses to "
+                        f"{info.file_size} bytes (limit "
+                        f"{RESTORE_MEMBER_MAX_BYTES}).")
             if "settings.json" in names:
                 # parse-check: must be valid JSON the Settings dataclass accepts.
                 data = json.loads(zf.read("settings.json").decode())
@@ -1303,25 +1461,39 @@ async def restore_upload(request: web.Request) -> web.Response:
     # Snapshot current files before overwriting so a failed restore is recoverable.
     ts = time.strftime("%Y%m%d-%H%M%S")
     backup_dir = data_dir / f"pre-restore-{ts}"
+    snapshot_ok = True
     try:
         backup_dir.mkdir(parents=True, exist_ok=True)
         for src in (settings_path, db_path, enc_key_path):
             if Path(src).exists():
                 shutil.copy2(src, backup_dir / Path(src).name)
     except Exception:
+        snapshot_ok = False
         logger.exception("pre-restore snapshot failed; proceeding anyway")
 
+    # Hold the store's maintenance lock (when the bot wired one in) across
+    # the DB swap: store writes run in worker threads, and one landing
+    # between the rename and the WAL unlink would get its fresh WAL deleted.
+    user_store = request.app.get("user_store")
+    maintenance_lock = getattr(user_store, "maintenance_lock", None)
+    lock_held = False
     try:
+        if maintenance_lock is not None:
+            await maintenance_lock.acquire()
+            lock_held = True
         with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
             # Atomic per-file (temp + rename via fsutil): the bot keeps
             # running until the scheduled exit below, and a bare write_bytes
             # over the live files could be caught mid-write by power loss or
             # a concurrent reader. The rename swaps whole files,
             # so any in-flight reader sees old-or-new, never a torn file.
+            # Default 0600 perms throughout: settings.json carries every
+            # secret, and chmod=None would land them world-readable on the
+            # host-mounted volume.
             if "settings.json" in names:
-                atomic_write_bytes(settings_path, zf.read("settings.json"), chmod=None)
+                atomic_write_bytes(settings_path, zf.read("settings.json"))
             if "mappings.sqlite" in names:
-                atomic_write_bytes(db_path, zf.read("mappings.sqlite"), chmod=None)
+                atomic_write_bytes(db_path, zf.read("mappings.sqlite"))
                 # Drop stale WAL/SHM sidecars: SQLite would otherwise pair
                 # the restored DB with the OLD database's write-ahead log
                 # and replay unrelated frames into it.
@@ -1331,16 +1503,27 @@ async def restore_upload(request: web.Request) -> web.Response:
                 atomic_write_bytes(enc_key_path, zf.read("encryption.key"))
     except Exception as exc:
         return _restore_error(request, f"Restore failed: {exc}", status=500)
+    finally:
+        # Release only if THIS handler acquired it: lock.locked() is true when
+        # anyone holds it, so releasing on that condition could drop a lock a
+        # concurrent store write owns (e.g. if acquire() was cancelled).
+        if lock_held:
+            maintenance_lock.release()
 
     audit("restore_complete", user=_current_user(request) or "-",
           ip=client_ip(request), backup_dir=str(backup_dir))
     logger.info("Restore complete; restarting in 2s (snapshot at %s)", backup_dir)
     schedule_clean_exit(2.0)
 
+    snapshot_note = (
+        f'<p class="note">Previous files snapshot to <code>{_esc(backup_dir)}</code>.</p>'
+        if snapshot_ok else
+        '<p class="note">⚠️ Pre-restore snapshot FAILED (see logs); no rollback copy was saved.</p>'
+    )
     body = _page("Restore", f"""
 <h1>Restore Complete</h1>
 <p>Container is restarting. Refresh in a few seconds.</p>
-<p class="note">Previous files snapshot to <code>{_esc(backup_dir)}</code>.</p>
+{snapshot_note}
 """)
     return web.Response(text=body, content_type="text/html")
 
@@ -1494,9 +1677,12 @@ async def newplex_warning_check(request: web.Request) -> web.Response:
     if not enabled:
         # Observed OFF: clear any dismissal so the warning re-arms if the
         # setting is ever flipped back on (off -> on transition semantics).
+        # Deliberate state change on a GET: this endpoint is a same-origin
+        # JS poll, and the only mutation RE-ARMS a warning (fail-safe
+        # direction), so a forged GET can't suppress anything.
         if s.seerr_new_plex_login_ack:
             s.seerr_new_plex_login_ack = False
-            store.save()
+            await store.save_async()
         return web.json_response({"show": False})
     return web.json_response({"show": not s.seerr_new_plex_login_ack})
 
@@ -1508,7 +1694,7 @@ async def newplex_warning_dismiss(request: web.Request) -> web.Response:
         return guard
     store: SettingsStore = request.app["settings_store"]
     store.settings.seerr_new_plex_login_ack = True
-    store.save()
+    await store.save_async()
     audit("newplex_warning_dismissed", user=_current_user(request) or "-",
           ip=client_ip(request))
     return web.json_response({"ok": True})
@@ -1524,15 +1710,22 @@ async def auth_middleware(request: web.Request, handler) -> web.Response:
     path = request.path
     if not path.startswith("/admin"):
         return await handler(request)
+
+    def _no_store(resp: web.StreamResponse) -> web.StreamResponse:
+        # /admin responses embed the bot token and every API key as form
+        # values; an intermediary or disk cache must never persist them.
+        resp.headers.setdefault("Cache-Control", "no-store")
+        return resp
+
     store: SettingsStore = request.app["settings_store"]
     # First-run: force /admin/setup until admin exists
     if not store.settings.admin.is_set() and path != "/admin/setup":
-        return web.HTTPFound("/admin/setup")
+        return _no_store(web.HTTPFound("/admin/setup"))
     if path in PUBLIC_ADMIN_PATHS:
-        return await handler(request)
+        return _no_store(await handler(request))
     if _current_user(request):
-        return await handler(request)
-    return web.HTTPFound("/admin/login")
+        return _no_store(await handler(request))
+    return _no_store(web.HTTPFound("/admin/login"))
 
 
 # --- Attach -----------------------------------------------------------------
@@ -1548,12 +1741,16 @@ def attach_webui(
     on_settings_changed: Optional[ReloadCallback] = None,
     trusted_proxies: tuple = (),
     http_port: int = 8765,
+    user_store=None,
 ) -> None:
     app["settings_store"] = settings_store
     app["session_secret"] = session_secret
     app["data_dir"] = data_dir
     app["settings_path"] = settings_path
     app["db_path"] = db_path
+    # UserStore (optional): restore uses its maintenance lock to serialize
+    # the DB-file swap against in-flight store writes.
+    app["user_store"] = user_store
     app["on_settings_changed"] = on_settings_changed
     # Used by the webhook self-test to build its loopback URL.
     app["http_port"] = http_port
@@ -1565,7 +1762,7 @@ def attach_webui(
     app.router.add_post("/admin/setup", setup_post)
     app.router.add_get("/admin/login", login_get)
     app.router.add_post("/admin/login", login_post)
-    app.router.add_get("/admin/logout", logout)
+    app.router.add_post("/admin/logout", logout)
     app.router.add_get("/admin", admin_get)
     app.router.add_post("/admin/telegram", telegram_post)
     app.router.add_post("/admin/seerr", seerr_post)

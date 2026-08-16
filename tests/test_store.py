@@ -174,7 +174,7 @@ async def test_concurrent_writes_dont_raise(fresh_store: UserStore):
         assert (await fresh_store.get(i)) is not None
 
 
-# --- audit stage 2: corrupt-row resilience + schema stamp ---------------------
+# --- corrupt-row resilience + schema stamp -----------------------------------
 
 
 async def test_corrupt_pending_row_is_skipped_not_fatal(fresh_store: UserStore,

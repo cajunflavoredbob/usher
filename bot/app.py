@@ -3,6 +3,7 @@ the HTTP server, run the polling loop."""
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import os
 from pathlib import Path
@@ -70,6 +71,7 @@ from const import (
     ADMIN_UPLOAD_MAX_BYTES,
     AUTOFIX_POLL_FIRST_DELAY_S,
     AUTOFIX_POLL_INTERVAL_S,
+    CLIENT_CLOSE_GRACE_S,
 )
 
 logging.basicConfig(
@@ -120,11 +122,29 @@ def _build_clients_from_settings(app: Application) -> None:
 
     if old_clients:
         async def _close_old() -> None:
+            # Grace before closing, mirroring the Seerr user-client cache:
+            # an immediate close() kills any webhook handler, poll tick, or
+            # bot handler still mid-request on a captured old reference. The
+            # sleep is cancellable: _post_shutdown cancels the task and closes
+            # these clients directly, so shutdown never blocks the full grace.
+            try:
+                await asyncio.sleep(CLIENT_CLOSE_GRACE_S)
+            except asyncio.CancelledError:
+                return  # shutdown path closes old_clients itself
             for key, client in old_clients:
                 try:
                     await client.close()  # type: ignore[attr-defined]
                 except Exception:
                     logger.exception("Error closing prior %s client", key)
+            # Grace elapsed and clients closed: drop them from the
+            # shutdown-fallback list so it doesn't grow across reloads.
+            tracked = app.bot_data.get("_pending_old_clients") or []
+            app.bot_data["_pending_old_clients"] = [
+                c for c in tracked if c not in {cl for _, cl in old_clients}]
+        # Stash the clients too so shutdown can close them if it cancels the
+        # grace timer mid-wait.
+        app.bot_data.setdefault("_pending_old_clients", []).extend(
+            c for _, c in old_clients)
         try:
             loop = asyncio.get_running_loop()
             task = loop.create_task(_close_old())
@@ -191,13 +211,15 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Admin path: keeps the connection-status block + the admin-only /status hint.
     summary = await _check_connections(ctx.application)
+    # HTML + escape: format_status interpolates upstream error text (see
+    # the startup DM note in _post_init).
     lines = [
         "Hi! I forward issue reports to Seerr.",
         "",
-        "*Connection status:*",
+        "<b>Connection status:</b>",
         format_status(summary),
         "",
-        "*Commands*",
+        "<b>Commands</b>",
         "  /link — sign in with Plex (DM only)",
         "  /unlink — remove your link",
         "  /issue — report a problem with a movie or TV show",
@@ -206,7 +228,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "  /help — show this",
     ]
     await update.effective_message.reply_text(
-        "\n".join(lines), parse_mode="Markdown"
+        "\n".join(lines), parse_mode="HTML"
     )
 
 
@@ -220,8 +242,8 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     summary = await _check_connections(ctx.application)
     await update.effective_message.reply_text(
-        f"*Connection status:*\n{format_status(summary)}",
-        parse_mode="Markdown",
+        f"<b>Connection status:</b>\n{format_status(summary)}",
+        parse_mode="HTML",
     )
 
 
@@ -308,15 +330,33 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
         first=AUTOFIX_POLL_FIRST_DELAY_S,
         name="autofix_poller",
     )
+    # Keep autofix bookkeeping tables from growing for the life of the
+    # install (also pruned once at startup in _post_init).
+    app.job_queue.run_repeating(
+        _prune_autofix_history_job,
+        interval=24 * 3600,
+        first=24 * 3600,
+        name="autofix_history_pruner",
+    )
 
     return app
 
 
-async def _post_init(app: Application) -> None:
-    """Run startup checks, start the HTTP server (webhook + webui), DM admin."""
-    summary = await _check_connections(app)
-    logger.info("Startup checks: %s", " | ".join(f"{k}={v}" for k, v in summary.items()))
+async def _prune_autofix_history_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    store: UserStore = ctx.application.bot_data["store"]
+    try:
+        pruned = await store.prune_autofix_history()
+        if any(pruned):
+            logger.info("Pruned autofix history: %d pending rows, %d events", *pruned)
+    except Exception:
+        logger.exception("Autofix-history prune failed (will retry tomorrow)")
 
+
+async def _post_init(app: Application) -> None:
+    """Start the HTTP server (webhook + webui), run startup checks, DM admin.
+    Server first: the probes retry with backoff and can take 1-2 minutes
+    with all three services down, during which /healthz and the webhook
+    receiver would look dead to health checks."""
     web_app = web.Application(client_max_size=ADMIN_UPLOAD_MAX_BYTES)
 
     async def _on_comment(payload: dict) -> None:
@@ -362,6 +402,7 @@ async def _post_init(app: Application) -> None:
         on_settings_changed=_on_settings_changed,
         trusted_proxies=app.bot_data["trusted_proxies"],
         http_port=app.bot_data["http_port"],
+        user_store=app.bot_data["store"],
     )
 
     runner = await start_http_server(
@@ -371,6 +412,17 @@ async def _post_init(app: Application) -> None:
     )
     app.bot_data["http_runner"] = runner
 
+    summary = await _check_connections(app)
+    logger.info("Startup checks: %s", " | ".join(f"{k}={v}" for k, v in summary.items()))
+
+    store: UserStore = app.bot_data["store"]
+    try:
+        pruned = await store.prune_autofix_history()
+        if any(pruned):
+            logger.info("Pruned autofix history: %d pending rows, %d events", *pruned)
+    except Exception:
+        logger.exception("Startup autofix-history prune failed (non-fatal)")
+
     admin_id = app.bot_data["admin_id"]
     base = (settings_store.settings.hermes_public_url or "").strip().rstrip("/")
     if base:
@@ -379,14 +431,18 @@ async def _post_init(app: Application) -> None:
         admin_url = f"{base}/admin"
     else:
         admin_url = f"http://<host>:{app.bot_data['http_port']}/admin"
+    # HTML + escape like every other dynamic surface: format_status carries
+    # upstream error bodies, and one unbalanced Markdown metacharacter in
+    # them makes Telegram reject the whole message -- exactly when a
+    # service is failing and the admin most needs the DM.
     msg = (
-        f"👋 Bot is online (v{HERMES_VERSION}).\n\n"
+        f"👋 Bot is online (v{html.escape(HERMES_VERSION)}).\n\n"
         f"{format_status(summary)}\n\n"
-        f"Admin UI: {admin_url}\n"
-        "Run `/link` to authorize with Plex (per-user issue attribution)."
+        f"Admin UI: {html.escape(admin_url)}\n"
+        "Run /link to authorize with Plex (per-user issue attribution)."
     )
     try:
-        await app.bot.send_message(chat_id=admin_id, text=msg, parse_mode="Markdown")
+        await app.bot.send_message(chat_id=admin_id, text=msg, parse_mode="HTML")
     except telegram.error.Forbidden:
         logger.warning(
             "Couldn't DM admin %d on startup: the bot is blocked by the admin. "
@@ -433,13 +489,20 @@ async def _post_init(app: Application) -> None:
 
 
 async def _post_shutdown(app: Application) -> None:
-    # Drain any prior settings-reload close tasks that haven't finished.
+    # Cancel any prior settings-reload close tasks: each begins with a 90s
+    # grace sleep, and awaiting them here would block shutdown for up to that
+    # long (SIGKILL under docker stop's 10s grace). Cancel, settle, then
+    # close the retired clients directly since their timers won't fire.
     pending_closes = app.bot_data.get("_pending_closes") or []
+    for task in pending_closes:
+        task.cancel()
     if pending_closes:
+        await asyncio.gather(*pending_closes, return_exceptions=True)
+    for client in app.bot_data.get("_pending_old_clients") or []:
         try:
-            await asyncio.gather(*pending_closes, return_exceptions=True)
+            await client.close()
         except Exception:
-            logger.exception("draining pending close tasks failed")
+            logger.exception("Error closing retired client on shutdown")
 
     # Close current API clients explicitly so httpx connection pools don't
     # leak. PlexClient is built once at startup and stashed under "plex";
@@ -461,20 +524,29 @@ async def _post_shutdown(app: Application) -> None:
             logger.exception("HTTP server cleanup failed")
 
 
-# user_data keys populated by the three ConversationHandlers. Cleared on
-# error so a mid-conversation crash doesn't leak half-state into the next
-# /issue / /link / /tickets.
+# user_data keys populated by the four ConversationHandlers (link, issue,
+# resolve, ticket-reply). Cleared on error so a mid-conversation crash
+# doesn't leak half-state into the next /issue / /link / /tickets.
 _CONVERSATION_USER_DATA_KEYS = (
     "tk_reply_id", "tk_close_after",
     "link_active_loop",
     "media", "search_results", "seasons", "season",
-    "episode", "issue_type", "description", "autofix",
+    "episode", "issue_type", "description",
+    "search_version", "submitting_issue",
     "research_parent",
     "awaiting_comment_for",
 )
 
 
 async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    # A double-tapped button (nav/cancel/skip) makes the second edit raise
+    # BadRequest("message is not modified") -- a non-event. Treat it as a
+    # no-op: don't log a scary traceback, don't wipe live conversation state
+    # (which would strand the flow), don't DM the user about a phantom crash.
+    err = ctx.error
+    if isinstance(err, telegram.error.BadRequest) and \
+            "message is not modified" in str(err).lower():
+        return
     logger.exception("Unhandled error: %s", ctx.error)
     # Clear any half-populated conversation state so the next conversation
     # entry sees a clean slate. ctx.user_data may be None on errors that
@@ -485,6 +557,19 @@ async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 ctx.user_data.pop(key, None)
     except Exception:
         logger.debug("on_error user_data cleanup failed (non-fatal)", exc_info=True)
+    # Last-resort user feedback: without it a crash mid-flow is a silent
+    # dead end (the flow evaporates and the next message hits a bot that
+    # forgot the conversation). Best-effort only.
+    try:
+        if (isinstance(update, Update) and update.effective_chat is not None
+                and ctx.error is not None):
+            await ctx.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="⚠️ Something went wrong on my end — please run the "
+                     "command again.",
+            )
+    except Exception:
+        logger.debug("on_error user notification failed (non-fatal)", exc_info=True)
 
 
 def _migrate_legacy_env_into_settings(settings_store: SettingsStore) -> bool:

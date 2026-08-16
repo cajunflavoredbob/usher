@@ -8,6 +8,7 @@ session-secret loader used by the webui.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -24,6 +25,19 @@ logger = logging.getLogger("hermes.settings")
 
 PBKDF2_ITERATIONS = 600_000
 SALT_BYTES = 16
+
+
+def parse_id_list(values) -> list[int]:
+    """Coerce an iterable of Telegram-id-ish values to ints, dropping junk.
+    One parser for all three allowlist writers (settings.json load, env seed,
+    web form) so their semantics can't drift; tolerates a leading '-' since
+    hand-edited files have carried negative ids."""
+    out: list[int] = []
+    for v in values:
+        v = str(v).strip()
+        if v.lstrip("-").isdigit():
+            out.append(int(v))
+    return out
 
 
 @dataclass
@@ -103,10 +117,8 @@ class Settings:
             sonarr_api_key=data.get("sonarr_api_key", "") or "",
             # Coerce to int and drop junk: hand-edited string ids used to
             # pass through untouched and silently never match the int compare.
-            allowed_autofix_telegram_ids=[
-                int(v) for v in (data.get("allowed_autofix_telegram_ids") or [])
-                if str(v).strip().lstrip("-").isdigit()
-            ],
+            allowed_autofix_telegram_ids=parse_id_list(
+                data.get("allowed_autofix_telegram_ids") or []),
             autofix_allow_all=bool(data.get("autofix_allow_all")),
             daily_autofix_limit=daily_limit,
             daily_autofix_unlimited=bool(data.get("daily_autofix_unlimited")),
@@ -172,12 +184,7 @@ class SettingsStore:
     @staticmethod
     def _seed_from_env() -> Settings:
         def ids(raw: str) -> list[int]:
-            out: list[int] = []
-            for chunk in (raw or "").split(","):
-                chunk = chunk.strip()
-                if chunk.isdigit():
-                    out.append(int(chunk))
-            return out
+            return parse_id_list((raw or "").split(","))
 
         try:
             admin_tg_id = int(os.environ.get("ADMIN_TELEGRAM_ID", "0") or "0")
@@ -190,6 +197,7 @@ class SettingsStore:
             seerr_url=os.environ.get("SEERR_URL", "").strip(),
             seerr_api_key=os.environ.get("SEERR_API_KEY", "").strip(),
             seerr_public_url=os.environ.get("SEERR_PUBLIC_URL", "").strip(),
+            hermes_public_url=os.environ.get("HERMES_PUBLIC_URL", "").strip(),
             radarr_url=os.environ.get("RADARR_URL", "").strip(),
             radarr_api_key=os.environ.get("RADARR_API_KEY", "").strip(),
             sonarr_url=os.environ.get("SONARR_URL", "").strip(),
@@ -237,25 +245,41 @@ class SettingsStore:
         # preserve-and-reseed, locking the admin out. POSIX rename is already
         # atomic; durability is what we add here.
         tmp = self.path.with_suffix(".tmp")
-        with open(tmp, "w") as f:
+        # Create the temp file 0600 up front (like fsutil.atomic_write_bytes)
+        # so the secrets file never exists with looser permissions, not even
+        # between the rename and a chmod.
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
             f.write(json.dumps(s.to_dict(), indent=2))
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, self.path)
-        try:
-            os.chmod(self.path, 0o600)
-        except OSError:
-            pass
         self._fsync_parent_dir()
 
     def save(self) -> None:
         self._write(self.settings)
+
+    async def save_async(self) -> None:
+        """save() off the event loop: _write does two fsyncs synchronously,
+        which stalls the webhook receiver and bot when called from an
+        aiohttp handler on slow storage."""
+        await asyncio.to_thread(self.save)
 
 
 def hash_password(plaintext: str) -> str:
     salt = secrets.token_bytes(SALT_BYTES)
     h = pbkdf2_hmac("sha256", plaintext.encode(), salt, PBKDF2_ITERATIONS)
     return f"pbkdf2_sha256${PBKDF2_ITERATIONS}${salt.hex()}${h.hex()}"
+
+
+def iterations_of(stored: str) -> int:
+    """PBKDF2 iteration count embedded in a stored hash, 0 if unparseable.
+    Lives here so the "pbkdf2_sha256$iters$salt$hash" format has one owner;
+    the login auto-upgrade must not hand-parse it."""
+    try:
+        return int(stored.split("$")[1])
+    except (IndexError, ValueError, AttributeError):
+        return 0
 
 
 def verify_password(plaintext: str, stored: str) -> bool:

@@ -13,7 +13,10 @@ from aiohttp.test_utils import TestClient, TestServer
 import webui
 
 SECRET = b"0123456789abcdef0123456789abcdef"
-CSRF = "csrf-token-value"
+# Signed AND session-bound since 0.13.0. Pin one admin session cookie so its
+# signature is stable, and bind the CSRF token to it.
+_SESSION = webui._make_session_cookie(SECRET, "admin")
+CSRF = webui.generate_csrf_token(SECRET, _SESSION.rsplit(".", 1)[-1])
 
 
 @pytest.fixture
@@ -43,7 +46,7 @@ async def client(tmp_path, monkeypatch):
 
 def _cookies():
     return {
-        webui.SESSION_COOKIE: webui._make_session_cookie(SECRET, "admin"),
+        webui.SESSION_COOKIE: _SESSION,
         "hermes_csrf": CSRF,
     }
 

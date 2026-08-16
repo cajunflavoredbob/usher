@@ -1,5 +1,5 @@
 """Tests for bot.issue_flow.issue_pick_media: version-tag enforcement (the
-v0.11.10 CONC #10 fix) and the malformed-callback fallback."""
+v0.11.10 fix) and the malformed-callback fallback."""
 from __future__ import annotations
 
 import pytest
@@ -38,7 +38,7 @@ async def test_version_match_movie_advances_to_pick_type():
     assert ctx.user_data["media"]["type"] == "movie"
 
 
-# --- the CONC #10 regression ---
+# --- search-results version-tag regression ---
 
 
 async def test_version_mismatch_shows_search_context_changed():

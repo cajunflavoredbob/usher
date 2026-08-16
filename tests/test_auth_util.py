@@ -13,6 +13,7 @@ from auth_util import (
     THROTTLE_WINDOW_S,
     clear_setup_token,
     client_ip,
+    generate_csrf_token,
     load_or_create_setup_token,
     parse_trusted_proxies,
     request_is_secure,
@@ -104,14 +105,31 @@ def _fake_request(*, cookies: dict, scheme: str = "http", headers: dict | None =
     )
 
 
+def _signed_request(token: str, secret: bytes = b"s" * 32):
+    req = _fake_request(cookies={"hermes_csrf": token})
+    req.app["session_secret"] = secret
+    return req
+
+
 def test_validate_csrf_matches():
-    req = _fake_request(cookies={"hermes_csrf": "secret-abc"})
-    assert validate_csrf(req, "secret-abc") is True
+    secret = b"s" * 32
+    token = generate_csrf_token(secret)
+    req = _signed_request(token, secret)
+    assert validate_csrf(req, token) is True
 
 
 def test_validate_csrf_mismatch_returns_false():
-    req = _fake_request(cookies={"hermes_csrf": "secret-abc"})
-    assert validate_csrf(req, "other-value") is False
+    secret = b"s" * 32
+    token = generate_csrf_token(secret)
+    req = _signed_request(token, secret)
+    assert validate_csrf(req, generate_csrf_token(secret)) is False
+
+
+def test_validate_csrf_unsigned_token_rejected():
+    """A planted cookie that matches the form field but carries no valid
+    HMAC (cookie-injection double-submit) is rejected."""
+    req = _signed_request("attacker-planted-value")
+    assert validate_csrf(req, "attacker-planted-value") is False
 
 
 def test_validate_csrf_missing_cookie_returns_false():
@@ -192,7 +210,7 @@ def test_client_ip_uses_remote_when_no_xff():
 
 
 def test_client_ip_ignores_xff_without_trusted_proxy():
-    """The audit's throttle bypass: rotating XFF must not change the key."""
+    """Throttle-bypass guard: rotating XFF must not change the key."""
     req = _fake_request(cookies={}, remote="10.0.0.5",
                         headers={"X-Forwarded-For": "203.0.113.7, 10.0.0.5"})
     assert client_ip(req) == "10.0.0.5"
@@ -214,13 +232,13 @@ def test_client_ip_all_trusted_hops_falls_back_to_peer():
     assert client_ip(req) == "10.0.0.2"
 
 
-def test_client_ip_garbage_xff_hop_is_returned_verbatim_but_bounded():
-    """A non-IP hop from a trusted proxy is still used as a throttle key
-    (it can't match a trusted network, so the walk stops there)."""
+def test_client_ip_garbage_xff_hop_falls_back_to_peer():
+    """A non-IP hop from a trusted proxy must not leak into throttle keys or
+    audit lines; the socket peer is returned instead."""
     req = _fake_request(cookies={}, remote="10.0.0.2",
                         headers={"X-Forwarded-For": "not-an-ip"},
                         trusted_proxies="10.0.0.0/24")
-    assert client_ip(req) == "not-an-ip"
+    assert client_ip(req) == "10.0.0.2"
 
 
 def test_client_ip_tolerates_request_without_app():

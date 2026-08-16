@@ -43,7 +43,9 @@ async def test_linked_user_resolves_with_own_token():
     await resolve_start(upd, ctx)
     ctx.bot_data["seerr"].resolve_issue.assert_called_once_with(
         42, as_plex_token="plex-abc")
-    assert "closed" in upd.callback_query.edits[0]["text"]
+    # First edit is the working state (double-tap guard), last is the result.
+    assert "Closing" in upd.callback_query.edits[0]["text"]
+    assert "closed" in upd.callback_query.edits[-1]["text"]
 
 
 async def test_admin_resolves_with_admin_key():

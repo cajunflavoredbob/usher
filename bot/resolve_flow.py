@@ -11,6 +11,7 @@ from telegram.ext import (
     ContextTypes,
     ConversationHandler,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 
@@ -22,8 +23,10 @@ from bot.shared import (
     DECRYPT_FAILED_MSG,
     AWAIT_COMMENT,
     RELINK_RESUME_EXECUTORS,
+    end_action,
     prompt_plex_relink,
     token_for,
+    try_begin_action,
     user_in_conversation,
 )
 from const import RESOLVE_FLOW_TIMEOUT_S
@@ -34,17 +37,40 @@ logger = logging.getLogger("hermes")
 async def _resolve_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Conversation_timeout handler. Clears awaiting_comment_for so an
     abandoned 'add a comment' prompt can't swallow a later unrelated DM
-    as a comment on a long-stale issue."""
-    ctx.user_data.pop("awaiting_comment_for", None)
+    as a comment on a long-stale issue, and tells the user (the prompt
+    solicited text, so silence would lose their later message)."""
+    awaiting = ctx.user_data.pop("awaiting_comment_for", None)
+    try:
+        if (awaiting and update is not None
+                and update.effective_chat is not None):
+            await ctx.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="⏱️ Timed out waiting for your comment. Reopen the ticket "
+                     "from /tickets to add one.",
+            )
+    except Exception:
+        logger.debug("resolve-timeout notice failed (non-fatal)", exc_info=True)
     return ConversationHandler.END
+
+
+async def _resolve_expect_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.effective_message.reply_text(
+        "I can only read text here — type your comment, or /cancel to stop.")
+    return AWAIT_COMMENT
 
 
 def _resolve_conversation() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[CallbackQueryHandler(resolve_start, pattern=fr"^{RESOLVE}:")],
         states={
-            AWAIT_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, resolve_comment)],
-            ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, _resolve_timeout)],
+            AWAIT_COMMENT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, resolve_comment),
+                MessageHandler(~filters.COMMAND, _resolve_expect_text),
+            ],
+            # TypeHandler, not MessageHandler(filters.ALL): PTB's message filters
+            # reject callback-query updates, so a MessageHandler TIMEOUT
+            # never fires when the flow was abandoned at a button step.
+            ConversationHandler.TIMEOUT: [TypeHandler(Update, _resolve_timeout)],
         },
         fallbacks=[CommandHandler("cancel", resolve_cancel)],
         per_user=True,
@@ -63,7 +89,8 @@ async def resolve_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         _, issue_id_s, choice = q.data.split(":")
         issue_id = int(issue_id_s)
     except (ValueError, AttributeError):
-        await q.edit_message_text("Couldn't parse selection.")
+        await q.edit_message_text(
+            "Couldn't parse selection. Manage the ticket with /tickets.")
         return ConversationHandler.END
     if choice == "skip":
         await q.edit_message_text("OK, leaving the ticket open.")
@@ -81,19 +108,31 @@ async def resolve_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await q.edit_message_text("DM me /link first so I can act on tickets as you.")
         return ConversationHandler.END
     if choice == "yes":
-        seerr: SeerrClient = ctx.bot_data["seerr"]
+        # Double-tap guard + immediate working state, mirroring
+        # tk_close_direct: with concurrent_updates a second tap raced the
+        # first (the keyboard stayed live until the post-call edit) and
+        # could re-resolve an already-resolved issue.
+        if not try_begin_action(ctx, f"close:{issue_id}"):
+            # q was already answered at the top of resolve_start, so a second
+            # answer() would be a no-op; just drop the duplicate tap.
+            return ConversationHandler.END
         try:
-            await seerr.resolve_issue(issue_id, as_plex_token=token)
-        except PlexTokenInvalidError:
-            await prompt_plex_relink(update, ctx, resume_kind="resolve_close",
-                                     resume_payload={"issue_id": issue_id})
+            await q.edit_message_text(f"⏳ Closing ticket #{issue_id}...")
+            seerr: SeerrClient = ctx.bot_data["seerr"]
+            try:
+                await seerr.resolve_issue(issue_id, as_plex_token=token)
+            except PlexTokenInvalidError:
+                await prompt_plex_relink(update, ctx, resume_kind="resolve_close",
+                                         resume_payload={"issue_id": issue_id})
+                return ConversationHandler.END
+            except Exception as exc:
+                logger.exception("resolve_issue failed")
+                await q.edit_message_text(f"Couldn't close ticket #{issue_id}. {user_friendly_message(exc)}")
+                return ConversationHandler.END
+            await q.edit_message_text(f"✅ Ticket #{issue_id} closed. Thanks!")
             return ConversationHandler.END
-        except Exception as exc:
-            logger.exception("resolve_issue failed")
-            await q.edit_message_text(f"Couldn't close ticket #{issue_id}. {user_friendly_message(exc)}")
-            return ConversationHandler.END
-        await q.edit_message_text(f"✅ Ticket #{issue_id} closed. Thanks!")
-        return ConversationHandler.END
+        finally:
+            end_action(ctx, f"close:{issue_id}")
     # "no" -> ask for comment. Refuse while another text-awaiting flow is
     # active: both conversations would await the next message
     # and the issue flow, registered first, would swallow this comment as

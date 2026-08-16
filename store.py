@@ -19,9 +19,10 @@ import logging
 import os
 import sqlite3
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional, TypeVar
+from typing import Callable, Iterator, Optional, TypeVar
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -43,6 +44,8 @@ class Mapping:
     seerr_id: int
     seerr_display: str
     plex_token: Optional[str]      # decrypted; None for legacy or decrypt-failed
+    # Stored but currently unread: kept as the stable Plex identity for a
+    # future username-change reconcile (usernames can change, uuid can't).
     plex_uuid: Optional[str]
     plex_username: Optional[str]
     plex_token_decrypt_failed: bool = False  # True if a ciphertext exists but won't decrypt
@@ -123,19 +126,32 @@ class UserStore:
         self.path = Path(db_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.crypto = crypto or TokenCrypto(key_path=self.path.parent / "encryption.key")
+        # Serializes DB access against maintenance (webui restore swaps the
+        # DB file under us); see _run.
+        self.maintenance_lock = asyncio.Lock()
         self._init_schema()
         self._migrate_schema()
 
     # --- Connection helpers ---------------------------------------------
 
-    def _conn(self) -> sqlite3.Connection:
+    @contextmanager
+    def _conn(self) -> Iterator[sqlite3.Connection]:
         # busy_timeout: wait up to 5s for a writer to release the lock
         # before raising OperationalError. Combined with WAL mode (set
         # once in _init_schema), this serializes writes cleanly under
         # concurrent load without throwing.
+        #
+        # Context manager wraps the sqlite3 connection's own
+        # commit-or-rollback semantics AND closes the connection on exit:
+        # sqlite3's native `with conn` never closes, which leaked every
+        # call's connection to refcount GC.
         c = sqlite3.connect(self.path, timeout=5.0)
-        c.execute("PRAGMA busy_timeout = 5000")
-        return c
+        try:
+            c.execute("PRAGMA busy_timeout = 5000")
+            with c:
+                yield c
+        finally:
+            c.close()
 
     def _run_sync_with_retry(self, fn: Callable[[], T]) -> T:
         """Run fn synchronously, retrying on OperationalError(locked).
@@ -152,8 +168,13 @@ class UserStore:
         raise RuntimeError("retry loop exited without success or raise")
 
     async def _run(self, fn: Callable[[], T]) -> T:
-        """Run a sync DB function in a thread with locked-retry."""
-        return await asyncio.to_thread(self._run_sync_with_retry, fn)
+        """Run a sync DB function in a thread with locked-retry, serialized
+        against maintenance operations (restore's DB-file swap) via
+        maintenance_lock. Ordinary calls just pass through the lock; a
+        restore holds it so no write can land between the DB rename and the
+        stale-WAL cleanup."""
+        async with self.maintenance_lock:
+            return await asyncio.to_thread(self._run_sync_with_retry, fn)
 
     # --- Schema ----------------------------------------------------------
 
@@ -321,6 +342,9 @@ class UserStore:
     async def find_by_plex_username(self, plex_username: str) -> Optional[Mapping]:
         """Lookup by Plex username (case-insensitive). Maps Seerr webhook
         payloads (which carry reportedBy_username) back to a linked TG user.
+        Nothing stops two Telegram accounts from linking the same Plex
+        account; ORDER BY rowid DESC makes the winner deterministic (newest
+        link) instead of whichever row SQLite happens to return first.
         """
         if not plex_username:
             return None
@@ -333,6 +357,7 @@ class UserStore:
                            plex_token_enc, plex_uuid, plex_username
                     FROM user_mapping
                     WHERE LOWER(plex_username) = LOWER(?)
+                    ORDER BY rowid DESC
                     LIMIT 1
                     """,
                     (plex_username,),
@@ -465,6 +490,10 @@ class UserStore:
         radarr_movie_id: Optional[int] = None,
         sonarr_series_id: Optional[int] = None,
         sonarr_episode_id: Optional[int] = None,
+        # sonarr_season / expected_episode_ids: no production caller passes
+        # these anymore (the whole-season workflow was removed in 0.12.0), but
+        # the columns are deliberately retained for a future re-wiring, so the
+        # params stay to populate them. Only tests exercise them today.
         sonarr_season: Optional[int] = None,
         expected_episode_ids: Optional[list[int]] = None,
     ) -> int:
@@ -538,3 +567,26 @@ class UserStore:
                 )
 
         await self._run(_do)
+
+    async def prune_autofix_history(self) -> tuple[int, int]:
+        """Delete rows nothing reads anymore, so neither table grows for the
+        life of the install: pending_autofixes rows in a terminal state
+        (only 'pending' is ever polled) older than 7 days, and
+        autofix_events older than 48h (count_autofix_24h looks back 24h;
+        double that for slack). Returns (pending_deleted, events_deleted).
+        Called at startup and daily by the bot's job queue."""
+        def _do() -> tuple[int, int]:
+            with self._conn() as c:
+                pending = c.execute(
+                    """
+                    DELETE FROM pending_autofixes
+                    WHERE status IN ('complete', 'timeout', 'failed')
+                      AND started_at < datetime('now', '-7 days')
+                    """
+                ).rowcount
+                events = c.execute(
+                    "DELETE FROM autofix_events WHERE occurred_at < datetime('now', '-2 days')"
+                ).rowcount
+                return pending, events
+
+        return await self._run(_do)

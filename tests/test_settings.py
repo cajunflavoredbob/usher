@@ -226,8 +226,15 @@ def test_write_survives_dir_fsync_unsupported(tmp_settings_path: Path, monkeypat
 
     store = SettingsStore(tmp_settings_path)
 
-    def boom(path, *a, **k):
-        raise OSError("no dir fd here")
+    real_open = os.open
+
+    def boom(path, flags, *a, **k):
+        # Fail only the directory-fsync open (O_RDONLY on a dir); the temp
+        # file itself is also created via os.open (0600 up front) and must
+        # keep working.
+        if flags == os.O_RDONLY:
+            raise OSError("no dir fd here")
+        return real_open(path, flags, *a, **k)
 
     monkeypatch.setattr(settings_mod.os, "open", boom)
     store.settings.telegram_bot_token = "still-works"

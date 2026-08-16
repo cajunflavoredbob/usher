@@ -19,8 +19,7 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
     ConversationHandler,
-    MessageHandler,
-    filters,
+    TypeHandler,
 )
 
 from http_util import user_friendly_message
@@ -64,7 +63,10 @@ def _link_conversation() -> ConversationHandler:
         states={
             AWAIT_LINK_CONSENT: [CallbackQueryHandler(cmd_link_consent, pattern=fr"^{LINK_CONSENT}:")],
             AWAIT_PLATFORM_CHOICE: [CallbackQueryHandler(cmd_link_platform, pattern=fr"^{LINK_PLATFORM}:")],
-            ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, _link_timeout)],
+            # TypeHandler, not MessageHandler(filters.ALL): PTB's message filters
+            # reject callback-query updates, so a MessageHandler TIMEOUT
+            # never fires when the flow was abandoned at a button step.
+            ConversationHandler.TIMEOUT: [TypeHandler(Update, _link_timeout)],
         },
         fallbacks=[CommandHandler("cancel", link_cancel)],
         per_user=True,
@@ -231,7 +233,7 @@ async def _finalize_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     # HTML + escape: a Plex display name containing `_` or `*` makes
     # Telegram reject the Markdown send. The link is ALREADY STORED at this
     # point -- a lost message here left the user assuming failure and
-    # retrying (the audit's worst case).
+    # retrying.
     await ctx.bot.send_message(
         chat_id=chat_id,
         text=(
@@ -363,6 +365,10 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def link_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    # Drop the loop key so an in-flight PIN poll exits on its next check;
+    # otherwise it kept polling for up to 28 minutes and a late success or
+    # timeout DM landed after "Cancelled".
+    ctx.user_data.pop("link_active_loop", None)
     await update.effective_message.reply_text("Cancelled. /link to try again later.")
     return ConversationHandler.END
 

@@ -1,6 +1,6 @@
 """Tests for bot.tickets.tk_reply_text: ticket-reply conversation message
 handler. Covers admin path (no token), user path (with token), decrypt_failed
-message, post-await mismatch (the v0.11.6 CONC #9 fix), close_after."""
+message, post-await mismatch (the v0.11.6 fix), close_after."""
 from __future__ import annotations
 
 import pytest
@@ -63,7 +63,7 @@ async def test_user_with_decrypt_failed_mapping():
     ctx.bot_data["seerr"].add_issue_comment.assert_not_called()
 
 
-# --- the CONC #9 post-await mismatch fix ---
+# --- the post-await mismatch fix ---
 
 
 async def test_close_after_suppressed_when_user_started_new_reply():
@@ -81,7 +81,10 @@ async def test_close_after_suppressed_when_user_started_new_reply():
     ctx.bot_data["seerr"].add_issue_comment.side_effect = slow_add_comment
 
     state = await tk_reply_text(upd, ctx)
-    assert state == ConversationHandler.END
+    # Returns None, not END: the shared (chat,user) conversation now belongs to
+    # the NEW reply flow, so ending it here would kill the flow the user just
+    # started and swallow their next message.
+    assert state is None
     # Comment was posted on issue 42 (the locally-bound issue_id).
     args, _ = ctx.bot_data["seerr"].add_issue_comment.call_args
     assert args[0] == 42

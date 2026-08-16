@@ -8,7 +8,7 @@ from typing import Optional
 import httpx
 
 from fix_result import FixResult
-from http_util import APIError, execute
+from http_util import APIError, execute, json_or_raise
 
 logger = logging.getLogger("hermes." + __name__)
 
@@ -51,12 +51,12 @@ class SonarrClient:
     async def ping(self) -> str:
         """Return Sonarr's version string. Raises APIError on failure."""
         r = await execute(self._client, "GET", "/system/status", service=_SERVICE)
-        return r.json().get("version", "?")
+        return json_or_raise(r, service=_SERVICE, what="system status").get("version", "?")
 
     async def get_series_by_tvdb(self, tvdb_id: int) -> Optional[SonarrSeries]:
         r = await execute(self._client, "GET", "/series", service=_SERVICE,
                           params={"tvdbId": tvdb_id})
-        items = r.json()
+        items = json_or_raise(r, service=_SERVICE, what="series lookup", expect=list)
         # Identity guard: same reasoning as radarr.get_movie_by_tmdb -- the
         # result feeds a delete workflow and Sonarr ignores unknown query
         # params, so scan for the requested ID instead of trusting items[0].
@@ -69,7 +69,7 @@ class SonarrClient:
         r = await execute(self._client, "GET", "/episode", service=_SERVICE,
                           params={"seriesId": series_id, "seasonNumber": season})
         out: list[SonarrEpisode] = []
-        for e in r.json():
+        for e in json_or_raise(r, service=_SERVICE, what="episode list", expect=list):
             out.append(SonarrEpisode(
                 id=e["id"],
                 season=e.get("seasonNumber"),
@@ -106,9 +106,9 @@ class SonarrClient:
             try:
                 # Page until the grabbed event is found: a
                 # churn-heavy episode (repeated imports/upgrades) can push
-                # the grab past the newest 20 records, and silently skipping
-                # the blocklist re-grabs the exact release Mark Failed was
-                # meant to bury.
+                # the grab past the first _HISTORY_PAGE_SIZE records, and
+                # silently skipping the blocklist re-grabs the exact release
+                # Mark Failed was meant to bury.
                 grab = None
                 for page in range(1, _HISTORY_MAX_PAGES + 1):
                     r = await execute(
@@ -117,7 +117,7 @@ class SonarrClient:
                                 "pageSize": _HISTORY_PAGE_SIZE,
                                 "sortKey": "date", "sortDirection": "descending"},
                     )
-                    records = r.json().get("records") or []
+                    records = json_or_raise(r, service=_SERVICE, what="episode history").get("records") or []
                     grab = next((rec for rec in records if rec.get("eventType") == "grabbed"), None)
                     if grab is not None or len(records) < _HISTORY_PAGE_SIZE:
                         break
@@ -150,7 +150,11 @@ class SonarrClient:
             )
 
         if blocklist:
-            prefix = "Blocklisted current release, " if blocklisted else "No prior grab to blocklist; "
+            # "recent history": the scan is bounded (_HISTORY_MAX_PAGES pages);
+            # a grab deeper than that exists but wasn't found, so don't claim
+            # there was no grab at all.
+            prefix = ("Blocklisted current release, " if blocklisted
+                      else "No grab found in recent history to blocklist; ")
             message = (
                 f"{prefix}deleted '{series.title}' S{match.season:02d}E{match.episode:02d} "
                 "file, and triggered re-search."
@@ -180,7 +184,14 @@ class SonarrClient:
             return series, None, FixResult.failed(
                 f"Sonarr episode lookup failed: {exc.user_message}"
             )
-        match = next((e for e in episodes if e.episode == episode), None)
+        # Match on BOTH season and episode: if Sonarr ever ignores the
+        # seasonNumber filter (or it serializes empty), an episode-only match
+        # could pick the same episode number from a different season and feed
+        # the wrong file to the delete workflow below.
+        match = next(
+            (e for e in episodes if e.season == season and e.episode == episode),
+            None,
+        )
         if match is None:
             return series, None, FixResult.failed(
                 f"S{season:02d}E{episode:02d} not found in Sonarr."
@@ -216,5 +227,5 @@ class SonarrClient:
     async def episode_has_file(self, episode_id: int) -> bool:
         r = await execute(self._client, "GET", f"/episode/{episode_id}",
                           service=_SERVICE)
-        return bool(r.json().get("hasFile"))
+        return bool(json_or_raise(r, service=_SERVICE, what="episode detail").get("hasFile"))
 
