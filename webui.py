@@ -389,6 +389,20 @@ button.secondary:hover { background: var(--btn-2-hover); }
                 cursor: pointer; }
 .inline-check input[type="checkbox"] { width: auto; margin: 0; cursor: pointer; }
 input.locked { opacity: 0.5; background: var(--input-locked-bg); cursor: not-allowed; }
+
+/* Narrow screens: tighten chrome, spread the tabs across the full row, and
+   bump inputs to 16px (below that iOS Safari zooms the page on focus). */
+@media (max-width: 640px) {
+  body { padding: 10px; }
+  form { padding: 16px; }
+  .topbar { gap: 10px; margin-bottom: 10px; }
+  .tab-labels { gap: 3px; }
+  .tab-labels label { flex: 1 1 auto; text-align: center;
+                      padding: 8px 6px; font-size: 13px; }
+  input[type="text"], input[type="password"], input[type="file"], textarea {
+    font-size: 16px; }
+  .btn-row { gap: 8px; }
+}
 """
 
 

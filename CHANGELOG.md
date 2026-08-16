@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-08-16
+
+### Fixed
+- **The admin UI renders cleanly on phones.** Below 640px the settings tabs
+  spread across a single full-width row (no wrap, attachment to the panel
+  preserved), page and card padding tighten, and text inputs bump to 16px so
+  iOS Safari no longer zooms the page when a field is focused.
+
 ## [0.14.0] - 2026-08-16
 
 The project is now **Usher** (formerly Hermes). Upgrades are in-place: old
