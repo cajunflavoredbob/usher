@@ -310,35 +310,3 @@ async def test_webhook_final_deletes_row_before_painting():
     assert order == ["delete", "edit"]
 
 
-async def test_cards_disabled_gates_paint_but_not_row_or_bump():
-    """The toggle is cosmetic: the watch row is still created (it drives
-    the SABnzbd bump), the poller still bumps, and only the card EDITS are
-    suppressed."""
-    from seerr import CreatedRequest, REQUEST_STATUS_APPROVED
-    from bot.request_flow import request_submit
-    ctx = make_ctx(admin_id=999, mapping=make_mapping(telegram_id=USER_ID),
-                   user_data={"rq_media": {"type": "movie", "tmdb_id": 550,
-                                           "title": "Movie", "year": "2026"},
-                              "rq_search_version": 1})
-    ctx.args = []
-    ctx.bot_data["settings_store"].settings.tg_progress_cards = False
-    ctx.bot_data["seerr"].create_request.return_value = CreatedRequest(
-        id=5, status=REQUEST_STATUS_APPROVED)
-    upd = make_update(callback_data="rqgo:1", user_id=USER_ID)
-    await request_submit(upd, ctx)
-    ctx.bot_data["store"].add_request_watch.assert_awaited_once()  # row lives
-    assert "Approved" in upd.callback_query.edits[-1]["text"]
-
-    # Poller tick with cards off: bump fires, no Telegram edit.
-    from bot import request_watch as rw
-    rw._last_refresh.clear()
-    ctx.bot_data["settings_store"].settings.sabnzbd_boost = "high"
-    sab = AsyncMock()
-    ctx.bot_data["sabnzbd"] = sab
-    ctx.bot_data["store"].list_request_watches.return_value = [_watch()]
-    ctx.bot_data["store"].update_request_watch.return_value = True
-    ctx.bot_data["radarr"].get_queue_progress.return_value = QueueProgress(
-        percent=10, timeleft="", download_ids=["nzo_a"], count=1)
-    await poll_request_watches(ctx)
-    sab.set_priority.assert_awaited_with("nzo_a", "high")
-    ctx.bot.edit_message_text.assert_not_awaited()

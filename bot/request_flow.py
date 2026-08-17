@@ -970,9 +970,7 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     # Track the confirmation as a morphing card: the watch poller paints
     # download progress onto THIS message, and lifecycle webhooks finish it.
     try:
-        # The watch row is created regardless of the cards toggle: it also
-        # drives the SABnzbd priority bump. The toggle gates PAINTING only
-        # (see request_watch._cards_enabled).
+        # The watch row also drives the SABnzbd priority bump.
         store: UserStore = ctx.bot_data["store"]
         await store.add_request_watch(
             chat_id=update.effective_chat.id,

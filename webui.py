@@ -622,28 +622,26 @@ def _settings_page(
     fail_chk = " checked" if s.tg_notify_admin_failed else ""
     iss_chk = " checked" if s.tg_notify_issues else ""
     subs_chk = " checked" if s.tg_notify_subscriptions else ""
-    cards_chk = " checked" if s.tg_progress_cards else ""
     telegram_form = f"""
 <form id="telegram-form" method="POST" action="/admin/telegram">
   {csrf}
   <h2>Telegram</h2>
-  <div class="note">Changes to the bot token or admin user ID restart the container so the new identity takes effect.</div>
-  <label>Bot Token <span class="note">(from @BotFather)</span></label>
+  <div class="note">Changing the bot token or admin ID restarts the container.</div>
+  <label>Bot Token <span class="note">from @BotFather</span></label>
   <input type="password" name="telegram_bot_token" value="{_esc(s.telegram_bot_token)}" autocomplete="off" required>
-  <label>Admin Telegram User ID <span class="note">(DM @userinfobot)</span></label>
+  <label>Admin Telegram User ID <span class="note">DM @userinfobot</span></label>
   <input type="text" name="admin_telegram_id" value="{_esc(admin_tg_val)}" inputmode="numeric" pattern="[0-9]+" required>
-  <label>Usher Admin UI URL <span class="note">(optional)</span></label>
+  <label>Usher Admin UI URL <span class="note">optional</span></label>
   <input type="text" name="usher_public_url" value="{_esc(s.usher_public_url)}" placeholder="http://192.168.1.15:8765 or https://usher.example.com">
-  <div class="note">Used in the bot's startup DM to point you back here. Leave blank to fall back to a generic placeholder.</div>
+  <div class="note">Linked in the bot's startup DM.</div>
 
   <h2>Notifications</h2>
-  <div class="note">Which DM classes the bot sends. Turning one off silences that class for everyone; events that fire while a class is off are not replayed later.</div>
-  <label class="inline-check"><input type="checkbox" name="tg_notify_requester"{req_chk}> Request updates to requesters (approved / declined / available / failed)</label>
-  <label class="inline-check"><input type="checkbox" name="tg_notify_admin_requests"{adm_chk}> New-request and auto-approved notices to the admin</label>
+  <div class="note">Off silences that class for everyone. Missed events are not replayed.</div>
+  <label class="inline-check"><input type="checkbox" name="tg_notify_requester"{req_chk}> Request updates to requesters</label>
+  <label class="inline-check"><input type="checkbox" name="tg_notify_admin_requests"{adm_chk}> New-request notices to the admin</label>
   <label class="inline-check"><input type="checkbox" name="tg_notify_admin_failed"{fail_chk}> Failed-download alarm to the admin</label>
-  <label class="inline-check"><input type="checkbox" name="tg_notify_issues"{iss_chk}> Issue reported / comment / resolved DMs</label>
+  <label class="inline-check"><input type="checkbox" name="tg_notify_issues"{iss_chk}> Issue DMs</label>
   <label class="inline-check"><input type="checkbox" name="tg_notify_subscriptions"{subs_chk}> Availability-watch notifications</label>
-  <label class="inline-check"><input type="checkbox" name="tg_progress_cards"{cards_chk}> Morphing progress cards on requests and auto-fixes (paint only: queue boosting and tracking continue while off)</label>
 
   <div class="btn-row divided">
     <button type="button" class="test-btn" data-test="telegram" data-form="telegram-form">Test</button>
@@ -658,19 +656,17 @@ def _settings_page(
   {csrf}
   <h2>Seerr</h2>
   <div id="newplex-banner" class="banner-warn" hidden>
-    <b>⚠️ Seerr's "Enable New Plex Sign-In" is turned on.</b>
-    Any Plex account with access to your Plex server becomes a Seerr user the
-    first time they sign in - including through this bot's /link, which anyone
-    who finds the bot can start. If that's not what you want, disable it in
-    Seerr under Settings &rarr; Users. (Usher already turns away sign-ins
-    Seerr rejects, so disabling it won't break anything here.)
+    <b>⚠️ Seerr's "Enable New Plex Sign-In" is on.</b>
+    Anyone with access to your Plex server becomes a Seerr user on first
+    sign-in, including through /link. Disable it in Seerr under Settings
+    &rarr; Users if unwanted; Usher works either way.
     <button type="button" id="newplex-dismiss">Dismiss</button>
   </div>
   <label>Seerr URL</label>
   <input type="text" name="seerr_url" value="{_esc(s.seerr_url)}" placeholder="http://192.168.1.10:5056" required>
   <label>Seerr API Key</label>
   <input type="password" name="seerr_api_key" value="{_esc(s.seerr_api_key)}" autocomplete="off" required>
-  <label>Seerr Public URL <span class="note">(optional, for reverse-proxy links sent to users)</span></label>
+  <label>Seerr Public URL <span class="note">optional; used in user-facing links</span></label>
   <input type="text" name="seerr_public_url" value="{_esc(s.seerr_public_url)}" placeholder="https://seerr.example.com">
   <div class="btn-row divided">
     <button type="button" class="test-btn" data-test="seerr" data-form="seerr-form">Test</button>
@@ -684,14 +680,14 @@ def _settings_page(
 <form id="autofix-form" method="POST" action="/admin/autofix">
   {csrf}
   <h2>Auto-fix</h2>
-  <p class="intro">When a user reports a Video, Audio, or Subtitles issue, Usher can ask Radarr or Sonarr to delete the current file and trigger a new search. Configure the URLs and API keys below, then list the Telegram users allowed to use it. The admin always bypasses the per-day limit.</p>
+  <p class="intro">On a Video, Audio, or Subtitles issue, Radarr or Sonarr deletes the file and searches for a replacement.</p>
 
-  <label>Radarr URL <span class="note">(optional)</span></label>
+  <label>Radarr URL <span class="note">optional</span></label>
   <input type="text" name="radarr_url" value="{_esc(s.radarr_url)}" placeholder="http://192.168.1.10:7878">
   <label>Radarr API Key</label>
   <input type="password" name="radarr_api_key" value="{_esc(s.radarr_api_key)}" autocomplete="off">
 
-  <label>Sonarr URL <span class="note">(optional)</span></label>
+  <label>Sonarr URL <span class="note">optional</span></label>
   <input type="text" name="sonarr_url" value="{_esc(s.sonarr_url)}" placeholder="http://192.168.1.10:8989">
   <label>Sonarr API Key</label>
   <input type="password" name="sonarr_api_key" value="{_esc(s.sonarr_api_key)}" autocomplete="off">
@@ -702,7 +698,7 @@ def _settings_page(
     Allow all users
   </label>
   <input type="text" id="allowed-ids" name="allowed_autofix_telegram_ids" value="{_esc(ids_str)}" placeholder="123456,789012"{ids_lock}>
-  <div class="note">Comma-separated. Leave empty for admin-only. "Allow all" lets every signed-in user auto-fix.</div>
+  <div class="note">Comma-separated. Empty = admin only.</div>
 
   <label>Per-user daily limit</label>
   <label class="inline-check" for="daily-unlimited">
@@ -710,7 +706,7 @@ def _settings_page(
     Unlimited
   </label>
   <input type="text" id="daily-limit" name="daily_autofix_limit" value="{_esc(s.daily_autofix_limit)}" inputmode="numeric" pattern="[0-9]+" required{limit_lock}>
-  <div class="note">Auto-fix runs per non-admin user per 24 hours. Default {DEFAULT_DAILY_AUTOFIX_LIMIT}. "Unlimited" removes the cap for all users.</div>
+  <div class="note">Per non-admin user per 24 hours. Default {DEFAULT_DAILY_AUTOFIX_LIMIT}. Admin is exempt.</div>
 
   <div class="btn-row divided">
     <button type="button" class="test-btn" data-test="autofix" data-form="autofix-form">Test</button>
@@ -723,19 +719,19 @@ def _settings_page(
     boost_options = "".join(
         f'<option value="{val}"{" selected" if s.sabnzbd_boost == val else ""}>{label}</option>'
         for val, label in (("off", "Off"), ("high", "High priority"),
-                           ("force", "Force (starts immediately)")))
+                           ("force", "Force")))
     sabnzbd_form = f"""
 <form id="sabnzbd-form" method="POST" action="/admin/sabnzbd">
   {csrf}
   <h2>SABnzbd</h2>
-  <p class="intro">Optional. When configured, downloads that originate from this bot (requests and auto-fixes) can be bumped up SABnzbd's queue automatically.</p>
-  <label>SABnzbd URL <span class="note">(optional)</span></label>
+  <p class="intro">Optional. Bumps downloads this bot triggers up SABnzbd's queue.</p>
+  <label>SABnzbd URL <span class="note">optional</span></label>
   <input type="text" name="sabnzbd_url" value="{_esc(s.sabnzbd_url)}" placeholder="http://192.168.1.10:8080">
   <label>SABnzbd API Key</label>
   <input type="password" name="sabnzbd_api_key" value="{_esc(s.sabnzbd_api_key)}" autocomplete="off">
   <label>Auto-bump priority</label>
   <select name="sabnzbd_boost">{boost_options}</select>
-  <div class="note">Applied once per download, to anything this bot caused to be grabbed. "Force" starts the job even when the queue is paused or speed-limited.</div>
+  <div class="note">Applied once per download. Force starts the job even if the queue is paused.</div>
   <div class="btn-row divided">
     <button type="button" class="test-btn" data-test="sabnzbd" data-form="sabnzbd-form">Test</button>
     <button type="submit">Save</button>{marker("sabnzbd")}
@@ -748,13 +744,13 @@ def _settings_page(
 <form id="webhook-form" method="POST" action="/admin/webhook">
   {csrf}
   <h2>Webhook</h2>
-  <p>Usher receives webhook events from Seerr on this URL:</p>
+  <p>Seerr sends events to:</p>
   <div class="url-box">{_esc(webhook_url)}</div>
-  <div class="note">Configure in Seerr: Settings → Notifications → Webhook. Set the URL above and enable the <strong>Issue Reported</strong>, <strong>Issue Comment</strong>, and <strong>Issue Resolved</strong> events, plus the request events — <strong>Request Pending Approval</strong>, <strong>Request Approved</strong>, <strong>Request Automatically Approved</strong>, <strong>Request Declined</strong>, <strong>Request Available</strong>, and <strong>Request Processing Failed</strong> — so /request status updates reach users in Telegram.</div>
+  <div class="note">In Seerr: Settings → Notifications → Webhook. Set this URL and enable every issue and request event.</div>
 
   <label>Webhook Secret</label>
   <input type="password" id="webhook_secret" name="webhook_secret" value="{_esc(s.webhook_secret)}" autocomplete="off">
-  <div class="note">Paste the same value into Seerr's Webhook <code>Authorization Header</code> field. Usher rejects requests without a matching header. <strong>Test</strong> sends a synthetic event to the URL above using the currently <em>saved</em> secret, so Generate &rarr; Save &rarr; Test.</div>
+  <div class="note">Paste the same value into Seerr's <code>Authorization Header</code> field. Test uses the saved secret: Generate &rarr; Save &rarr; Test.</div>
   <div class="btn-row">
     <button type="button" class="secondary" id="wh-show">Show</button>
     <button type="button" class="secondary" id="wh-generate">Generate</button>
@@ -786,11 +782,11 @@ def _settings_page(
 <form method="POST" action="/admin/backup">
   {csrf}
   <h2>Download Backup</h2>
-  <div class="note">Downloads a ZIP containing settings.json, the mappings database, and the encryption key. Set a passphrase to encrypt it.</div>
-  <div class="note">⚠️ Without a passphrase the file contains the encryption key, every API key, the bot token, and all users' Plex tokens in a plain ZIP; anyone who obtains it fully controls the bot and its accounts.</div>
-  <label>Passphrase <span class="note">(strongly recommended)</span></label>
+  <div class="note">ZIP of settings, the mappings database, and the encryption key.</div>
+  <div class="note">⚠️ Unencrypted backups contain every key and token in plain text.</div>
+  <label>Passphrase <span class="note">recommended</span></label>
   <input type="password" name="passphrase" placeholder="Encrypts the backup">
-  <label><input type="checkbox" name="unencrypted_ok" value="1"> I understand the risk; download WITHOUT a passphrase</label>
+  <label><input type="checkbox" name="unencrypted_ok" value="1"> Download unencrypted anyway</label>
   <button type="submit">Download Backup</button>{marker("backup")}
 </form>
 
@@ -798,9 +794,9 @@ def _settings_page(
   {csrf}
   <h2>Restore from Backup</h2>
   <input type="file" name="backup" accept=".zip,.usher-backup,.hermes-backup" required>
-  <label>Passphrase <span class="note">(required only if the backup was wrapped)</span></label>
+  <label>Passphrase <span class="note">if encrypted</span></label>
   <input type="password" name="passphrase" placeholder="Leave blank for plain ZIP">
-  <div class="note">Overwrites settings, mappings DB, and encryption key after validating. A backup is created before restoring.</div>
+  <div class="note">Overwrites settings, mappings, and the encryption key. A snapshot is saved first.</div>
   <button type="submit" class="danger">Restore</button>{marker("restore")}
 </form>
 """
@@ -873,30 +869,30 @@ async def setup_get(request: web.Request) -> web.Response:
     if setup_token:
         token_field = """
   <h2>Setup Token</h2>
-  <p class="note">A one-time setup token was printed to the container logs on first run.
-  Paste it here to prove you have host access (run <code>docker logs usher | grep "setup token"</code>).</p>
+  <p class="note">Paste the one-time token from the container logs:
+  <code>docker logs usher | grep "setup token"</code></p>
   <label>Setup token</label>
   <input type="text" name="setup_token" required autocomplete="off">
 """
 
     body = _page("Setup", f"""
 <h1>Usher First-Time Setup</h1>
-<p>Configure the minimum settings needed to bring the bot online. You can change everything later from the admin UI.</p>
+<p>Minimum settings to bring the bot online. Everything can be changed later.</p>
 <form method="POST" action="/admin/setup">
   {_csrf_input(csrf)}
   {token_field}
   <h2>Admin Account</h2>
   <label>Username</label>
   <input type="text" name="username" required autofocus>
-  <label>Password <span class="note">(min 8 characters)</span></label>
+  <label>Password <span class="note">min 8 characters</span></label>
   <input type="password" name="password" required minlength="{ADMIN_PASSWORD_MIN_CHARS}">
   <label>Confirm password</label>
   <input type="password" name="confirm" required minlength="{ADMIN_PASSWORD_MIN_CHARS}">
 
   <h2>Telegram</h2>
-  <label>Telegram Bot Token <span class="note">(from @BotFather)</span></label>
+  <label>Telegram Bot Token <span class="note">from @BotFather</span></label>
   <input type="password" name="telegram_bot_token" value="{_esc(s.telegram_bot_token)}" required>
-  <label>Admin Telegram User ID <span class="note">(DM @userinfobot to get yours)</span></label>
+  <label>Admin Telegram User ID <span class="note">DM @userinfobot</span></label>
   <input type="text" name="admin_telegram_id" value="{_esc(admin_tg_val)}" inputmode="numeric" pattern="[0-9]+" required>
 
   <h2>Seerr</h2>
@@ -906,7 +902,7 @@ async def setup_get(request: web.Request) -> web.Response:
   <input type="password" name="seerr_api_key" value="{_esc(s.seerr_api_key)}" required>
 
   <button type="submit">Save &amp; Start Usher</button>
-  <div class="note">After saving, the container will restart to bring the bot online.</div>
+  <div class="note">Saving restarts the container.</div>
 </form>
 """)
     resp = web.Response(text=body, content_type="text/html")
@@ -990,7 +986,7 @@ async def setup_post(request: web.Request) -> web.Response:
 
     body = _page("Setup", """
 <h1>Setup Complete</h1>
-<p>Usher is restarting to bring the bot online. Refresh in about 10 seconds and log in.</p>
+<p>Usher is restarting. Refresh in about 10 seconds and log in.</p>
 """)
     return web.Response(text=body, content_type="text/html")
 
@@ -1227,7 +1223,7 @@ async def telegram_post(request: web.Request) -> web.Response:
     s.usher_public_url = public_url
     for flag in ("tg_notify_requester", "tg_notify_admin_requests",
                  "tg_notify_admin_failed", "tg_notify_issues",
-                 "tg_notify_subscriptions", "tg_progress_cards"):
+                 "tg_notify_subscriptions"):
         setattr(s, flag, form.get(flag) is not None)
     restart_needed = (token != _orig_token) or (admin_tg != _orig_admin)
     return await _save_and_render(

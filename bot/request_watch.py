@@ -132,15 +132,6 @@ async def refresh_arr_downloads(ctx, *, movies: bool, tv: bool) -> None:
             logger.debug("%s refresh failed (non-fatal)", key, exc_info=True)
 
 
-def _cards_enabled(bot_data: dict) -> bool:
-    """The tg_progress_cards toggle gates card EDITS only: watch rows,
-    webhook state/lifecycle, and the SABnzbd bump all keep running so the
-    toggle is purely cosmetic and re-enabling resumes painting mid-flight."""
-    settings_store = bot_data.get("settings_store")
-    return bool(getattr(getattr(settings_store, "settings", None),
-                        "tg_progress_cards", True))
-
-
 def _card_text(label: str, body_line: str, *, footer: bool = True) -> str:
     text = f"<b>{html.escape(label)}</b>\n{body_line}"
     if footer:
@@ -150,8 +141,6 @@ def _card_text(label: str, body_line: str, *, footer: bool = True) -> str:
 
 async def _edit_card(ctx, watch: dict, body_line: str, *,
                      footer: bool = True) -> bool:
-    if not _cards_enabled(ctx.bot_data):
-        return False
     try:
         await ctx.bot.edit_message_text(
             chat_id=watch["chat_id"],

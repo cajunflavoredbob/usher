@@ -81,7 +81,6 @@ class Settings:
     tg_notify_admin_failed: bool = True    # failed-download alarm to the admin
     tg_notify_issues: bool = True          # issue reported/comment/resolved DMs
     tg_notify_subscriptions: bool = True   # availability-watch fan-out
-    tg_progress_cards: bool = True         # morphing request/auto-fix cards
     allowed_autofix_telegram_ids: list[int] = field(default_factory=list)
     # When True, every linked user may auto-fix regardless of the allowlist
     # (the admin is always allowed). The list above is retained either way.
@@ -138,7 +137,6 @@ class Settings:
             tg_notify_admin_failed=bool(data.get("tg_notify_admin_failed", True)),
             tg_notify_issues=bool(data.get("tg_notify_issues", True)),
             tg_notify_subscriptions=bool(data.get("tg_notify_subscriptions", True)),
-            tg_progress_cards=bool(data.get("tg_progress_cards", True)),
             radarr_api_key=data.get("radarr_api_key", "") or "",
             sonarr_url=data.get("sonarr_url", "") or "",
             sonarr_api_key=data.get("sonarr_api_key", "") or "",

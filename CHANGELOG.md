@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-08-17
+
+Terser admin panel.
+
+### Changed
+- **Admin panel copy rewritten in a terse, direct voice.** Notes are one or
+  two short sentences; parentheticals are gone; the webhook section points
+  at Seerr's settings instead of enumerating every event name (the bot's
+  startup connection check still names anything missing).
+
+### Removed
+- **The progress-cards toggle.** Card edits are silent, so they never
+  belonged in the notification controls; cards are simply always on. A
+  saved `tg_progress_cards` key in settings.json is ignored.
+
 ## [0.17.0] - 2026-08-17
 
 Admin provisioning and notification controls.
