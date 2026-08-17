@@ -110,6 +110,12 @@ class PendingAutofix:
     issue_url: str
     started_at: str
     timeout_at: str
+    message_id: Optional[int] = None    # the confirmation message that morphs
+                                        # into a progress card (None = legacy
+                                        # row / send-only behavior)
+    last_progress: str = ""             # last rendered progress line (edit
+                                        # dedupe)
+    bumped: int = 0                     # SABnzbd priority boost applied
 
     async def is_complete(self, radarr, sonarr) -> tuple[bool, str]:
         """Returns (done, extra_suffix). Polymorphic dispatch over media_type
@@ -235,6 +241,51 @@ class UserStore:
                 )
                 """
             )
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS availability_subs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_id INTEGER NOT NULL,
+                    media_type TEXT NOT NULL,
+                    tmdb_id INTEGER NOT NULL,
+                    title TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    UNIQUE(telegram_id, media_type, tmdb_id)
+                )
+                """
+            )
+            c.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_subs_media
+                ON availability_subs(media_type, tmdb_id)
+                """
+            )
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS request_watches (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    media_type TEXT NOT NULL,
+                    tmdb_id INTEGER NOT NULL,
+                    label TEXT NOT NULL DEFAULT '',
+                    is4k INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'waiting',
+                    arr_id INTEGER,
+                    last_progress TEXT NOT NULL DEFAULT '',
+                    bumped INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    timeout_at TEXT NOT NULL
+                )
+                """
+            )
+            c.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_watch_media
+                ON request_watches(media_type, tmdb_id)
+                """
+            )
             # NOTE: idx_pending_status is created in _migrate_schema, after
             # column reconciliation -- an old-shape table may not have the
             # status column yet when this runs.
@@ -244,7 +295,7 @@ class UserStore:
     # schema; 0 = any pre-stamp database (CREATE TABLE IF NOT
     # EXISTS never reconciles an existing old-shape table, and a missing
     # column is a permanent poller kill).
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     # Full expected column sets, table -> (column, ADD COLUMN ddl). ALTER
     # TABLE ADD COLUMN needs a default for NOT NULL adds, so nullable/
@@ -268,6 +319,9 @@ class UserStore:
             ("expected_episode_ids", "ALTER TABLE pending_autofixes ADD COLUMN expected_episode_ids TEXT NOT NULL DEFAULT '[]'"),
             ("issue_url",            "ALTER TABLE pending_autofixes ADD COLUMN issue_url TEXT NOT NULL DEFAULT ''"),
             ("status",               "ALTER TABLE pending_autofixes ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'"),
+            ("message_id",           "ALTER TABLE pending_autofixes ADD COLUMN message_id INTEGER"),
+            ("last_progress",        "ALTER TABLE pending_autofixes ADD COLUMN last_progress TEXT NOT NULL DEFAULT ''"),
+            ("bumped",               "ALTER TABLE pending_autofixes ADD COLUMN bumped INTEGER NOT NULL DEFAULT 0"),
         ],
     }
 
@@ -415,6 +469,171 @@ class UserStore:
             plex_token_decrypt_failed=failed,
         )
 
+    # --- Request progress watches --------------------------------------------
+    # One row per /request confirmation message that morphs through the
+    # download. status: waiting (pending approval) -> grabbing -> gone
+    # (finalized rows are deleted, not kept).
+
+    async def add_request_watch(self, *, chat_id: int, message_id: int,
+                                user_id: int, media_type: str, tmdb_id: int,
+                                label: str, is4k: bool,
+                                status: str, timeout_hours: int) -> int:
+        def _do() -> int:
+            with self._conn() as c:
+                cur = c.execute(
+                    """
+                    INSERT INTO request_watches (
+                        chat_id, message_id, user_id, media_type, tmdb_id,
+                        label, is4k, status, timeout_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', ?))
+                    """,
+                    (chat_id, message_id, user_id, media_type, tmdb_id,
+                     label, 1 if is4k else 0, status,
+                     f"+{timeout_hours} hours"),
+                )
+                return cur.lastrowid
+
+        return await self._run(_do)
+
+    async def list_request_watches(self) -> list[dict]:
+        def _do() -> list[tuple]:
+            with self._conn() as c:
+                return c.execute(
+                    """
+                    SELECT id, chat_id, message_id, user_id, media_type,
+                           tmdb_id, label, is4k, status, arr_id,
+                           last_progress, bumped, timeout_at
+                    FROM request_watches ORDER BY id
+                    """
+                ).fetchall()
+
+        rows = await self._run(_do)
+        keys = ("id", "chat_id", "message_id", "user_id", "media_type",
+                "tmdb_id", "label", "is4k", "status", "arr_id",
+                "last_progress", "bumped", "timeout_at")
+        return [dict(zip(keys, r)) for r in rows]
+
+    async def find_request_watches(self, media_type: str,
+                                   tmdb_id: int) -> list[dict]:
+        def _do() -> list[tuple]:
+            with self._conn() as c:
+                return c.execute(
+                    """
+                    SELECT id, chat_id, message_id, user_id, media_type,
+                           tmdb_id, label, is4k, status, arr_id,
+                           last_progress, bumped, timeout_at
+                    FROM request_watches
+                    WHERE media_type = ? AND tmdb_id = ?
+                    """,
+                    (media_type, tmdb_id),
+                ).fetchall()
+
+        rows = await self._run(_do)
+        keys = ("id", "chat_id", "message_id", "user_id", "media_type",
+                "tmdb_id", "label", "is4k", "status", "arr_id",
+                "last_progress", "bumped", "timeout_at")
+        return [dict(zip(keys, r)) for r in rows]
+
+    async def update_request_watch(self, watch_id: int, **fields) -> None:
+        """Update whitelisted columns on one watch row."""
+        allowed = {"status", "arr_id", "last_progress", "bumped"}
+        updates = {k: v for k, v in fields.items() if k in allowed}
+        if not updates:
+            return
+
+        def _do():
+            with self._conn() as c:
+                sets = ", ".join(f"{k} = ?" for k in updates)
+                c.execute(
+                    f"UPDATE request_watches SET {sets} WHERE id = ?",
+                    (*updates.values(), watch_id))
+
+        await self._run(_do)
+
+    async def delete_request_watch(self, watch_id: int) -> None:
+        def _do():
+            with self._conn() as c:
+                c.execute("DELETE FROM request_watches WHERE id = ?",
+                          (watch_id,))
+
+        await self._run(_do)
+
+    # --- Availability subscriptions ------------------------------------------
+    # Strictly per-user: a user only ever sees and manages their own rows,
+    # and nothing renders who else (or how many others) watch a title.
+
+    async def add_subscription(self, telegram_id: int, media_type: str,
+                               tmdb_id: int, title: str) -> bool:
+        """Subscribe a user to a title's availability. Returns False when
+        the subscription already existed (idempotent re-tap)."""
+
+        def _do() -> bool:
+            with self._conn() as c:
+                cur = c.execute(
+                    """
+                    INSERT OR IGNORE INTO availability_subs
+                        (telegram_id, media_type, tmdb_id, title)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (telegram_id, media_type, tmdb_id, title),
+                )
+                return cur.rowcount > 0
+
+        return await self._run(_do)
+
+    async def remove_subscription(self, sub_id: int, telegram_id: int) -> bool:
+        """Delete one subscription -- only the owner's (the telegram_id
+        predicate makes a forged subdel callback a no-op)."""
+
+        def _do() -> bool:
+            with self._conn() as c:
+                cur = c.execute(
+                    "DELETE FROM availability_subs WHERE id = ? AND telegram_id = ?",
+                    (sub_id, telegram_id),
+                )
+                return cur.rowcount > 0
+
+        return await self._run(_do)
+
+    async def list_subscriptions(self, telegram_id: int) -> list[tuple]:
+        """A user's own subscriptions: [(id, media_type, tmdb_id, title)]."""
+
+        def _do() -> list[tuple]:
+            with self._conn() as c:
+                return c.execute(
+                    """
+                    SELECT id, media_type, tmdb_id, title
+                    FROM availability_subs WHERE telegram_id = ?
+                    ORDER BY id
+                    """,
+                    (telegram_id,),
+                ).fetchall()
+
+        return await self._run(_do)
+
+    async def pop_subscribers(self, media_type: str, tmdb_id: int) -> list[int]:
+        """All telegram_ids subscribed to a title, deleting the rows in the
+        same transaction (one-shot semantics: re-adds, auto-fix
+        replacements, and per-episode rescans can re-fire MEDIA_AVAILABLE,
+        and a consumed subscription must not fire twice)."""
+
+        def _do() -> list[int]:
+            with self._conn() as c:
+                rows = c.execute(
+                    """
+                    SELECT DISTINCT telegram_id FROM availability_subs
+                    WHERE media_type = ? AND tmdb_id = ?
+                    """,
+                    (media_type, tmdb_id),
+                ).fetchall()
+                c.execute(
+                    "DELETE FROM availability_subs WHERE media_type = ? AND tmdb_id = ?",
+                    (media_type, tmdb_id),
+                )
+                return [r[0] for r in rows]
+
+        return await self._run(_do)
+
     async def unlink(self, telegram_id: int) -> bool:
         def _do() -> bool:
             with self._conn() as c:
@@ -534,6 +753,7 @@ class UserStore:
         # params stay to populate them. Only tests exercise them today.
         sonarr_season: Optional[int] = None,
         expected_episode_ids: Optional[list[int]] = None,
+        message_id: Optional[int] = None,
     ) -> int:
         def _do() -> int:
             with self._conn() as c:
@@ -543,14 +763,14 @@ class UserStore:
                         chat_id, user_id, media_type,
                         radarr_movie_id, sonarr_series_id, sonarr_episode_id, sonarr_season,
                         expected_episode_ids, label, issue_id, issue_url,
-                        timeout_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', ?))
+                        message_id, timeout_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', ?))
                     """,
                     (
                         chat_id, user_id, media_type,
                         radarr_movie_id, sonarr_series_id, sonarr_episode_id, sonarr_season,
                         json.dumps(expected_episode_ids or []), label, issue_id, issue_url,
-                        f"+{timeout_hours} hours",
+                        message_id, f"+{timeout_hours} hours",
                     ),
                 )
                 return cur.lastrowid
@@ -565,7 +785,8 @@ class UserStore:
                     SELECT id, chat_id, user_id, media_type, radarr_movie_id,
                            sonarr_series_id, sonarr_episode_id, sonarr_season,
                            expected_episode_ids, label, issue_id, issue_url,
-                           started_at, timeout_at
+                           started_at, timeout_at, message_id, last_progress,
+                           bumped
                     FROM pending_autofixes
                     WHERE status = 'pending'
                     ORDER BY id
@@ -590,10 +811,45 @@ class UserStore:
                     expected_episode_ids=ids,
                     label=r[9], issue_id=r[10], issue_url=r[11],
                     started_at=r[12], timeout_at=r[13],
+                    message_id=r[14], last_progress=r[15] or "",
+                    bumped=r[16] or 0,
                 ))
             except Exception:
                 logger.exception("Skipping corrupt pending_autofix row id=%s", r[0])
         return out
+
+    async def set_autofix_message(self, pending_id: int,
+                                  message_id: int) -> None:
+        """Attach the confirmation message a fix's progress card lives on."""
+
+        def _do():
+            with self._conn() as c:
+                c.execute(
+                    "UPDATE pending_autofixes SET message_id = ? WHERE id = ?",
+                    (message_id, pending_id))
+
+        await self._run(_do)
+
+    async def set_autofix_progress(self, pending_id: int,
+                                   last_progress: str) -> None:
+        """Remember the last rendered progress line (edit dedupe)."""
+
+        def _do():
+            with self._conn() as c:
+                c.execute(
+                    "UPDATE pending_autofixes SET last_progress = ? WHERE id = ?",
+                    (last_progress, pending_id))
+
+        await self._run(_do)
+
+    async def mark_autofix_bumped(self, pending_id: int) -> None:
+        def _do():
+            with self._conn() as c:
+                c.execute(
+                    "UPDATE pending_autofixes SET bumped = 1 WHERE id = ?",
+                    (pending_id,))
+
+        await self._run(_do)
 
     async def mark_autofix_status(self, pending_id: int, status: str) -> None:
         """status: 'complete', 'timeout', or 'failed'."""

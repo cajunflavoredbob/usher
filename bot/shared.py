@@ -594,7 +594,7 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     if q is None or q.message is None or q.from_user is None:
         return
     # Detail cards are deliberately NOT recorded in the history (recording
-    # them would evict the live pick list after three ℹ️ taps and brick the
+    # them would evict the live pick list after three 🖼 taps and brick the
     # /request flow), so their Dismiss button is exempt from the gate. The
     # action is harmless: it only deletes the tapped card itself.
     if getattr(q, "data", None) == RQ_INFO_DISMISS:

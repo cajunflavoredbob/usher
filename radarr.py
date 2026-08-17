@@ -7,7 +7,7 @@ from typing import Optional
 
 import httpx
 
-from fix_result import FixResult
+from fix_result import FixResult, parse_queue_records
 from http_util import APIError, execute, json_or_raise
 
 logger = logging.getLogger("usher." + __name__)
@@ -68,6 +68,15 @@ class RadarrClient:
     async def trigger_search(self, movie_id: int) -> None:
         await execute(self._client, "POST", "/command", service=_SERVICE,
                       json={"name": "MoviesSearch", "movieIds": [movie_id]})
+
+    async def get_queue_progress(self, movie_id: int):
+        """Download progress for a movie's queue records, or None when the
+        queue holds nothing for it."""
+        r = await execute(self._client, "GET", "/queue/details",
+                          service=_SERVICE, params={"movieId": movie_id})
+        records = json_or_raise(r, service=_SERVICE, what="queue details",
+                                expect=list)
+        return parse_queue_records(records)
 
     async def movie_has_file(self, movie_id: int) -> bool:
         r = await execute(self._client, "GET", f"/movie/{movie_id}",

@@ -7,7 +7,7 @@ from typing import Optional
 
 import httpx
 
-from fix_result import FixResult
+from fix_result import FixResult, parse_queue_records
 from http_util import APIError, execute, json_or_raise
 
 logger = logging.getLogger("usher." + __name__)
@@ -223,6 +223,23 @@ class SonarrClient:
         if err is not None:
             return err
         return await self._run_episode_workflow(series=series, match=match, blocklist=True)
+
+    async def get_queue_progress(self, series_id: int,
+                                 episode_ids: "list[int] | None" = None):
+        """Download progress for a series' queue records (optionally only
+        the given episode ids), or None when nothing is queued."""
+        r = await execute(self._client, "GET", "/queue/details",
+                          service=_SERVICE, params={"seriesId": series_id})
+        records = json_or_raise(r, service=_SERVICE, what="queue details",
+                                expect=list)
+        if episode_ids:
+            wanted = set(episode_ids)
+            records = [rec for rec in records or []
+                       if isinstance(rec, dict)
+                       and (rec.get("episodeId") in wanted
+                            or any((e or {}).get("id") in wanted
+                                   for e in rec.get("episodes") or []))]
+        return parse_queue_records(records)
 
     async def episode_has_file(self, episode_id: int) -> bool:
         r = await execute(self._client, "GET", f"/episode/{episode_id}",

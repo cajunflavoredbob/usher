@@ -463,3 +463,25 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
     # request coming back as "New request" is noise.
     if admin_line and admin_id and not requester_is_admin:
         await _dm(admin_id, admin_line, with_requester=True)
+
+    # Morph any request cards tracking this media (approved -> grabbing,
+    # terminal events paint the final line and close the watch).
+    tmdb_for_watch = media.get("tmdbId")
+    type_for_watch = media.get("media_type")
+    if isinstance(tmdb_for_watch, int) and type_for_watch in ("movie", "tv"):
+        from bot.request_watch import apply_webhook_event
+        try:
+            await apply_webhook_event(app, nt, type_for_watch, tmdb_for_watch)
+        except Exception:
+            logger.exception("watch morph failed for %s", nt)
+
+    # Availability watches: one-shot fan-out to subscribers, minus whoever
+    # this event already DMed as the requester.
+    if nt == "MEDIA_AVAILABLE":
+        tmdb_id = media.get("tmdbId")
+        m_type = media.get("media_type")
+        if isinstance(tmdb_id, int) and m_type in ("movie", "tv"):
+            from bot.subscriptions import fan_out_availability
+            already = {requester_chat_id} if requester_chat_id else set()
+            await fan_out_availability(app, m_type, tmdb_id, title_line,
+                                       already_notified=already)

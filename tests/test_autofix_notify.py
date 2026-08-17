@@ -200,3 +200,61 @@ async def test_failed_mark_suppresses_timeout_dm(monkeypatch):
     ctx, _store = _poll_ctx(fix, mark_side_effect=RuntimeError("db locked"))
     await poll_pending_autofixes(ctx)
     assert notified == []
+
+
+# --- morphing progress card ---------------------------------------------------
+
+async def test_paint_progress_edits_card_and_dedupes():
+    from unittest.mock import AsyncMock
+    from types import SimpleNamespace
+    from fix_result import QueueProgress
+    from bot.autofix_poll import _paint_progress
+    from tests._handler_harness import make_ctx
+
+    ctx = make_ctx()
+    store = ctx.bot_data["store"]
+    fix = SimpleNamespace(id=1, chat_id=100, message_id=77, media_type="movie",
+                          radarr_movie_id=9, sonarr_series_id=None,
+                          sonarr_episode_id=None, label="Movie (2026)",
+                          last_progress="", bumped=0)
+    ctx.bot_data["radarr"].get_queue_progress = AsyncMock(
+        return_value=QueueProgress(percent=61, timeleft="00:05:00",
+                                   download_ids=["nzo"], count=1))
+    await _paint_progress(ctx, store, fix)
+    kwargs = ctx.bot.edit_message_text.call_args.kwargs
+    assert kwargs["message_id"] == 77 and "61%" in kwargs["text"]
+    store.set_autofix_progress.assert_awaited()
+
+    # unchanged progress -> no edit
+    ctx.bot.edit_message_text.reset_mock()
+    fix.last_progress = kwargs["text"].split("\n")[1]
+    await _paint_progress(ctx, store, fix)
+    ctx.bot.edit_message_text.assert_not_awaited()
+
+
+async def test_paint_progress_skips_legacy_rows():
+    from types import SimpleNamespace
+    from bot.autofix_poll import _paint_progress
+    from tests._handler_harness import make_ctx
+
+    ctx = make_ctx()
+    fix = SimpleNamespace(id=1, chat_id=100, message_id=None,
+                          media_type="movie", radarr_movie_id=9,
+                          sonarr_series_id=None, sonarr_episode_id=None,
+                          label="M", last_progress="", bumped=0)
+    await _paint_progress(ctx, ctx.bot_data["store"], fix)
+    ctx.bot.edit_message_text.assert_not_awaited()
+
+
+async def test_paint_progress_searching_state_when_queue_empty():
+    from types import SimpleNamespace
+    from bot.autofix_poll import _paint_progress
+    from tests._handler_harness import make_ctx
+
+    ctx = make_ctx()
+    fix = SimpleNamespace(id=1, chat_id=100, message_id=77, media_type="movie",
+                          radarr_movie_id=9, sonarr_series_id=None,
+                          sonarr_episode_id=None, label="M",
+                          last_progress="", bumped=0)
+    await _paint_progress(ctx, ctx.bot_data["store"], fix)
+    assert "Searching" in ctx.bot.edit_message_text.call_args.kwargs["text"]

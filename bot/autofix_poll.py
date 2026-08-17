@@ -75,6 +75,9 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 except Exception:
                     logger.exception("couldn't mark fix %d timed out; retrying next tick", fix.id)
                     continue
+                await _paint_progress(
+                    ctx, store, fix,
+                    final=f"⏱️ Timed out after {AUTOFIX_TIMEOUT_HOURS}h — no new file imported.")
                 await _notify_timeout(ctx, fix)
                 continue
 
@@ -83,7 +86,10 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 done, extra = await fix.is_complete(radarr, sonarr)
                 if done:
                     await store.mark_autofix_status(fix.id, "complete")
+                    await _paint_progress(ctx, store, fix, final="🎉 Replacement downloaded.")
                     await _notify_complete(ctx, fix, extra)
+                else:
+                    await _paint_progress(ctx, store, fix)
             except NotFoundAPIError:
                 # Media was deleted from Sonarr/Radarr between enqueue and poll.
                 logger.info("poll: media removed for fix %d; marking failed", fix.id)
@@ -95,6 +101,55 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 logger.exception("poll failed for fix %d", fix.id)
         finally:
             _inflight.discard(fix.id)
+
+
+async def _paint_progress(ctx: ContextTypes.DEFAULT_TYPE, store: UserStore,
+                          fix, final: str = "") -> None:
+    """Morph the /issue confirmation message through the replacement: live
+    queue percent/ETA while downloading, a final line on completion or
+    timeout. Legacy rows (no message_id) keep the send-only behavior. All
+    failures are non-fatal -- the completion/timeout DMs remain the
+    guaranteed channel."""
+    if not fix.message_id:
+        return
+    try:
+        if final:
+            line = final
+        else:
+            progress = None
+            if fix.media_type == "movie" and fix.radarr_movie_id:
+                radarr = ctx.bot_data.get("radarr")
+                if radarr:
+                    progress = await radarr.get_queue_progress(fix.radarr_movie_id)
+            elif fix.media_type == "tv" and fix.sonarr_series_id:
+                sonarr = ctx.bot_data.get("sonarr")
+                if sonarr:
+                    progress = await sonarr.get_queue_progress(
+                        fix.sonarr_series_id,
+                        [fix.sonarr_episode_id] if fix.sonarr_episode_id else None)
+            if progress is None:
+                line = "🔎 Searching for a replacement…"
+            else:
+                line = f"⬇️ Replacing — {progress.percent}%"
+                timeleft = (progress.timeleft or "").strip()
+                if timeleft and timeleft != "00:00:00":
+                    line += f" · ~{timeleft} left"
+                if not fix.bumped and progress.download_ids:
+                    from bot.request_watch import maybe_bump_priority
+                    if await maybe_bump_priority(ctx, progress.download_ids):
+                        await store.mark_autofix_bumped(fix.id)
+                        fix.bumped = 1
+        if line == fix.last_progress:
+            return
+        await ctx.bot.edit_message_text(
+            chat_id=fix.chat_id,
+            message_id=fix.message_id,
+            text=(f"🔧 Auto-fix: <b>{html.escape(fix.label)}</b>\n{line}"),
+            parse_mode="HTML",
+        )
+        await store.set_autofix_progress(fix.id, line)
+    except Exception:
+        logger.debug("autofix progress paint failed (non-fatal)", exc_info=True)
 
 
 def _issue_line(fix) -> list[str]:

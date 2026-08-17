@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-08-16
+
+Discovery, availability watches, and live download progress.
+
+### Added
+- **`/trending`** — browse Trending, Popular Movies, Popular Shows, and
+  Upcoming as text-forward numbered lists with one-tap category switching.
+  Every result is immediately requestable (the tap drops straight into the
+  /request flow) and carries the same 🖼 poster/detail cards as search.
+  Lists are TMDB-driven only: nothing surfaces other users' requests or
+  activity.
+- **Availability watches** — detail cards on titles that aren't available
+  yet grow a 🔔 "Notify me when available" button; `/subscriptions` lists
+  your watches with one-tap unwatch. Watches are strictly private
+  (nobody can see anyone else's, or that anyone else has one) and
+  one-shot: consumed on the first availability event, so re-grabs and
+  auto-fix replacements can't re-fire them.
+- **Morphing request cards** — the /request confirmation message now edits
+  in place through the download's life: waiting for approval → approved
+  and grabbing → live percent and time-remaining from Radarr/Sonarr →
+  ✅ available (or declined/failed), driven by a background poller plus
+  the Seerr webhook events. Auto-fix confirmations morph the same way
+  while the replacement downloads; the interactive completion/timeout DMs
+  are unchanged.
+- **SABnzbd integration** — a new admin tab (URL, API key, connection
+  Test) with an **auto-bump priority** option: Off / High / Force. When
+  enabled, any download this bot caused to be grabbed (requests and
+  auto-fixes) gets its SABnzbd queue priority raised automatically, once
+  per download.
+- The bot now **registers its Telegram command menu at startup** (with an
+  admin-scoped variant including /status), so new commands appear in the
+  menu without touching BotFather — 0.15.0's /request shipped invisible
+  because the menu was last set by hand long ago.
+- Search/browse detail buttons are labeled 🖼 instead of ℹ️, which
+  rendered confusably close to the numbered pick buttons.
+
+
 ## [0.15.0] - 2026-08-16
 
 Media requesting. Users can now ask for movies and shows through the bot,

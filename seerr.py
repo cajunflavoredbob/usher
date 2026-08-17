@@ -461,14 +461,12 @@ class SeerrClient:
             return await self._as_user(as_plex_token)
         return self._client
 
-    async def search(self, query: str,
-                     limit: int = SEARCH_RESULT_LIMIT) -> list[MediaResult]:
-        """Search Seerr for movies + TV shows matching the query."""
-        r = await execute(self._client, "GET", "/search", service=_SERVICE,
-                          params={"query": query})
-        data = _json_or_raise(r, what="search")
+    @staticmethod
+    def _parse_media_results(items: list, limit: int) -> list[MediaResult]:
+        """Shared result parser for /search and /discover/* (same shapes)."""
         out: list[MediaResult] = []
-        for item in data.get("results", []):
+        for item in items or []:
+            item = item or {}
             mt = item.get("mediaType")
             if mt not in ("movie", "tv"):
                 continue  # skip "person" and anything else
@@ -500,6 +498,36 @@ class SeerrClient:
             if len(out) >= limit:
                 break
         return out
+
+    async def search(self, query: str,
+                     limit: int = SEARCH_RESULT_LIMIT) -> list[MediaResult]:
+        """Search Seerr for movies + TV shows matching the query."""
+        r = await execute(self._client, "GET", "/search", service=_SERVICE,
+                          params={"query": query})
+        data = _json_or_raise(r, what="search")
+        return self._parse_media_results(data.get("results"), limit)
+
+    # /discover categories the bot exposes -> Seerr endpoint paths. Only
+    # TMDB-driven lists: nothing here surfaces other users' requests or
+    # activity (deliberate privacy constraint on the browse feature).
+    DISCOVER_PATHS: dict = {
+        "trending": "/discover/trending",
+        "movies": "/discover/movies",
+        "tv": "/discover/tv",
+        "upmovies": "/discover/movies/upcoming",
+        "uptv": "/discover/tv/upcoming",
+    }
+
+    async def discover(self, category: str,
+                       limit: int = SEARCH_RESULT_LIMIT) -> list[MediaResult]:
+        """One page of a TMDB discovery list (trending/popular/upcoming),
+        same result shape as search."""
+        path = self.DISCOVER_PATHS.get(category)
+        if path is None:
+            raise ValueError(f"unknown discover category: {category}")
+        r = await execute(self._client, "GET", path, service=_SERVICE)
+        data = _json_or_raise(r, what="discover")
+        return self._parse_media_results(data.get("results"), limit)
 
     async def get_tv_seasons(self, tmdb_id: int) -> tuple[list[TvSeason], Optional[int]]:
         """Return (seasons, tvdb_id) for a TV show. Includes season 0 because

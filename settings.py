@@ -69,6 +69,11 @@ class Settings:
     radarr_api_key: str = ""
     sonarr_url: str = ""
     sonarr_api_key: str = ""
+    sabnzbd_url: str = ""
+    sabnzbd_api_key: str = ""
+    # Queue-priority boost for downloads that originate from this bot
+    # (requests + auto-fixes): "off", "high", or "force".
+    sabnzbd_boost: str = "off"
     allowed_autofix_telegram_ids: list[int] = field(default_factory=list)
     # When True, every linked user may auto-fix regardless of the allowlist
     # (the admin is always allowed). The list above is retained either way.
@@ -115,6 +120,11 @@ class Settings:
             seerr_api_key=data.get("seerr_api_key", "") or "",
             seerr_public_url=data.get("seerr_public_url", "") or "",
             radarr_url=data.get("radarr_url", "") or "",
+            sabnzbd_url=data.get("sabnzbd_url", "") or "",
+            sabnzbd_api_key=data.get("sabnzbd_api_key", "") or "",
+            sabnzbd_boost=(data.get("sabnzbd_boost") or "off")
+            if (data.get("sabnzbd_boost") or "off") in ("off", "high", "force")
+            else "off",
             radarr_api_key=data.get("radarr_api_key", "") or "",
             sonarr_url=data.get("sonarr_url", "") or "",
             sonarr_api_key=data.get("sonarr_api_key", "") or "",

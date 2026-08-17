@@ -833,7 +833,8 @@ async def _submit_issue_inner(
                                 # expected-episodes kwargs were always None and are gone.
                                 kwargs["sonarr_series_id"] = poll_info.get("series_id")
                                 kwargs["sonarr_episode_id"] = poll_info.get("episode_id")
-                            await store.add_pending_autofix(**kwargs)
+                            ctx.user_data["_pending_autofix_id"] = (
+                                await store.add_pending_autofix(**kwargs))
                             prefix = "🔧" if result.ok else "⚠️"
                             lines.append(f"{prefix} Auto-fix: {result.message}")
                             lines.append(
@@ -851,7 +852,15 @@ async def _submit_issue_inner(
                 end_action(ctx, media_key)
 
     lines.append("\nUse /tickets to manage it.")
-    await update.effective_message.reply_text("\n".join(lines))
+    sent = await update.effective_message.reply_text("\n".join(lines))
+    # If a poller row was enqueued this submit, attach the confirmation
+    # message so the poll ticks can morph it into a progress card.
+    pending_id = ctx.user_data.pop("_pending_autofix_id", None)
+    if pending_id and getattr(sent, "message_id", None):
+        try:
+            await store.set_autofix_message(pending_id, sent.message_id)
+        except Exception:
+            logger.exception("couldn't attach autofix card message")
     ctx.user_data.clear()
     return ConversationHandler.END
 

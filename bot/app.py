@@ -24,6 +24,7 @@ from plex import PlexClient
 from radarr import RadarrClient
 from seerr import SeerrClient, REQUIRED_WEBHOOK_TYPES
 from settings import SettingsStore, load_or_create_session_secret
+from sabnzbd import SabnzbdClient
 from sonarr import SonarrClient
 from store import TokenCrypto, UserStore
 from webhook import attach_webhook, start_http_server
@@ -31,7 +32,13 @@ from webui import attach_webui
 from _version import __version__ as USHER_VERSION
 
 from bot.autofix_poll import poll_pending_autofixes
+from bot.request_watch import poll_request_watches
 from bot.callback_prefixes import (
+    DV_CATEGORY,
+    DV_INFO,
+    DV_PAGE,
+    SUB_ADD,
+    SUB_DEL,
     RQ_INFO_DISMISS,
     RQ_LIST_CANCEL,
     LINK_HELP,
@@ -45,6 +52,8 @@ from bot.callback_prefixes import (
 )
 from bot.issue_flow import _issue_conversation
 from bot.link_flow import _link_conversation, cmd_link_didnt_work, cmd_unlink
+from bot.discover_cmd import cmd_trending, dv_category, dv_info, dv_page
+from bot.subscriptions import cmd_subscriptions, sub_add, sub_del
 from bot.request_flow import (_RQ_KEYS, _request_conversation,
                               request_info_dismiss)
 from bot.requests_cmd import cmd_requests, rq_list_cancel
@@ -78,6 +87,7 @@ from const import (
     AUTOFIX_POLL_FIRST_DELAY_S,
     AUTOFIX_POLL_INTERVAL_S,
     CLIENT_CLOSE_GRACE_S,
+    REQUEST_WATCH_POLL_INTERVAL_S,
 )
 
 logging.basicConfig(
@@ -104,7 +114,7 @@ def _build_clients_from_settings(app: Application) -> None:
     # the time it ran (race) and close those instead. Capture-then-close is
     # the only safe order.
     old_clients: list[tuple[str, object]] = []
-    for key in ("seerr", "radarr", "sonarr"):
+    for key in ("seerr", "radarr", "sonarr", "sabnzbd"):
         c = app.bot_data.get(key)
         if c is not None and hasattr(c, "close"):
             old_clients.append((key, c))
@@ -115,6 +125,7 @@ def _build_clients_from_settings(app: Application) -> None:
     ) if (s.seerr_url and s.seerr_api_key) else None
     radarr = RadarrClient(s.radarr_url, s.radarr_api_key) if (s.radarr_url and s.radarr_api_key) else None
     sonarr = SonarrClient(s.sonarr_url, s.sonarr_api_key) if (s.sonarr_url and s.sonarr_api_key) else None
+    sabnzbd = SabnzbdClient(s.sabnzbd_url, s.sabnzbd_api_key) if (s.sabnzbd_url and s.sabnzbd_api_key) else None
 
     allowlist = set(s.allowed_autofix_telegram_ids)
     if not allowlist:
@@ -123,6 +134,7 @@ def _build_clients_from_settings(app: Application) -> None:
     app.bot_data["seerr"] = seerr
     app.bot_data["radarr"] = radarr
     app.bot_data["sonarr"] = sonarr
+    app.bot_data["sabnzbd"] = sabnzbd
     app.bot_data["allowlist"] = allowlist
     app.bot_data["autofix_allow_all"] = s.autofix_allow_all
 
@@ -169,10 +181,11 @@ def _build_clients_from_settings(app: Application) -> None:
             pass
 
     logger.info(
-        "Clients (re)built: Seerr=%s Radarr=%s Sonarr=%s allowlist=%d",
+        "Clients (re)built: Seerr=%s Radarr=%s Sonarr=%s SABnzbd=%s allowlist=%d",
         "yes" if seerr else "no",
         "yes" if radarr else "no",
         "yes" if sonarr else "no",
+        "yes" if sabnzbd else "no",
         len(allowlist),
     )
 
@@ -181,7 +194,8 @@ async def _check_connections(app: Application) -> dict[str, str]:
     """Probe configured services via each client's `ping()`. No private-attr
     access. Returns dict of service -> status string."""
     out: dict[str, str] = {"Usher": f"✅ {USHER_VERSION}"}
-    for key, label in (("seerr", "Seerr"), ("radarr", "Radarr"), ("sonarr", "Sonarr")):
+    for key, label in (("seerr", "Seerr"), ("radarr", "Radarr"),
+                       ("sonarr", "Sonarr"), ("sabnzbd", "SABnzbd")):
         client = app.bot_data.get(key)
         if client is None:
             out[label] = "— not configured"
@@ -233,6 +247,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             "  /issue — report a problem with a movie or TV show\n"
             "  /request — request a movie or TV show\n"
             "  /requests — list your requests\n"
+            "  /trending — browse trending, popular, and upcoming\n"
+            "  /subscriptions — titles you're watching for availability\n"
             "  /tickets — list your open tickets\n"
             "  /help — show this",
             parse_mode="Markdown",
@@ -255,6 +271,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "  /issue — report a problem with a movie or TV show",
         "  /request — request a movie or TV show",
         "  /requests — list your requests",
+        "  /trending — browse trending, popular, and upcoming",
+        "  /subscriptions — titles you're watching for availability",
         "  /tickets — list your open tickets",
         "  /status — connection diagnostics (admin only)",
         "  /help — show this",
@@ -341,6 +359,8 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("tickets", cmd_tickets))
     app.add_handler(CommandHandler("requests", cmd_requests))
+    app.add_handler(CommandHandler("trending", cmd_trending))
+    app.add_handler(CommandHandler("subscriptions", cmd_subscriptions))
     app.add_handler(issue_conv)
     app.add_handler(request_conv)
     app.add_handler(resolve_conv)
@@ -348,6 +368,13 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     # live even when no conversation is active.
     app.add_handler(CallbackQueryHandler(rq_list_cancel, pattern=fr"^{RQ_LIST_CANCEL}:\d+$"))
     app.add_handler(CallbackQueryHandler(request_info_dismiss, pattern=fr"^{RQ_INFO_DISMISS}$"))
+    # /trending browse callbacks (category switch / paging / detail cards).
+    app.add_handler(CallbackQueryHandler(dv_category, pattern=fr"^{DV_CATEGORY}:"))
+    app.add_handler(CallbackQueryHandler(dv_page, pattern=fr"^{DV_PAGE}:"))
+    app.add_handler(CallbackQueryHandler(dv_info, pattern=fr"^{DV_INFO}:"))
+    # Availability-watch callbacks (detail-card 🔔 + /subscriptions ❌).
+    app.add_handler(CallbackQueryHandler(sub_add, pattern=fr"^{SUB_ADD}:"))
+    app.add_handler(CallbackQueryHandler(sub_del, pattern=fr"^{SUB_DEL}:"))
     # Ticket-management callbacks (must be registered before the conversation
     # so the non-conversation taps -- open / close-menu / close-direct -- work
     # even when no conversation is active)
@@ -365,6 +392,12 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CallbackQueryHandler(unmatched_callback))
     app.add_error_handler(on_error)
 
+    app.job_queue.run_repeating(
+        poll_request_watches,
+        interval=REQUEST_WATCH_POLL_INTERVAL_S,
+        first=AUTOFIX_POLL_FIRST_DELAY_S,
+        name="request_watch_poll",
+    )
     app.job_queue.run_repeating(
         poll_pending_autofixes,
         interval=AUTOFIX_POLL_INTERVAL_S,
@@ -393,11 +426,52 @@ async def _prune_autofix_history_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         logger.exception("Autofix-history prune failed (will retry tomorrow)")
 
 
+# Telegram's command menu, registered at every startup so it always matches
+# the code. Without this the menu is whatever was last typed into BotFather
+# by hand and silently goes stale when commands are added (0.15.0 shipped
+# /request with no menu entry).
+_BOT_COMMANDS = [
+    ("link", "sign in with Plex (DM only)"),
+    ("unlink", "remove your link"),
+    ("request", "request a movie or TV show"),
+    ("requests", "list your requests"),
+    ("trending", "browse trending, popular, and upcoming"),
+    ("subscriptions", "titles you're watching for availability"),
+    ("issue", "report a problem with a movie or TV show"),
+    ("tickets", "list your open tickets"),
+    ("help", "show commands and status"),
+]
+_ADMIN_BOT_COMMANDS = _BOT_COMMANDS + [
+    ("status", "connection diagnostics"),
+]
+
+
+async def _register_commands(app: Application) -> None:
+    """Publish the command menu: the default scope for everyone, plus an
+    admin-chat scope that appends /status. Failure is non-fatal (the menu
+    is cosmetic; commands work regardless)."""
+    from telegram import BotCommand, BotCommandScopeChat
+    try:
+        await app.bot.set_my_commands(
+            [BotCommand(c, d) for c, d in _BOT_COMMANDS])
+        admin_id = app.bot_data.get("admin_id")
+        if admin_id:
+            await app.bot.set_my_commands(
+                [BotCommand(c, d) for c, d in _ADMIN_BOT_COMMANDS],
+                scope=BotCommandScopeChat(chat_id=admin_id),
+            )
+        logger.info("Registered %d bot commands (+admin scope)",
+                    len(_BOT_COMMANDS))
+    except Exception:
+        logger.exception("set_my_commands failed (menu may be stale)")
+
+
 async def _post_init(app: Application) -> None:
     """Start the HTTP server (webhook + webui), run startup checks, DM admin.
     Server first: the probes retry with backoff and can take 1-2 minutes
     with all three services down, during which /healthz and the webhook
     receiver would look dead to health checks."""
+    await _register_commands(app)
     web_app = web.Application(client_max_size=ADMIN_UPLOAD_MAX_BYTES)
 
     async def _on_comment(payload: dict) -> None:

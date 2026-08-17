@@ -49,3 +49,46 @@ class FixResult:
     def failed(cls, message: str, steps_done: Optional[list[str]] = None) -> "FixResult":
         return cls(status="failed", message=message,
                    steps_done=list(steps_done) if steps_done else [])
+
+
+@dataclass
+class QueueProgress:
+    """Aggregate download progress for the queue records of one movie or
+    series, from the arr /queue/details endpoints. Backs the morphing
+    request/auto-fix cards and the SABnzbd priority boost."""
+    percent: int              # 0-100 across all records (size-weighted)
+    timeleft: str             # arr's "00:14:32" string from the largest record, "" unknown
+    download_ids: list        # download-client ids (SABnzbd nzo ids) seen
+    count: int                # queue records aggregated
+
+
+def parse_queue_records(records: list) -> "QueueProgress | None":
+    """Fold arr queue/details records into one QueueProgress; None when the
+    queue holds nothing for this media (finished, or not grabbed yet)."""
+    total = left = 0.0
+    download_ids: list = []
+    timeleft = ""
+    biggest = -1.0
+    count = 0
+    for rec in records or []:
+        if not isinstance(rec, dict):
+            continue
+        count += 1
+        try:
+            size = float(rec.get("size") or 0)
+            sizeleft = float(rec.get("sizeleft") or 0)
+        except (TypeError, ValueError):
+            size = sizeleft = 0.0
+        total += size
+        left += sizeleft
+        if size > biggest:
+            biggest = size
+            timeleft = str(rec.get("timeleft") or "")
+        did = rec.get("downloadId")
+        if isinstance(did, str) and did:
+            download_ids.append(did)
+    if count == 0:
+        return None
+    percent = int(round((total - left) / total * 100)) if total > 0 else 0
+    return QueueProgress(percent=max(0, min(100, percent)), timeleft=timeleft,
+                         download_ids=download_ids, count=count)

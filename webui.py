@@ -268,7 +268,7 @@ h1, h2 { color: var(--fg); }
 h2 { margin-top: 0; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
 form { background: var(--surface); padding: 20px; border-radius: 8px; margin-bottom: 20px; }
 label { display: block; margin: 12px 0 4px; font-weight: 600; color: var(--label); }
-input[type="text"], input[type="password"], input[type="file"], textarea {
+input[type="text"], input[type="password"], input[type="file"], textarea, select {
   width: 100%; box-sizing: border-box; padding: 8px;
   border: 1px solid var(--border); border-radius: 4px;
   background: var(--input-bg); color: var(--fg); font-size: 14px; }
@@ -336,6 +336,7 @@ code { background: var(--code-bg); padding: 2px 6px; border-radius: 3px; font-si
 #tab-telegram:checked ~ .tab-labels label[for="tab-telegram"],
 #tab-seerr:checked    ~ .tab-labels label[for="tab-seerr"],
 #tab-autofix:checked  ~ .tab-labels label[for="tab-autofix"],
+#tab-sabnzbd:checked  ~ .tab-labels label[for="tab-sabnzbd"],
 #tab-webhook:checked  ~ .tab-labels label[for="tab-webhook"],
 #tab-account:checked  ~ .tab-labels label[for="tab-account"] {
   background: var(--surface); color: var(--fg); border-color: var(--border);
@@ -345,6 +346,7 @@ code { background: var(--code-bg); padding: 2px 6px; border-radius: 3px; font-si
 #tab-telegram:checked ~ .tab-contents .tab-c-telegram,
 #tab-seerr:checked    ~ .tab-contents .tab-c-seerr,
 #tab-autofix:checked  ~ .tab-contents .tab-c-autofix,
+#tab-sabnzbd:checked  ~ .tab-contents .tab-c-sabnzbd,
 #tab-webhook:checked  ~ .tab-contents .tab-c-webhook,
 #tab-account:checked  ~ .tab-contents .tab-c-account { display: block; }
 /* The first card in a pane attaches to the tab strip: squared top corners
@@ -571,7 +573,7 @@ def _flash(message: str = "", error: str = "") -> str:
     return out
 
 
-TAB_KEYS = ("telegram", "seerr", "autofix", "webhook", "account")
+TAB_KEYS = ("telegram", "seerr", "autofix", "sabnzbd", "webhook", "account")
 
 
 def _settings_page(
@@ -702,6 +704,30 @@ def _settings_page(
 </form>
 """
 
+    boost_options = "".join(
+        f'<option value="{val}"{" selected" if s.sabnzbd_boost == val else ""}>{label}</option>'
+        for val, label in (("off", "Off"), ("high", "High priority"),
+                           ("force", "Force (starts immediately)")))
+    sabnzbd_form = f"""
+<form id="sabnzbd-form" method="POST" action="/admin/sabnzbd">
+  {csrf}
+  <h2>SABnzbd</h2>
+  <p class="intro">Optional. When configured, downloads that originate from this bot (requests and auto-fixes) can be bumped up SABnzbd's queue automatically.</p>
+  <label>SABnzbd URL <span class="note">(optional)</span></label>
+  <input type="text" name="sabnzbd_url" value="{_esc(s.sabnzbd_url)}" placeholder="http://192.168.1.10:8080">
+  <label>SABnzbd API Key</label>
+  <input type="password" name="sabnzbd_api_key" value="{_esc(s.sabnzbd_api_key)}" autocomplete="off">
+  <label>Auto-bump priority</label>
+  <select name="sabnzbd_boost">{boost_options}</select>
+  <div class="note">Applied once per download, to anything this bot caused to be grabbed. "Force" starts the job even when the queue is paused or speed-limited.</div>
+  <div class="btn-row divided">
+    <button type="button" class="test-btn" data-test="sabnzbd" data-form="sabnzbd-form">Test</button>
+    <button type="submit">Save</button>{marker("sabnzbd")}
+    <span class="test-detail" data-detail="sabnzbd"></span>
+  </div>
+</form>
+"""
+
     webhook_form = f"""
 <form id="webhook-form" method="POST" action="/admin/webhook">
   {csrf}
@@ -775,12 +801,14 @@ def _settings_page(
   <input type="radio" name="tab" id="tab-telegram"{chk('telegram')}>
   <input type="radio" name="tab" id="tab-seerr"{chk('seerr')}>
   <input type="radio" name="tab" id="tab-autofix"{chk('autofix')}>
+  <input type="radio" name="tab" id="tab-sabnzbd"{chk('sabnzbd')}>
   <input type="radio" name="tab" id="tab-webhook"{chk('webhook')}>
   <input type="radio" name="tab" id="tab-account"{chk('account')}>
   <div class="tab-labels">
     <label for="tab-telegram">Telegram</label>
     <label for="tab-seerr">Seerr</label>
     <label for="tab-autofix">Auto-fix</label>
+    <label for="tab-sabnzbd">SABnzbd</label>
     <label for="tab-webhook">Webhook</label>
     <label for="tab-account">Account</label>
   </div>
@@ -788,6 +816,7 @@ def _settings_page(
     <div class="tab-content tab-c-telegram">{telegram_form}</div>
     <div class="tab-content tab-c-seerr">{seerr_form}</div>
     <div class="tab-content tab-c-autofix">{autofix_form}</div>
+    <div class="tab-content tab-c-sabnzbd">{sabnzbd_form}</div>
     <div class="tab-content tab-c-webhook">{webhook_form}</div>
     <div class="tab-content tab-c-account">{account_section}</div>
   </div>
@@ -1274,6 +1303,30 @@ async def autofix_post(request: web.Request) -> web.Response:
     return await _save_and_render(request, active_tab="autofix")
 
 
+async def sabnzbd_post(request: web.Request) -> web.Response:
+    store: SettingsStore = request.app["settings_store"]
+    form = await request.post()
+    csrf_resp = _csrf_check_or_403(request, form)
+    if csrf_resp is not None:
+        return csrf_resp
+    s = store.settings
+    value = (form.get("sabnzbd_url") or "").strip()
+    url_err = validate_public_url(value) if value else None
+    if url_err:
+        return web.Response(
+            text=_settings_page(s, error=f"SABnzbd URL: {url_err}",
+                                active_tab="sabnzbd",
+                                webhook_url=_webhook_url_from_request(request),
+                                csrf_token=csrf_for_request(request)),
+            content_type="text/html", status=400,
+        )
+    s.sabnzbd_url = value
+    s.sabnzbd_api_key = (form.get("sabnzbd_api_key") or "").strip()
+    boost = (form.get("sabnzbd_boost") or "off").strip()
+    s.sabnzbd_boost = boost if boost in ("off", "high", "force") else "off"
+    return await _save_and_render(request, active_tab="sabnzbd")
+
+
 async def webhook_post(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
     form = await request.post()
@@ -1726,6 +1779,27 @@ async def test_autofix(request: web.Request) -> web.Response:
     return _test_json(ok_all, " · ".join(results))
 
 
+async def test_sabnzbd(request: web.Request) -> web.Response:
+    """Ping SABnzbd with the typed (unsaved) URL + API key."""
+    form = await request.post()
+    guard = await _test_csrf_guard(request, form)
+    if guard is not None:
+        return guard
+    url = (form.get("sabnzbd_url") or "").strip()
+    key = (form.get("sabnzbd_api_key") or "").strip()
+    if not url or not key:
+        return _test_json(False, "SABnzbd URL and API key are required.")
+    from sabnzbd import SabnzbdClient
+    client = SabnzbdClient(url, key)
+    try:
+        version = await client.ping()
+        return _test_json(True, f"Connected (SABnzbd {version})")
+    except Exception as exc:
+        return _test_json(False, user_friendly_message(exc))
+    finally:
+        await client.close()
+
+
 async def test_webhook(request: web.Request) -> web.Response:
     """Self-POST a synthetic TEST_NOTIFICATION to the live webhook URL using
     the SAVED secret (the receiver only knows the saved value), confirming the
@@ -1871,10 +1945,12 @@ def attach_webui(
     app.router.add_post("/admin/telegram", telegram_post)
     app.router.add_post("/admin/seerr", seerr_post)
     app.router.add_post("/admin/autofix", autofix_post)
+    app.router.add_post("/admin/sabnzbd", sabnzbd_post)
     app.router.add_post("/admin/webhook", webhook_post)
     app.router.add_post("/admin/test/telegram", test_telegram)
     app.router.add_post("/admin/test/seerr", test_seerr)
     app.router.add_post("/admin/test/autofix", test_autofix)
+    app.router.add_post("/admin/test/sabnzbd", test_sabnzbd)
     app.router.add_post("/admin/test/webhook", test_webhook)
     app.router.add_get("/admin/seerr/newplex-warning", newplex_warning_check)
     app.router.add_post("/admin/seerr/newplex-warning/dismiss", newplex_warning_dismiss)

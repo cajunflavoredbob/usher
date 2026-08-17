@@ -56,5 +56,14 @@ RQ_FROM_ISSUE: Final = "rqfi"         # rqfi:<media_type>:<tmdb_id> jump from
                                       # the /issue not-in-library dead-end
 RQ_LIST_CANCEL: Final = "rqlc"        # rqlc:<request_id> cancel from /requests
 
+# --- /trending browse --------------------------------------------------------
+DV_CATEGORY: Final = "dvc"            # dvc:<category> switch browse list
+DV_PAGE: Final = "dvp"                # dvp:<version>:<screen> browse paging
+DV_INFO: Final = "dvi"                # dvi:<version>:<media_type>:<tmdb_id>
+
+# --- Availability subscriptions ----------------------------------------------
+SUB_ADD: Final = "subadd"             # subadd:<media_type>:<tmdb_id>
+SUB_DEL: Final = "subdel"             # subdel:<sub_id> from /subscriptions
+
 # --- Post-autofix resolve follow-up ----------------------------------------
 RESOLVE: Final = "resolve"            # resolve:<issue_id>:yes|no|skip

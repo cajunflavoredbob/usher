@@ -160,6 +160,7 @@ def make_ctx(*, admin_id: int = 999, user_data: Optional[dict] = None,
             tv=QuotaBucket(days=0, limit=0, used=0, remaining=None,
                            restricted=False))),
         get_my_permissions=AsyncMock(return_value=0),
+        discover=AsyncMock(return_value=[]),
         # Default: id-based requester resolution is "unavailable" so handler
         # tests exercise the username fallback unless they stub these.
         get_request=AsyncMock(side_effect=RuntimeError("not stubbed")),
@@ -170,15 +171,31 @@ def make_ctx(*, admin_id: int = 999, user_data: Optional[dict] = None,
         auto_fix=AsyncMock(),
         mark_failed=AsyncMock(),
         movie_has_file=AsyncMock(return_value=False),
+        get_movie_by_tmdb=AsyncMock(return_value=None),
+        get_queue_progress=AsyncMock(return_value=None),
     )
     sonarr = SimpleNamespace(
         auto_fix_episode=AsyncMock(),
         mark_failed_episode=AsyncMock(),
         episode_has_file=AsyncMock(return_value=False),
+        get_series_by_tvdb=AsyncMock(return_value=None),
+        get_queue_progress=AsyncMock(return_value=None),
     )
     store = SimpleNamespace(
         get=AsyncMock(return_value=mapping),
         find_by_seerr_id=AsyncMock(return_value=None),
+        add_subscription=AsyncMock(return_value=True),
+        remove_subscription=AsyncMock(return_value=True),
+        list_subscriptions=AsyncMock(return_value=[]),
+        pop_subscribers=AsyncMock(return_value=[]),
+        add_request_watch=AsyncMock(return_value=1),
+        list_request_watches=AsyncMock(return_value=[]),
+        find_request_watches=AsyncMock(return_value=[]),
+        update_request_watch=AsyncMock(),
+        delete_request_watch=AsyncMock(),
+        set_autofix_message=AsyncMock(),
+        set_autofix_progress=AsyncMock(),
+        mark_autofix_bumped=AsyncMock(),
         add_pending_autofix=AsyncMock(return_value=1),
         log_autofix=AsyncMock(),
         find_by_plex_username=AsyncMock(return_value=None),
@@ -194,13 +211,16 @@ def make_ctx(*, admin_id: int = 999, user_data: Optional[dict] = None,
         "http_port": 8765,
         "allowlist": {admin_id},
         "settings_store": SimpleNamespace(
-            settings=SimpleNamespace(daily_autofix_limit=3),
+            settings=SimpleNamespace(daily_autofix_limit=3,
+                                     sabnzbd_boost="off"),
         ),
+        "sabnzbd": None,
     }
     if bot_data_overrides:
         bot_data.update(bot_data_overrides)
 
-    bot = SimpleNamespace(send_message=AsyncMock(), send_photo=AsyncMock())
+    bot = SimpleNamespace(send_message=AsyncMock(), send_photo=AsyncMock(),
+                          edit_message_text=AsyncMock())
     application = SimpleNamespace(bot_data=bot_data, bot=bot)
     return SimpleNamespace(
         bot_data=bot_data,

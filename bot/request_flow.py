@@ -77,6 +77,7 @@ from bot.callback_prefixes import (
     RQ_SEASON_DONE,
     RQ_SEASON_NA,
 )
+from bot.media_card import send_detail_card
 from bot.shared import (
     DECRYPT_FAILED_MSG,
     KEYCAP_DIGITS,
@@ -94,8 +95,8 @@ from bot.shared import (
     user_in_conversation,
 )
 from const import (
-    DETAIL_OVERVIEW_MAX_CHARS,
     KB_BUTTONS_PER_ROW,
+    REQUEST_WATCH_TIMEOUT_HOURS,
     REQUEST_FLOW_TIMEOUT_S,
     REQUEST_RESULTS_PER_PAGE,
     REQUEST_SEARCH_FETCH_LIMIT,
@@ -127,9 +128,6 @@ _COVERED_STATUSES = (MEDIA_STATUS_PENDING, MEDIA_STATUS_PROCESSING,
                      MEDIA_STATUS_AVAILABLE)
 
 _STALE_MENU_TOAST = "That menu is from an older search — use the newest one."
-
-_TMDB_POSTER_BASE = "https://image.tmdb.org/t/p/w342"
-
 
 def _current_version(ctx: ContextTypes.DEFAULT_TYPE) -> int:
     return ctx.user_data.get("rq_search_version") or 0
@@ -360,7 +358,7 @@ async def _render_results_screen(
     for offset, r in enumerate(chunk):
         lines.append(_result_line(start + offset + 1, r))
     lines.append("")
-    lines.append("ℹ️ = details + poster")
+    lines.append("🖼 = poster + details")
 
     # Numbered pick buttons (global numbering so screen 2 reads 6..10).
     rows: list[list[InlineKeyboardButton]] = []
@@ -379,7 +377,7 @@ async def _render_results_screen(
     # One compact info row for the whole screen.
     rows.append([
         InlineKeyboardButton(
-            f"ℹ️ {start + offset + 1}",
+            f"🖼 {start + offset + 1}",
             callback_data=f"{RQ_INFO}:{version}:{r.media_type}:{r.tmdb_id}")
         for offset, r in enumerate(chunk)
     ])
@@ -447,52 +445,7 @@ async def request_info(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await q.answer()
         return RQ_PICK_MEDIA
     await q.answer()
-
-    type_label = "Movie" if r.media_type == "movie" else "Series"
-    header = f"<b>{html.escape(r.title)}</b>"
-    if r.year:
-        header += f" ({r.year})"
-    facts = [type_label]
-    if r.vote_average:
-        facts.insert(0, f"★ {r.vote_average:.1f}")
-    note = _STATUS_NOTES.get(r.status or 0)
-    if note:
-        facts.append(note)
-    caption_lines = [header, " · ".join(facts)]
-    overview = (r.overview or "").strip()
-    if overview:
-        if len(overview) > DETAIL_OVERVIEW_MAX_CHARS:
-            cut = overview.rfind(" ", 0, DETAIL_OVERVIEW_MAX_CHARS)
-            overview = overview[:cut if cut > 0 else DETAIL_OVERVIEW_MAX_CHARS] + "…"
-        caption_lines.append(f"<i>{html.escape(overview)}</i>")
-    caption = "\n".join(caption_lines)
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton(
-        "🗑 Dismiss", callback_data=RQ_INFO_DISMISS)]])
-
-    chat_id = update.effective_chat.id
-    sent = None
-    if r.poster_path:
-        try:
-            sent = await ctx.bot.send_photo(
-                chat_id=chat_id,
-                photo=f"{_TMDB_POSTER_BASE}{r.poster_path}",
-                caption=caption,
-                parse_mode="HTML",
-                reply_markup=kb,
-            )
-        except Exception:
-            # Poster fetch can fail (dead path, Telegram-side fetch error);
-            # the text card is the fallback, never a dead button.
-            logger.debug("poster send failed; falling back to text card",
-                         exc_info=True)
-    if sent is None:
-        await ctx.bot.send_message(
-            chat_id=chat_id,
-            text=caption,
-            parse_mode="HTML",
-            reply_markup=kb,
-            disable_web_page_preview=True,
-        )
+    await send_detail_card(ctx, update.effective_chat.id, r)
     return RQ_PICK_MEDIA
 
 
@@ -1010,7 +963,25 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                 f"{html.escape(dropped_note)}\n"
                 "Waiting for approval — I'll DM you when it moves.")
     text += "\n\nUse /requests to check on it."
-    await q.edit_message_text(text, parse_mode="HTML")
+    sent = await q.edit_message_text(text, parse_mode="HTML")
+    # Track the confirmation as a morphing card: the watch poller paints
+    # download progress onto THIS message, and lifecycle webhooks finish it.
+    try:
+        store: UserStore = ctx.bot_data["store"]
+        await store.add_request_watch(
+            chat_id=update.effective_chat.id,
+            message_id=getattr(sent, "message_id", None) or q.message.message_id,
+            user_id=update.effective_user.id,
+            media_type=media["type"],
+            tmdb_id=media["tmdb_id"],
+            label=label,
+            is4k=is4k,
+            status=("grabbing" if created.status == REQUEST_STATUS_APPROVED
+                    else "waiting"),
+            timeout_hours=REQUEST_WATCH_TIMEOUT_HOURS,
+        )
+    except Exception:
+        logger.exception("couldn't enqueue request watch (card stays static)")
     _clear_rq_state(ctx)
     return ConversationHandler.END
 
