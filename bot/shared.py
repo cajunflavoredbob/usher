@@ -325,21 +325,23 @@ async def require_seerr(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Optio
 
 # --- Telegram edit/send helper ---------------------------------------------
 
-async def edit_or_send(q, text: str, **kwargs) -> None:
+async def edit_or_send(q, text: str, **kwargs):
     """Edit the callback's message; if Telegram rejects (e.g., the user edited
     or deleted the source message), send a new message in the same chat so the
-    response isn't silently dropped."""
+    response isn't silently dropped. Returns the resulting Message (edited or
+    newly sent) so callers can track it (e.g. as a morphing progress card),
+    or None when both paths failed."""
     try:
-        await q.edit_message_text(text, **kwargs)
-        return
+        return await q.edit_message_text(text, **kwargs)
     except telegram.error.BadRequest:
         pass
     except Exception:
         logger.exception("edit_message_text failed unexpectedly; falling back to send")
     try:
-        await q.message.reply_text(text, **kwargs)
+        return await q.message.reply_text(text, **kwargs)
     except Exception:
         logger.exception("reply_text fallback also failed")
+        return None
 
 
 # --- Per-user identity / Plex token resolution -----------------------------

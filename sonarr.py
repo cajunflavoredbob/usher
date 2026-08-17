@@ -234,11 +234,16 @@ class SonarrClient:
                                 expect=list)
         if episode_ids:
             wanted = set(episode_ids)
-            records = [rec for rec in records or []
-                       if isinstance(rec, dict)
-                       and (rec.get("episodeId") in wanted
-                            or any((e or {}).get("id") in wanted
-                                   for e in rec.get("episodes") or []))]
+            filtered = [rec for rec in records or []
+                        if isinstance(rec, dict)
+                        and (rec.get("episodeId") in wanted
+                             or any((e or {}).get("id") in wanted
+                                    for e in rec.get("episodes") or []))]
+            # Season packs and some indexer grabs carry no per-episode ids;
+            # a strict filter would report "nothing downloading" while the
+            # replacement is in fact in the queue. Fall back to the series'
+            # records rather than lying.
+            records = filtered if filtered else records
         return parse_queue_records(records)
 
     async def episode_has_file(self, episode_id: int) -> bool:

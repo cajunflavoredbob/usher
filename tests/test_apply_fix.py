@@ -188,3 +188,34 @@ async def test_arr_failure_no_enqueue():
     text = upd.callback_query.edits[-1]["text"]
     assert "⚠️ Redownload for #42 didn't run" in text
     ctx.bot_data["store"].add_pending_autofix.assert_not_called()
+
+
+async def test_apply_fix_attaches_progress_card_message():
+    """Admin-triggered fixes must attach their outcome message as the
+    morphing progress card (0.16.0 only did this on the /issue path, so
+    ticket-menu fixes never morphed)."""
+    from fix_result import FixResult
+    from bot import tickets as tickets_mod
+    from bot.tickets import _apply_fix
+    from unittest.mock import AsyncMock, patch
+
+    ctx = make_ctx(admin_id=999)
+    ctx.bot_data["store"].add_pending_autofix = AsyncMock(return_value=41)
+    ctx.bot_data["seerr"].get_media_title.return_value = ("Show", "2026")
+    ctx.bot_data["seerr"].get_tv_seasons.return_value = ([], 777)
+    upd = make_update(callback_data="tkfd:12", user_id=999)
+    result = FixResult(status="ok", message="deleted + search started",
+                       steps_done=["delete", "search"],
+                       poll_info={"series_id": 5, "episode_id": 9})
+    issue = SimpleNamespace(id=12, media_type="tv", tmdb_id=1399,
+                            problem_season=1, problem_episode=2)
+    with patch.object(tickets_mod, "_run_arr_action",
+                      AsyncMock(return_value=result)), \
+         patch.object(tickets_mod, "_issue_for_fix",
+                      AsyncMock(return_value=(issue, None)), create=True):
+        # _resolve_fix_context reads the issue via seerr.get_issue
+        ctx.bot_data["seerr"].get_issue.return_value = issue
+        await _apply_fix(upd, ctx, strategy="redownload")
+    ctx.bot_data["store"].set_autofix_message.assert_awaited_once()
+    args = ctx.bot_data["store"].set_autofix_message.call_args.args
+    assert args[0] == 41  # the enqueued row gets the outcome message

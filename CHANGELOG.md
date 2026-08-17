@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-08-16
+
+### Fixed
+- **Admin-triggered auto-fixes now morph their progress card.** 0.16.0
+  only attached the morphing card on the /issue flow's own confirmations;
+  fixes started from the /tickets Fix menu enqueued the poller without a
+  card message, so nothing ever showed replacement progress. The Fix
+  outcome message is now the card, same as /issue.
+- Sonarr queue progress falls back to the series' queue records when a
+  grab carries no per-episode ids (season packs), instead of showing
+  "Searching" while the download runs.
+
+
 ## [0.16.0] - 2026-08-16
 
 Discovery, availability watches, and live download progress.

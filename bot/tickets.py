@@ -468,9 +468,11 @@ async def _resolve_fix_context(
 async def _enqueue_fix_completion(
     store: UserStore, *, fix: _FixContext, result: FixResult,
     chat_id: int, user_id: int, issue_url: str,
-) -> None:
-    """Build the pending_autofix row from result.poll_info. Raises on enqueue
-    failure -- caller decides what to tell the user."""
+) -> int:
+    """Build the pending_autofix row from result.poll_info; returns the row
+    id so the caller can attach the outcome message as the morphing
+    progress card. Raises on enqueue failure -- caller decides what to
+    tell the user."""
     poll_info = result.poll_info or {}
     kwargs: dict = {
         "chat_id": chat_id,
@@ -488,7 +490,7 @@ async def _enqueue_fix_completion(
         # expected-episodes kwargs were always None and are gone.
         kwargs["sonarr_series_id"] = poll_info.get("series_id")
         kwargs["sonarr_episode_id"] = poll_info.get("episode_id")
-    await store.add_pending_autofix(**kwargs)
+    return await store.add_pending_autofix(**kwargs)
 
 
 async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy: str) -> None:
@@ -544,9 +546,10 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
         await store.log_autofix(update.effective_user.id, fix.media["type"],
                                 fix.media["tmdb_id"],
                                 season=fix.season, episode=fix.episode)
+        pending_id = None
         if result.should_poll:
             try:
-                await _enqueue_fix_completion(
+                pending_id = await _enqueue_fix_completion(
                     store, fix=fix, result=result,
                     chat_id=q.message.chat_id,
                     user_id=update.effective_user.id,
@@ -563,9 +566,17 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
 
         prefix = "🔧" if result.ok else "⚠️"
         tail = "\n\n🔔 I'll DM when the new file finishes downloading." if result.should_poll else ""
-        await edit_or_send(q,
+        outcome = await edit_or_send(q,
             f"{prefix} {action_name} for #{issue_id}.\n{fix.label}\n\n{result.message}{tail}"
         )
+        # Attach the outcome message as the morphing progress card (the
+        # /issue flow does the same with its confirmation; without this,
+        # admin-triggered fixes never showed live replacement progress).
+        if pending_id and getattr(outcome, "message_id", None):
+            try:
+                await store.set_autofix_message(pending_id, outcome.message_id)
+            except Exception:
+                logger.exception("couldn't attach autofix card for #%d", issue_id)
         return
     finally:
         end_action(ctx, media_key)

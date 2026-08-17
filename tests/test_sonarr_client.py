@@ -86,3 +86,44 @@ async def test_mark_failed_pages_history_until_grab_found():
                      if r.url.path == "/api/v3/history"]
     assert history_pages == ["1", "2"]
     assert any(r.url.path == "/api/v3/history/failed/777" for r in requests)
+
+
+async def test_queue_progress_falls_back_when_records_lack_episode_ids():
+    """Season packs carry no per-episode ids; the filter must fall back to
+    the series' records instead of reporting nothing downloading."""
+    import httpx
+    from sonarr import SonarrClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/queue/details")
+        return httpx.Response(200, json=[
+            {"size": 1000, "sizeleft": 250, "timeleft": "00:05:00",
+             "downloadId": "SABnzbd_nzo_pack", "title": "Season pack"},
+        ])
+
+    c = SonarrClient("http://sonarr.test:8989", "k")
+    c._client = httpx.AsyncClient(base_url="http://sonarr.test:8989/api/v3",
+                                  transport=httpx.MockTransport(handler))
+    progress = await c.get_queue_progress(5, episode_ids=[9])
+    assert progress is not None and progress.percent == 75
+    await c.close()
+
+
+async def test_queue_progress_filters_when_episode_ids_present():
+    import httpx
+    from sonarr import SonarrClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[
+            {"size": 1000, "sizeleft": 0, "episodeId": 9,
+             "downloadId": "a"},
+            {"size": 1000, "sizeleft": 1000, "episodeId": 10,
+             "downloadId": "b"},
+        ])
+
+    c = SonarrClient("http://sonarr.test:8989", "k")
+    c._client = httpx.AsyncClient(base_url="http://sonarr.test:8989/api/v3",
+                                  transport=httpx.MockTransport(handler))
+    progress = await c.get_queue_progress(5, episode_ids=[9])
+    assert progress.count == 1 and progress.percent == 100
+    await c.close()
