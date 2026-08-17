@@ -38,9 +38,11 @@ from bot.callback_prefixes import (
     ISSUE_RESEARCH_PARENT,
     ISSUE_SEASON,
     ISSUE_TYPE,
+    RQ_FROM_ISSUE,
 )
 from bot.shared import (
     DECRYPT_FAILED_MSG,
+    KEYCAP_DIGITS,
     AUTOFIX_ELIGIBLE_TYPES,
     CONFIRM_AUTOFIX,
     DESCRIPTION,
@@ -186,9 +188,6 @@ async def issue_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     return TITLE
 
 
-_KEYCAP_DIGITS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
-
-
 def _derive_parent_name(query: str) -> Optional[str]:
     """If query contains a title separator (' - ', ' — ', ' | ', ': '),
     return the part before the first one. Used to suggest a parent-show
@@ -247,7 +246,7 @@ async def _show_search_results(
     rows: list[list[InlineKeyboardButton]] = []
     btn_row: list[InlineKeyboardButton] = []
     for i, r in enumerate(results):
-        keycap = _KEYCAP_DIGITS[i] if i < len(_KEYCAP_DIGITS) else str(i + 1)
+        keycap = KEYCAP_DIGITS[i] if i < len(KEYCAP_DIGITS) else str(i + 1)
         btn_row.append(InlineKeyboardButton(
             keycap, callback_data=f"{ISSUE_MEDIA}:{version}:{r.media_type}:{r.tmdb_id}",
         ))
@@ -355,14 +354,33 @@ async def issue_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
                 f'🔍 Search "{parent}" instead',
                 callback_data=ISSUE_RESEARCH_PARENT,
             )])
+        # Not in the library is exactly what /request exists for: offer the
+        # jump. The tap enters the request conversation (its entry point
+        # force-ends this one); the title travels via rq_jump_media so the
+        # request flow doesn't re-fetch what we already know.
+        if selected is not None:
+            ctx.user_data["rq_jump_media"] = {
+                "tmdb_id": tmdb_id,
+                "title": selected.title,
+                "year": selected.year,
+            }
+            rows.append([InlineKeyboardButton(
+                "📥 Request it instead",
+                callback_data=f"{RQ_FROM_ISSUE}:{media_type}:{tmdb_id}",
+            )])
         text += "\n\nOr /issue to start over."
         sent = await q.edit_message_text(
             text,
             reply_markup=InlineKeyboardMarkup(rows) if rows else None,
         )
         if rows:
-            # Keep the re-search button live in the gate's history.
+            # Keep the re-search / request buttons live in the gate's history.
             record_btn(ctx.application, update.effective_user.id, sent)
+        # END unless the parent re-search (which needs this conversation's
+        # state) is offered. The "Request it instead" button is a request-
+        # conversation ENTRY POINT, so it works after END too; staying
+        # parked here just to host it produced a spurious "/issue timed
+        # out" notice ten minutes after a terminal message.
         return PICK_MEDIA if parent else ConversationHandler.END
     ctx.user_data["media"] = {
         "type": media_type,

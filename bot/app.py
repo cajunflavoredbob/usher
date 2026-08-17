@@ -22,7 +22,7 @@ from auth_util import parse_trusted_proxies
 from http_util import user_friendly_message
 from plex import PlexClient
 from radarr import RadarrClient
-from seerr import SeerrClient
+from seerr import SeerrClient, REQUIRED_WEBHOOK_TYPES
 from settings import SettingsStore, load_or_create_session_secret
 from sonarr import SonarrClient
 from store import TokenCrypto, UserStore
@@ -32,6 +32,8 @@ from _version import __version__ as USHER_VERSION
 
 from bot.autofix_poll import poll_pending_autofixes
 from bot.callback_prefixes import (
+    RQ_INFO_DISMISS,
+    RQ_LIST_CANCEL,
     LINK_HELP,
     TK_BACK,
     TK_CLOSE,
@@ -43,6 +45,9 @@ from bot.callback_prefixes import (
 )
 from bot.issue_flow import _issue_conversation
 from bot.link_flow import _link_conversation, cmd_link_didnt_work, cmd_unlink
+from bot.request_flow import (_RQ_KEYS, _request_conversation,
+                              request_info_dismiss)
+from bot.requests_cmd import cmd_requests, rq_list_cancel
 from bot.resolve_flow import _resolve_conversation
 from bot.shared import (
     format_status,
@@ -64,6 +69,7 @@ from bot.tickets import (
 )
 from bot.webhook_handlers import (
     handle_seerr_comment,
+    handle_seerr_media,
     handle_seerr_reported,
     handle_seerr_resolved,
 )
@@ -186,6 +192,28 @@ async def _check_connections(app: Application) -> dict[str, str]:
         except Exception as exc:
             logger.exception("%s ping failed", label)
             out[label] = f"❌ {user_friendly_message(exc)}"
+    # Webhook-agent check: every issue/request DM depends on Seerr having
+    # the webhook agent on with the right event types, and a miss is
+    # otherwise SILENT (upgraded installs predate the request events). One
+    # line here + the startup DM is the detection.
+    seerr = app.bot_data.get("seerr")
+    if seerr is not None and out.get("Seerr", "").startswith("✅"):
+        try:
+            enabled, types = await seerr.get_webhook_notification_settings()
+            if not enabled:
+                out["Seerr webhook"] = ("❌ webhook agent disabled in Seerr — "
+                                        "no issue/request DMs will arrive")
+            else:
+                missing = [label for bit, label in
+                           REQUIRED_WEBHOOK_TYPES.items() if not types & bit]
+                if missing:
+                    out["Seerr webhook"] = ("⚠️ events not enabled: "
+                                            + ", ".join(missing))
+                else:
+                    out["Seerr webhook"] = "✅ all events enabled"
+        except Exception as exc:
+            logger.warning("webhook settings check failed", exc_info=True)
+            out["Seerr webhook"] = f"❓ couldn't check ({user_friendly_message(exc)})"
     return out
 
 
@@ -198,11 +226,13 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         # Non-admins see ONLY greeting + commands. No connection diagnostics,
         # no inline "DM me /link" directive (the command is listed below).
         await update.effective_message.reply_text(
-            "Hi! I forward issue reports to Seerr.\n\n"
+            "Hi! I take movie/TV requests and forward issue reports to Seerr.\n\n"
             "*Commands*\n"
             "  /link — sign in with Plex (DM only)\n"
             "  /unlink — remove your link\n"
             "  /issue — report a problem with a movie or TV show\n"
+            "  /request — request a movie or TV show\n"
+            "  /requests — list your requests\n"
             "  /tickets — list your open tickets\n"
             "  /help — show this",
             parse_mode="Markdown",
@@ -214,7 +244,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     # HTML + escape: format_status interpolates upstream error text (see
     # the startup DM note in _post_init).
     lines = [
-        "Hi! I forward issue reports to Seerr.",
+        "Hi! I take movie/TV requests and forward issue reports to Seerr.",
         "",
         "<b>Connection status:</b>",
         format_status(summary),
@@ -223,6 +253,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "  /link — sign in with Plex (DM only)",
         "  /unlink — remove your link",
         "  /issue — report a problem with a movie or TV show",
+        "  /request — request a movie or TV show",
+        "  /requests — list your requests",
         "  /tickets — list your open tickets",
         "  /status — connection diagnostics (admin only)",
         "  /help — show this",
@@ -282,6 +314,7 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     # follows) is processed. See bot.shared.reset_stale_flows.
     link_conv = _link_conversation()
     issue_conv = _issue_conversation()
+    request_conv = _request_conversation()
     resolve_conv = _resolve_conversation()
     ticket_conv = _ticket_conversation()
     # Registry for shared.user_in_conversation: lets one flow's
@@ -289,10 +322,12 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.bot_data["conversations"] = {
         "link": link_conv,
         "issue": issue_conv,
+        "request": request_conv,
         "resolve": resolve_conv,
         "ticket_reply": ticket_conv,
     }
-    app.bot_data["flow_convs"] = [link_conv, issue_conv, resolve_conv, ticket_conv]
+    app.bot_data["flow_convs"] = [link_conv, issue_conv, request_conv,
+                                  resolve_conv, ticket_conv]
     app.add_handler(TypeHandler(Update, reset_stale_flows), group=-2)
 
     # Global gate: drop callbacks from stale button-bearing messages. Group -1
@@ -305,8 +340,14 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CommandHandler("unlink", cmd_unlink))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("tickets", cmd_tickets))
+    app.add_handler(CommandHandler("requests", cmd_requests))
     app.add_handler(issue_conv)
+    app.add_handler(request_conv)
     app.add_handler(resolve_conv)
+    # Request-list cancel + detail-card dismiss: non-conversation callbacks,
+    # live even when no conversation is active.
+    app.add_handler(CallbackQueryHandler(rq_list_cancel, pattern=fr"^{RQ_LIST_CANCEL}:\d+$"))
+    app.add_handler(CallbackQueryHandler(request_info_dismiss, pattern=fr"^{RQ_INFO_DISMISS}$"))
     # Ticket-management callbacks (must be registered before the conversation
     # so the non-conversation taps -- open / close-menu / close-direct -- work
     # even when no conversation is active)
@@ -368,6 +409,9 @@ async def _post_init(app: Application) -> None:
     async def _on_reported(payload: dict) -> None:
         await handle_seerr_reported(app, payload)
 
+    async def _on_media(payload: dict) -> None:
+        await handle_seerr_media(app, payload)
+
     def _secret_provider() -> str:
         settings_store: SettingsStore = app.bot_data["settings_store"]
         return settings_store.settings.webhook_secret or ""
@@ -390,6 +434,7 @@ async def _post_init(app: Application) -> None:
         on_comment=_on_comment,
         on_resolved=_on_resolved,
         on_reported=_on_reported,
+        on_media=_on_media,
         secret_provider=_secret_provider,
     )
     attach_webui(
@@ -535,6 +580,13 @@ _CONVERSATION_USER_DATA_KEYS = (
     "search_version", "submitting_issue",
     "research_parent",
     "awaiting_comment_for",
+) + _RQ_KEYS + (
+    # rq_jump_media is issue_flow's stash for the Request-it-instead jump
+    # (request_flow._RQ_KEYS rightly omits it). rq_search_version is
+    # deliberately in NEITHER list: the version counter must survive every
+    # reset or a still-gated message from a prior flow could collide with a
+    # fresh flow's counter restarting at 1.
+    "rq_jump_media",
 )
 
 

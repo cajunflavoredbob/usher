@@ -39,5 +39,22 @@ ISSUE_AUTOFIX_CONFIRM: Final = "confirm"
 ISSUE_CANCEL: Final = "cancel"
 ISSUE_RESEARCH_PARENT: Final = "research_parent"
 
+# --- /request flow ----------------------------------------------------------
+RQ_MEDIA: Final = "rqm"               # rqm:<version>:<media_type>:<tmdb_id>
+RQ_SEASON: Final = "rqs"              # rqs:<version>:<n> toggle a season
+RQ_SEASON_NA: Final = "rqna"          # rqna:<version>:<n> unrequestable season
+RQ_SEASON_ALL: Final = "rqall"        # rqall:<version> select all requestable
+RQ_SEASON_DONE: Final = "rqdone"      # rqdone:<version> proceed to confirm
+RQ_GO: Final = "rqgo"                 # rqgo:<version> submit (standard)
+RQ_GO_4K: Final = "rqgo4k"            # rqgo4k:<version> submit as 4K
+RQ_PAGE: Final = "rqpg"               # rqpg:<version>:<screen> result paging
+RQ_INFO: Final = "rqi"                # rqi:<version>:<media_type>:<tmdb_id>
+                                      # detail card (poster + overview)
+RQ_INFO_DISMISS: Final = "rqx"        # dismiss a detail card (global handler)
+RQ_CANCEL: Final = "rqcancel"         # rqcancel:<version> (bare via /cancel)
+RQ_FROM_ISSUE: Final = "rqfi"         # rqfi:<media_type>:<tmdb_id> jump from
+                                      # the /issue not-in-library dead-end
+RQ_LIST_CANCEL: Final = "rqlc"        # rqlc:<request_id> cancel from /requests
+
 # --- Post-autofix resolve follow-up ----------------------------------------
 RESOLVE: Final = "resolve"            # resolve:<issue_id>:yes|no|skip

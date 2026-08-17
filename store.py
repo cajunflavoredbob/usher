@@ -341,6 +341,42 @@ class UserStore:
 
         await self._run(_do)
 
+    async def find_by_seerr_id(self, seerr_id: int) -> Optional[Mapping]:
+        """Lookup by Seerr user id. The robust join key for webhook events
+        whose requester was resolved via the Seerr API (display names are
+        user-editable in Seerr; the numeric id is not). Newest link wins,
+        same as find_by_plex_username."""
+        if not seerr_id:
+            return None
+
+        def _do() -> Optional[tuple]:
+            with self._conn() as c:
+                return c.execute(
+                    """
+                    SELECT telegram_id, seerr_id, seerr_display,
+                           plex_token_enc, plex_uuid, plex_username
+                    FROM user_mapping
+                    WHERE seerr_id = ?
+                    ORDER BY rowid DESC
+                    LIMIT 1
+                    """,
+                    (seerr_id,),
+                ).fetchone()
+
+        row = await self._run(_do)
+        if row is None:
+            return None
+        token, failed = self._decrypt_field(row[3])
+        return Mapping(
+            telegram_id=row[0],
+            seerr_id=row[1],
+            seerr_display=row[2],
+            plex_token=token,
+            plex_uuid=row[4],
+            plex_username=row[5],
+            plex_token_decrypt_failed=failed,
+        )
+
     async def find_by_plex_username(self, plex_username: str) -> Optional[Mapping]:
         """Lookup by Plex username (case-insensitive). Maps Seerr webhook
         payloads (which carry reportedBy_username) back to a linked TG user.

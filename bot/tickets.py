@@ -50,6 +50,7 @@ from bot.callback_prefixes import (
 )
 from const import TICKET_BUTTONS_PER_ROW, TICKET_REPLY_TIMEOUT_S
 from bot.shared import (
+    truncate_message,
     DECRYPT_FAILED_MSG,
     AWAIT_TICKET_REPLY,
     RELINK_RESUME_EXECUTORS,
@@ -99,16 +100,8 @@ async def _require_admin(
     return False
 
 
-def _truncate_message(text: str, limit: int = 4000) -> str:
-    """Keep a message under Telegram's 4096-char cap (an
-    oversized detail view failed the send silently). Cuts at the last
-    newline before the limit so an HTML tag is never split mid-entity."""
-    if len(text) <= limit:
-        return text
-    cut = text.rfind("\n", 0, limit - 20)
-    if cut < limit // 2:
-        cut = limit - 20
-    return text[:cut] + "\n…(truncated)"
+# _truncate_message moved to shared.truncate_message in 0.15.0 (the
+# /requests list needs the same cap).
 
 
 async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -185,7 +178,7 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         lines.append(line)
     lines.append("")
     lines.append("Tap a ticket number below to manage it.")
-    text = _truncate_message("\n".join(lines))
+    text = truncate_message("\n".join(lines))
 
     # Inline keyboard: one button per ticket (#N)
     button_rows: list[list[InlineKeyboardButton]] = []
@@ -311,7 +304,7 @@ async def _build_ticket_detail(
             if age_c:
                 head += f" · {age_c}"
             lines.append(f"{head}: <i>\"{html.escape(c.message)}\"</i>")
-    return _truncate_message("\n".join(lines)), ticket_detail_kb(issue_id, is_admin)
+    return truncate_message("\n".join(lines)), ticket_detail_kb(issue_id, is_admin)
 
 
 async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:

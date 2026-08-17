@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from typing import Any, Optional
 from unittest.mock import AsyncMock
 
+from seerr import Quota, QuotaBucket
 from store import Mapping
 
 
@@ -44,6 +45,7 @@ def make_message(text: str = "", message_id: int = 100, chat_id: int = 100):
         reply_text=reply_text,
         reply_calls=reply_calls,
         edit_calls=edit_calls,
+        delete=AsyncMock(),
     )
 
     async def edit_message_text(text, **kwargs):
@@ -146,6 +148,22 @@ def make_ctx(*, admin_id: int = 999, user_data: Optional[dict] = None,
         add_issue_comment=AsyncMock(),
         resolve_issue=AsyncMock(),
         search=AsyncMock(return_value=[]),
+        create_request=AsyncMock(),
+        list_requests=AsyncMock(return_value=([], 0)),
+        delete_request=AsyncMock(),
+        get_tv_season_availability=AsyncMock(return_value=[]),
+        # Unlimited by default: a bare AsyncMock here once rendered MagicMock
+        # reprs into the user-visible quota line without any test noticing.
+        get_quota=AsyncMock(return_value=Quota(
+            movie=QuotaBucket(days=0, limit=0, used=0, remaining=None,
+                              restricted=False),
+            tv=QuotaBucket(days=0, limit=0, used=0, remaining=None,
+                           restricted=False))),
+        get_my_permissions=AsyncMock(return_value=0),
+        # Default: id-based requester resolution is "unavailable" so handler
+        # tests exercise the username fallback unless they stub these.
+        get_request=AsyncMock(side_effect=RuntimeError("not stubbed")),
+        get_admin_user_id=AsyncMock(return_value=None),
         public_url="http://seerr.example",
     )
     radarr = SimpleNamespace(
@@ -160,6 +178,7 @@ def make_ctx(*, admin_id: int = 999, user_data: Optional[dict] = None,
     )
     store = SimpleNamespace(
         get=AsyncMock(return_value=mapping),
+        find_by_seerr_id=AsyncMock(return_value=None),
         add_pending_autofix=AsyncMock(return_value=1),
         log_autofix=AsyncMock(),
         find_by_plex_username=AsyncMock(return_value=None),
@@ -181,7 +200,7 @@ def make_ctx(*, admin_id: int = 999, user_data: Optional[dict] = None,
     if bot_data_overrides:
         bot_data.update(bot_data_overrides)
 
-    bot = SimpleNamespace(send_message=AsyncMock())
+    bot = SimpleNamespace(send_message=AsyncMock(), send_photo=AsyncMock())
     application = SimpleNamespace(bot_data=bot_data, bot=bot)
     return SimpleNamespace(
         bot_data=bot_data,

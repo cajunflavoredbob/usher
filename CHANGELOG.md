@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-08-16
+
+Media requesting. Users can now ask for movies and shows through the bot,
+not just report problems with them.
+
+### Added
+- **`/request`** — search, pick, and request media, submitted to Seerr as
+  the linked user so Seerr's own permissions, quotas, and auto-approve
+  rules apply (the bot adds no gate of its own). `/request <title>` skips
+  the prompt. Movies confirm in one step with a quota preview ("4 of 10
+  requests left in the current 7-day window"); TV gets a multi-select
+  season keyboard that marks already-available or already-requested
+  seasons and only offers what a request would actually cover. Outcomes
+  are stated honestly: approved-and-grabbing vs waiting-for-approval vs
+  quota exceeded vs already requested vs nothing-left-to-request.
+- **`/requests`** — your requests with live status (pending / grabbing /
+  declined / failed / available) and one-tap cancel for still-pending
+  ones; the admin sees everyone's, with requester names.
+- **Request lifecycle DMs** via the Seerr webhook: requesters hear when
+  their request is approved, declined, available, or failed; the admin
+  gets new-request and auto-approved notices plus failure alerts. Enable
+  the request events on Seerr's webhook (the Webhook tab's help text lists
+  them). Search results in `/request` also annotate availability up front
+  so nobody burns a tap on something already in Plex.
+- The `/issue` flow's "that title isn't in Seerr's library yet" dead end
+  now offers **Request it instead**, jumping straight into the request
+  flow with the title carried over.
+- **Search pagination**: one Seerr fetch of up to 20 results rendered as
+  pages of five with Page N navigation (paging is a pure re-render, no
+  extra queries).
+- **Detail cards**: every search result has an ℹ️ button that posts a
+  dismissable card — poster (when one exists), rating, type, availability,
+  and a synopsis — so users unsure by name alone can check before picking.
+  The pick list itself stays text-only.
+- **4K requests**: users whose Seerr permissions allow 4K get a ✨ 4K
+  option on the confirm screen, and a title that's already available in
+  standard quality passes through to a 4K-only confirm instead of
+  dead-ending (unless the 4K copy is also covered). Known limitation: the
+  TV season picker marks availability on the standard track, so
+  re-requesting a standard-available season in 4K still needs the Seerr
+  UI.
+
+Robustness built in from the start: stale menus from an earlier /request
+toast instead of acting on the newer flow, detail cards can't crowd out
+the live pick list, request webhooks resolve the requester by Seerr user
+id (display names are user-editable), the season picker mirrors Seerr's
+per-tier drop rules exactly, and an admin who never ran /link still gets
+request lifecycle DMs, including download failures.
+
+- **/status now checks the Seerr webhook agent**: it reads Seerr's webhook
+  notification settings and flags a disabled agent or missing event types
+  (upgraded installs predate the request events, and a miss silently
+  drops every issue/request DM). The startup DM carries the same line.
+- Cancel taps on /requests acknowledge instantly and report outcomes on
+  the re-rendered list (a slow Seerr could previously outlive the
+  callback's validity and turn a successful cancel into an error DM);
+  /request shows typing/working states at its slow hops like /issue does;
+  TV confirmations report the seasons Seerr actually granted when it
+  skipped already-covered ones.
+
+Client wire tests plus handler tests for all of the above; full suite at
+523.
+
 ## [0.14.2] - 2026-08-16
 
 ### Fixed

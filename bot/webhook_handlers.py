@@ -1,5 +1,5 @@
-"""Handlers for the three Seerr webhook events: ISSUE_COMMENT,
-ISSUE_RESOLVED, ISSUE_CREATED."""
+"""Handlers for Seerr webhook events: the issue lifecycle (ISSUE_COMMENT,
+ISSUE_RESOLVED, ISSUE_CREATED) and the request lifecycle (MEDIA_*)."""
 from __future__ import annotations
 
 import html
@@ -298,3 +298,168 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
         logger.info("Notified admin of new issue #%d from '%s'", issue_id, reporter_username)
     except Exception:
         logger.exception("Failed to DM admin about new issue #%d", issue_id)
+
+
+# --- Request lifecycle (MEDIA_*) --------------------------------------------
+
+# Who hears about each request event. The requester is DMed only for state
+# changes they didn't witness in the /request flow itself: an auto-approval
+# fires seconds after the flow already said "Approved", so it stays
+# admin-only, while approve/decline/available/failed arrive minutes-to-days
+# later and deserve a DM. MEDIA_PENDING is the admin's action item.
+_MEDIA_EVENTS = {
+    #                (requester_line,                              admin_line)
+    "MEDIA_PENDING": (None, "📥 New request — approve it in Seerr"),
+    "MEDIA_APPROVED": ("✅ Your request was approved — it's being grabbed.", None),
+    "MEDIA_AUTO_APPROVED": (None, "📥 New request (auto-approved)"),
+    "MEDIA_DECLINED": ("🚫 Your request was declined.", None),
+    "MEDIA_AVAILABLE": ("🎉 Your request is available in Plex!", None),
+    "MEDIA_FAILED": ("⚠️ Your request failed to download. The admin has been notified.",
+                     "⚠️ Request FAILED — check Radarr/Sonarr"),
+    # Watchlist auto-requests: log-only for now (the user opted into
+    # watchlist syncing in Seerr; a DM per synced item would be noise).
+    "MEDIA_AUTO_REQUESTED": (None, None),
+}
+
+# The dispatch set in webhook.py and the handler table here are maintained
+# in two files; fail LOUDLY at import if they ever drift apart.
+from webhook import MEDIA_NOTIFICATION_TYPES as _DISPATCHED_MEDIA_TYPES  # noqa: E402
+
+assert set(_MEDIA_EVENTS) == set(_DISPATCHED_MEDIA_TYPES), (
+    "webhook.MEDIA_NOTIFICATION_TYPES and webhook_handlers._MEDIA_EVENTS "
+    "have drifted apart")
+
+
+def _requested_seasons_note(payload: dict) -> str:
+    """"Requested Seasons" from the webhook's extra array, or ""."""
+    for item in payload.get("extra") or []:
+        # isinstance guard (same as extract_affected_se): a garbage extra
+        # entry must degrade to no note, not kill both DMs.
+        if not isinstance(item, dict):
+            continue
+        if item.get("name") == "Requested Seasons":
+            value = str(item.get("value") or "").strip()
+            if value:
+                return f"Seasons: {value}"
+    return ""
+
+
+async def _resolve_requester(app: Application, request_block: dict,
+                             fallback_username: str):
+    """Resolve the webhook's requester to (mapping, requester_seerr_id).
+
+    Primary path: fetch the request by id (admin key) and join on the
+    numeric Seerr user id -- display names are user-editable in Seerr, so
+    the username in the payload can be spoofed or simply customized, which
+    mis-routes or suppresses DMs. Fallback when the fetch fails or the
+    payload has no request id: the historical username match."""
+    store: UserStore = app.bot_data["store"]
+    seerr: Optional[SeerrClient] = app.bot_data.get("seerr")
+    request_id = None
+    try:
+        request_id = int(request_block.get("request_id"))
+    except (TypeError, ValueError):
+        pass
+    if seerr is not None and request_id is not None:
+        try:
+            req = await seerr.get_request(request_id)
+            if req.requested_by_id is not None:
+                mapping = await store.find_by_seerr_id(req.requested_by_id)
+                return mapping, req.requested_by_id
+        except Exception:
+            logger.debug("requester resolution via request id failed; "
+                         "falling back to username match", exc_info=True)
+    if fallback_username:
+        return await store.find_by_plex_username(fallback_username), None
+    return None, None
+
+
+async def handle_seerr_media(app: Application, payload: dict) -> None:
+    """Process a request-lifecycle webhook (MEDIA_*) and DM the requester
+    and/or the admin per _MEDIA_EVENTS."""
+    nt = (payload.get("notification_type") or "").upper()
+    lines_for = _MEDIA_EVENTS.get(nt)
+    if lines_for is None:
+        logger.info("Webhook media event %s: unknown type; dropping", nt)
+        return
+    requester_line, admin_line = lines_for
+    if requester_line is None and admin_line is None:
+        logger.info("Webhook media event %s: deliberately not notified", nt)
+        return
+
+    media = payload.get("media") or {}
+    request = payload.get("request") or {}
+    # Scan-triggered MEDIA_AVAILABLE events can carry a null request block;
+    # the notifyuser_* fields then identify the target user (present when
+    # the payload template includes them).
+    requester_username = (request.get("requestedBy_username")
+                          or payload.get("notifyuser_username") or "").strip()
+
+    mapping, requester_seerr_id = await _resolve_requester(
+        app, request, requester_username)
+    if mapping is None and (requester_username or requester_seerr_id):
+        logger.info("Webhook media event %s: requester '%s' not linked in Usher",
+                    nt, requester_username or requester_seerr_id)
+
+    seerr: Optional[SeerrClient] = app.bot_data.get("seerr")
+    title_line = await format_media_title_line(seerr, media)
+    seasons_note = _requested_seasons_note(payload)
+    # Fall back to Seerr's own subject when the TMDb lookup fails, so the DM
+    # never says just "Your request was approved" with no title at all.
+    if not title_line:
+        title_line = str(payload.get("subject") or "").strip()
+
+    admin_id = app.bot_data.get("admin_id")
+    requester_is_admin = mapping is not None and mapping.telegram_id == admin_id
+    if not requester_is_admin and requester_seerr_id is not None and seerr is not None:
+        # The admin can request WITHOUT a mapping (admin-key attribution);
+        # those requests carry the API key's own Seerr user id. Without this
+        # check the admin would be DMed "New request" about their own
+        # requests.
+        try:
+            requester_is_admin = (requester_seerr_id
+                                  == await seerr.get_admin_user_id())
+        except Exception:
+            logger.debug("admin-id comparison failed (non-fatal)", exc_info=True)
+
+    # "The admin has been notified" is a lie when the requester IS the
+    # admin (the admin FYI below is suppressed as self-noise); drop the
+    # clause for them.
+    if requester_is_admin and nt == "MEDIA_FAILED":
+        requester_line = "⚠️ Your request failed to download."
+
+    async def _dm(chat_id: int, first_line: str, *, with_requester: bool) -> None:
+        parts = [first_line]
+        if title_line:
+            parts.append(html.escape(title_line))
+        if seasons_note:
+            parts.append(html.escape(seasons_note))
+        if with_requester and requester_username:
+            parts.append(f"<b>Requested by:</b> {html.escape(requester_username)}")
+        try:
+            await app.bot.send_message(
+                chat_id=chat_id,
+                text="\n".join(parts),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+            logger.info("Notified telegram_id=%d of %s", chat_id, nt)
+        except Exception:
+            logger.exception("Failed to DM telegram_id=%d about %s", chat_id, nt)
+
+    # The unlinked admin (admin-key attribution) has no mapping but is a
+    # fully supported requester; their lifecycle DMs go to the admin chat.
+    # Without this, MEDIA_FAILED on an admin request notified NOBODY (the
+    # requester line had no mapping and the admin FYI is self-suppressed).
+    requester_chat_id = None
+    if mapping is not None:
+        requester_chat_id = mapping.telegram_id
+    elif requester_is_admin and admin_id:
+        requester_chat_id = admin_id
+    if requester_line and requester_chat_id:
+        await _dm(requester_chat_id, requester_line, with_requester=False)
+
+    # The admin line is skipped when the admin is the requester: their own
+    # request coming back as "New request" is noise.
+    if admin_line and admin_id and not requester_is_admin:
+        await _dm(admin_id, admin_line, with_requester=True)

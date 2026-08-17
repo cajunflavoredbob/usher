@@ -26,7 +26,18 @@ logger = logging.getLogger("usher.webhook")
 CommentHandler = Callable[[dict], Awaitable[None]]
 ResolvedHandler = Callable[[dict], Awaitable[None]]
 ReportedHandler = Callable[[dict], Awaitable[None]]
+MediaHandler = Callable[[dict], Awaitable[None]]
 SecretProvider = Callable[[], str]
+
+# Request-lifecycle notification types, all routed to one handler that
+# branches on notification_type. MEDIA_AUTO_REQUESTED (watchlist
+# auto-requests) is included so it doesn't log as "unhandled" noise; the
+# handler decides what, if anything, to send.
+MEDIA_NOTIFICATION_TYPES = frozenset({
+    "MEDIA_PENDING", "MEDIA_APPROVED", "MEDIA_AUTO_APPROVED",
+    "MEDIA_AVAILABLE", "MEDIA_DECLINED", "MEDIA_FAILED",
+    "MEDIA_AUTO_REQUESTED",
+})
 
 # Bounded dedupe cache: SHA-256 of the request body -> insert timestamp.
 # Seerr's default retry window is short; 60s covers all realistic retries.
@@ -47,6 +58,7 @@ def attach_webhook(
     on_comment: CommentHandler,
     on_resolved: ResolvedHandler,
     on_reported: ReportedHandler,
+    on_media: MediaHandler,
     secret_provider: SecretProvider,
 ) -> None:
     """Register POST /webhook/seerr and GET /healthz on the given app.
@@ -178,6 +190,12 @@ def attach_webhook(
                 await on_reported(payload)
             except Exception:
                 logger.exception("on_reported handler failed (returning 200 to suppress Seerr retry)")
+            return web.Response(status=200, text="ok")
+        if nt in MEDIA_NOTIFICATION_TYPES:
+            try:
+                await on_media(payload)
+            except Exception:
+                logger.exception("on_media handler failed (returning 200 to suppress Seerr retry)")
             return web.Response(status=200, text="ok")
         # ISSUE_REOPENED lands here too: deliberately unhandled for now
         # (notifying the reporter on reopen is a product decision, not an

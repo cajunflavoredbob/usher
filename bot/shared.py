@@ -20,7 +20,7 @@ from store import UserStore
 
 from procutil import schedule_clean_exit  # noqa: F401  (re-export for bot.*)
 
-from bot.callback_prefixes import RELINK, TK_CLOSE, TK_FIX, TK_REPLY
+from bot.callback_prefixes import RELINK, RQ_INFO_DISMISS, TK_CLOSE, TK_FIX, TK_REPLY
 from const import RELINK_RESUME_TTL_S
 
 logger = logging.getLogger("usher")
@@ -34,6 +34,11 @@ AWAIT_COMMENT = 100
 # Plex link flow
 AWAIT_LINK_CONSENT = 200
 AWAIT_PLATFORM_CHOICE = 201
+# Media requesting (/request)
+RQ_TITLE = 300
+RQ_PICK_MEDIA = 301
+RQ_PICK_SEASONS = 302
+RQ_CONFIRM = 303
 # Ticket management (reply to existing issue)
 AWAIT_TICKET_REPLY = 400
 
@@ -78,7 +83,9 @@ _FORMAT_AGE_WARNED: set[str] = set()
 def format_age(created_at_iso: str) -> str:
     try:
         created = datetime.fromisoformat(created_at_iso.replace("Z", "+00:00"))
-    except ValueError:
+    # TypeError/AttributeError: a JSON-null timestamp arriving as None must
+    # degrade to "?" like any other unparseable value, not abort the render.
+    except (ValueError, TypeError, AttributeError):
         # Log once per unparseable prefix so a Seerr format change isn't
         # silently swallowed by `return "?"`.
         key = (created_at_iso or "")[:20]
@@ -586,6 +593,12 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     q = update.callback_query
     if q is None or q.message is None or q.from_user is None:
         return
+    # Detail cards are deliberately NOT recorded in the history (recording
+    # them would evict the live pick list after three ℹ️ taps and brick the
+    # /request flow), so their Dismiss button is exempt from the gate. The
+    # action is harmless: it only deletes the tapped card itself.
+    if getattr(q, "data", None) == RQ_INFO_DISMISS:
+        return
     user_id = q.from_user.id
     # Snapshot via list copy so concurrent record_btn calls don't mutate
     # the iterable we're inspecting.
@@ -658,6 +671,23 @@ async def reset_stale_flows(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
     cmd = command_name(update.effective_message)
     if cmd is None or cmd in FLOW_RESET_EXEMPT_COMMANDS:
         return
+    force_end_flow_conversations(ctx, update)
+
+
+def force_end_flow_conversations(ctx: ContextTypes.DEFAULT_TYPE,
+                                 update: Update) -> None:
+    """End every registered flow conversation for this update's (chat, user)
+    and drop the free-text flow markers those conversations own. Shared by
+    reset_stale_flows and by cross-flow jump entry points (e.g. the /issue
+    dead-end's "Request it instead" button, whose tap starts the request
+    conversation while /issue is still mid-state -- without this the
+    abandoned /issue would fire a confusing timeout notice minutes into the
+    new flow).
+
+    The markers travel WITH the force-end, never separately: ending the link
+    conversation also cancels the timeout job that would normally clear
+    link_active_loop, so leaving the marker set would let an in-flight Plex
+    PIN poll outlive its conversation and fire _finalize_link mid-flow."""
     for conv in ctx.application.bot_data.get("flow_convs", ()):
         try:
             key = conv._get_key(update)
@@ -668,12 +698,28 @@ async def reset_stale_flows(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
             job = conv.timeout_jobs.pop(key, None)
             if job is not None:
                 job.schedule_removal()
-    # Drop free-text flow markers so a pending ticket reply / close-comment is
-    # abandoned too (its conversation was just ended above). link_active_loop
-    # also goes: it's the kill switch for an in-flight Plex PIN poll, which
-    # must not outlive its conversation.
     for marker in ("tk_reply_id", "tk_close_after", "link_active_loop"):
         ctx.user_data.pop(marker, None)
+
+
+# Keycap-emoji labels for numbered pick lists (/issue and /request share the
+# same picker idiom; one definition so they can't drift). Indexes past the
+# keycap set fall back to plain digits at the call sites.
+KEYCAP_DIGITS: Final = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣",
+                        "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+
+
+def truncate_message(text: str, limit: int = 4000) -> str:
+    """Keep a message under Telegram's 4096-char cap (an oversized send or
+    edit fails silently from the user's perspective). Cuts at the last
+    newline before the limit so an HTML tag is never split mid-entity.
+    Shared by /tickets and /requests list rendering."""
+    if len(text) <= limit:
+        return text
+    cut = text.rfind("\n", 0, limit - 20)
+    if cut < limit // 2:
+        cut = limit - 20
+    return text[:cut] + "\n…(truncated)"
 
 
 # --- Ticket detail keyboard ------------------------------------------------

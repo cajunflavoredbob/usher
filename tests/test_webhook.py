@@ -16,7 +16,7 @@ def _make_app(secret: str = SECRET, **handlers):
     handlers: pass on_comment / on_resolved / on_reported as needed;
     defaults are recording no-ops that append payloads into `calls`.
     """
-    calls = {"comment": [], "resolved": [], "reported": []}
+    calls = {"comment": [], "resolved": [], "reported": [], "media": []}
 
     async def default_comment(payload: dict) -> None:
         calls["comment"].append(payload)
@@ -27,12 +27,16 @@ def _make_app(secret: str = SECRET, **handlers):
     async def default_reported(payload: dict) -> None:
         calls["reported"].append(payload)
 
+    async def default_media(payload: dict) -> None:
+        calls["media"].append(payload)
+
     app = web.Application()
     attach_webhook(
         app,
         on_comment=handlers.get("on_comment", default_comment),
         on_resolved=handlers.get("on_resolved", default_resolved),
         on_reported=handlers.get("on_reported", default_reported),
+        on_media=handlers.get("on_media", default_media),
         secret_provider=lambda: secret,
     )
     return app, calls
@@ -144,11 +148,30 @@ async def test_test_notification_no_dispatch(client):
 async def test_unknown_type_no_dispatch(client):
     r = await client.post(
         "/webhook/seerr",
-        json={"notification_type": "MEDIA_PENDING"},
+        json={"notification_type": "ISSUE_REOPENED"},
         headers={"Authorization": SECRET},
     )
     assert r.status == 200
     assert client.calls["comment"] == []
+    assert client.calls["media"] == []
+
+
+async def test_media_types_dispatch_to_media_handler(client):
+    for nt in ("MEDIA_PENDING", "MEDIA_APPROVED", "MEDIA_AUTO_APPROVED",
+               "MEDIA_AVAILABLE", "MEDIA_DECLINED", "MEDIA_FAILED",
+               "MEDIA_AUTO_REQUESTED"):
+        r = await client.post(
+            "/webhook/seerr",
+            json={"notification_type": nt, "marker": nt},
+            headers={"Authorization": SECRET},
+        )
+        assert r.status == 200
+    assert [p["notification_type"] for p in client.calls["media"]] == [
+        "MEDIA_PENDING", "MEDIA_APPROVED", "MEDIA_AUTO_APPROVED",
+        "MEDIA_AVAILABLE", "MEDIA_DECLINED", "MEDIA_FAILED",
+        "MEDIA_AUTO_REQUESTED"]
+    assert client.calls["comment"] == []
+    assert client.calls["reported"] == []
 
 
 # --- error containment ---

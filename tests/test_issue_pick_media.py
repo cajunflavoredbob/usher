@@ -87,3 +87,22 @@ async def test_malformed_callback_non_int_version():
     state = await issue_pick_media(upd, ctx)
     assert state == ConversationHandler.END
     assert "Couldn't parse selection" in upd.callback_query.edits[0]["text"]
+
+
+async def test_not_in_library_offers_request_jump_and_ends():
+    """The dead end shows a Request-it-instead button (a request-conversation
+    entry point that works after END) and ENDs unless a parent re-search is
+    offered -- staying parked produced a spurious timeout notice."""
+    ctx = make_ctx(admin_id=999, user_data={
+        "search_results": {"version": 1, "by_key": {
+            ("movie", 77): MediaResult("movie", 77, "Not In Lib", "2026", None)}},
+        "search_version": 1,
+    })
+    upd = make_update(callback_data="media:1:movie:77", user_id=42)
+    state = await issue_pick_media(upd, ctx)
+    assert state == ConversationHandler.END
+    edit = upd.callback_query.edits[0]
+    callbacks = [b.callback_data for row in edit["reply_markup"].inline_keyboard
+                 for b in row]
+    assert "rqfi:movie:77" in callbacks
+    assert ctx.user_data["rq_jump_media"]["tmdb_id"] == 77

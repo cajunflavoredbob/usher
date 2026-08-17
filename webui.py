@@ -708,7 +708,7 @@ def _settings_page(
   <h2>Webhook</h2>
   <p>Usher receives webhook events from Seerr on this URL:</p>
   <div class="url-box">{_esc(webhook_url)}</div>
-  <div class="note">Configure in Seerr: Settings → Notifications → Webhook. Set the URL above and enable the <strong>Issue Reported</strong>, <strong>Issue Comment</strong>, and <strong>Issue Resolved</strong> events (Usher handles all three).</div>
+  <div class="note">Configure in Seerr: Settings → Notifications → Webhook. Set the URL above and enable the <strong>Issue Reported</strong>, <strong>Issue Comment</strong>, and <strong>Issue Resolved</strong> events, plus the request events — <strong>Request Pending Approval</strong>, <strong>Request Approved</strong>, <strong>Request Automatically Approved</strong>, <strong>Request Declined</strong>, <strong>Request Available</strong>, and <strong>Request Processing Failed</strong> — so /request status updates reach users in Telegram.</div>
 
   <label>Webhook Secret</label>
   <input type="password" id="webhook_secret" name="webhook_secret" value="{_esc(s.webhook_secret)}" autocomplete="off">

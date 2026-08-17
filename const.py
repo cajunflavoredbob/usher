@@ -39,6 +39,14 @@ EPISODE_PICKER_PAGE_SIZE: Final = 40
 # hard ceiling; 5 is the practical UX default that keeps the search list
 # compact while still surfacing useful alternates.
 SEARCH_RESULT_LIMIT: Final = 5
+REQUEST_LIST_TAKE: Final = 25
+# /request search pagination: one Seerr fetch of up to 20 results (Seerr's
+# server page size), rendered as screens of 5. Paging is a pure re-render
+# from the stored batch -- no extra network calls.
+REQUEST_SEARCH_FETCH_LIMIT: Final = 20
+REQUEST_RESULTS_PER_PAGE: Final = 5
+# Detail-card overview truncation (Telegram photo captions cap at 1024).
+DETAIL_OVERVIEW_MAX_CHARS: Final = 300
 
 # --- HTTP upload caps -------------------------------------------------------
 ADMIN_UPLOAD_MAX_BYTES: Final = 32 * 1024 * 1024  # 32 MB for backup restores
@@ -65,6 +73,7 @@ MIN_BACKUP_PASSPHRASE_CHARS: Final = ADMIN_PASSWORD_MIN_CHARS
 # --- Conversation timeouts (seconds) ---------------------------------------
 TICKET_REPLY_TIMEOUT_S: Final = 600    # 10 min
 ISSUE_FLOW_TIMEOUT_S: Final = 600      # 10 min
+REQUEST_FLOW_TIMEOUT_S: Final = 600    # 10 min
 LINK_FLOW_TIMEOUT_S: Final = 1800      # 30 min (covers strong-PIN window)
 RESOLVE_FLOW_TIMEOUT_S: Final = 600    # 10 min
 
