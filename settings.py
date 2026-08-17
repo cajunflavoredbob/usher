@@ -74,6 +74,14 @@ class Settings:
     # Queue-priority boost for downloads that originate from this bot
     # (requests + auto-fixes): "off", "high", or "force".
     sabnzbd_boost: str = "off"
+    # Bot DM classes, all on by default. Admin-level switches: turning one
+    # off silences that class for everyone.
+    tg_notify_requester: bool = True      # approved/declined/available/failed to requesters
+    tg_notify_admin_requests: bool = True  # new-request + auto-approved FYIs to the admin
+    tg_notify_admin_failed: bool = True    # failed-download alarm to the admin
+    tg_notify_issues: bool = True          # issue reported/comment/resolved DMs
+    tg_notify_subscriptions: bool = True   # availability-watch fan-out
+    tg_progress_cards: bool = True         # morphing request/auto-fix cards
     allowed_autofix_telegram_ids: list[int] = field(default_factory=list)
     # When True, every linked user may auto-fix regardless of the allowlist
     # (the admin is always allowed). The list above is retained either way.
@@ -125,6 +133,12 @@ class Settings:
             sabnzbd_boost=(data.get("sabnzbd_boost") or "off")
             if (data.get("sabnzbd_boost") or "off") in ("off", "high", "force")
             else "off",
+            tg_notify_requester=bool(data.get("tg_notify_requester", True)),
+            tg_notify_admin_requests=bool(data.get("tg_notify_admin_requests", True)),
+            tg_notify_admin_failed=bool(data.get("tg_notify_admin_failed", True)),
+            tg_notify_issues=bool(data.get("tg_notify_issues", True)),
+            tg_notify_subscriptions=bool(data.get("tg_notify_subscriptions", True)),
+            tg_progress_cards=bool(data.get("tg_progress_cards", True)),
             radarr_api_key=data.get("radarr_api_key", "") or "",
             sonarr_url=data.get("sonarr_url", "") or "",
             sonarr_api_key=data.get("sonarr_api_key", "") or "",

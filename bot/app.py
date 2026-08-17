@@ -39,6 +39,8 @@ from bot.callback_prefixes import (
     DV_PAGE,
     SUB_ADD,
     SUB_DEL,
+    UNINV_GO,
+    UNINV_KEEP,
     RQ_INFO_DISMISS,
     RQ_LIST_CANCEL,
     LINK_HELP,
@@ -53,6 +55,8 @@ from bot.callback_prefixes import (
 from bot.issue_flow import _issue_conversation
 from bot.link_flow import _link_conversation, cmd_link_didnt_work, cmd_unlink
 from bot.discover_cmd import cmd_trending, dv_category, dv_info, dv_page
+from bot.invite_flow import (_INV_KEYS, _invite_conversation, cmd_uninvite,
+                             uninvite_cancel, uninvite_go)
 from bot.subscriptions import cmd_subscriptions, sub_add, sub_del
 from bot.request_flow import (_RQ_KEYS, _request_conversation,
                               request_info_dismiss)
@@ -274,6 +278,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "  /trending — browse trending, popular, and upcoming",
         "  /subscriptions — titles you're watching for availability",
         "  /tickets — list your open tickets",
+        "  /invite — share the Plex server with someone (admin only)",
+        "  /uninvite — revoke someone's access (admin only)",
         "  /status — connection diagnostics (admin only)",
         "  /help — show this",
     ]
@@ -333,6 +339,7 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     link_conv = _link_conversation()
     issue_conv = _issue_conversation()
     request_conv = _request_conversation()
+    invite_conv = _invite_conversation()
     resolve_conv = _resolve_conversation()
     ticket_conv = _ticket_conversation()
     # Registry for shared.user_in_conversation: lets one flow's
@@ -341,11 +348,12 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
         "link": link_conv,
         "issue": issue_conv,
         "request": request_conv,
+        "invite": invite_conv,
         "resolve": resolve_conv,
         "ticket_reply": ticket_conv,
     }
     app.bot_data["flow_convs"] = [link_conv, issue_conv, request_conv,
-                                  resolve_conv, ticket_conv]
+                                  invite_conv, resolve_conv, ticket_conv]
     app.add_handler(TypeHandler(Update, reset_stale_flows), group=-2)
 
     # Global gate: drop callbacks from stale button-bearing messages. Group -1
@@ -363,6 +371,8 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CommandHandler("subscriptions", cmd_subscriptions))
     app.add_handler(issue_conv)
     app.add_handler(request_conv)
+    app.add_handler(invite_conv)
+    app.add_handler(CommandHandler("uninvite", cmd_uninvite))
     app.add_handler(resolve_conv)
     # Request-list cancel + detail-card dismiss: non-conversation callbacks,
     # live even when no conversation is active.
@@ -375,6 +385,12 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     # Availability-watch callbacks (detail-card 🔔 + /subscriptions ❌).
     app.add_handler(CallbackQueryHandler(sub_add, pattern=fr"^{SUB_ADD}:"))
     app.add_handler(CallbackQueryHandler(sub_del, pattern=fr"^{SUB_DEL}:"))
+    # /uninvite confirm card (its own prefixes -- never collides with the
+    # invite conversation's versioned invx:<v> cancel).
+    app.add_handler(CallbackQueryHandler(uninvite_go,
+                                         pattern=fr"^{UNINV_GO}:\d+:[ap]$"))
+    app.add_handler(CallbackQueryHandler(uninvite_cancel,
+                                         pattern=fr"^{UNINV_KEEP}$"))
     # Ticket-management callbacks (must be registered before the conversation
     # so the non-conversation taps -- open / close-menu / close-direct -- work
     # even when no conversation is active)
@@ -442,6 +458,8 @@ _BOT_COMMANDS = [
     ("help", "show commands and status"),
 ]
 _ADMIN_BOT_COMMANDS = _BOT_COMMANDS + [
+    ("invite", "share the Plex server with someone"),
+    ("uninvite", "revoke someone's Plex access"),
     ("status", "connection diagnostics"),
 ]
 
@@ -643,9 +661,9 @@ async def _post_shutdown(app: Application) -> None:
             logger.exception("HTTP server cleanup failed")
 
 
-# user_data keys populated by the four ConversationHandlers (link, issue,
-# resolve, ticket-reply). Cleared on error so a mid-conversation crash
-# doesn't leak half-state into the next /issue / /link / /tickets.
+# user_data keys populated by the ConversationHandlers (link, issue,
+# resolve, ticket-reply, request, invite). Cleared on error so a
+# mid-conversation crash doesn't leak half-state into the next flow.
 _CONVERSATION_USER_DATA_KEYS = (
     "tk_reply_id", "tk_close_after",
     "link_active_loop",
@@ -661,7 +679,7 @@ _CONVERSATION_USER_DATA_KEYS = (
     # reset or a still-gated message from a prior flow could collide with a
     # fresh flow's counter restarting at 1.
     "rq_jump_media",
-)
+) + _INV_KEYS  # inv_version deliberately excluded (see invite_flow._INV_KEYS)
 
 
 async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:

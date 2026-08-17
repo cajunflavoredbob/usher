@@ -105,6 +105,7 @@ from const import (
 
 logger = logging.getLogger("usher")
 
+
 # user_data keys this flow owns (cleared on timeout/cancel/finish).
 # rq_search_version is deliberately NOT here: it must survive across flows
 # so a superseded message's version-stamped buttons can never collide with a
@@ -969,6 +970,9 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     # Track the confirmation as a morphing card: the watch poller paints
     # download progress onto THIS message, and lifecycle webhooks finish it.
     try:
+        # The watch row is created regardless of the cards toggle: it also
+        # drives the SABnzbd priority bump. The toggle gates PAINTING only
+        # (see request_watch._cards_enabled).
         store: UserStore = ctx.bot_data["store"]
         await store.add_request_watch(
             chat_id=update.effective_chat.id,

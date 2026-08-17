@@ -41,6 +41,10 @@ RQ_PICK_SEASONS = 302
 RQ_CONFIRM = 303
 # Ticket management (reply to existing issue)
 AWAIT_TICKET_REPLY = 400
+# Admin provisioning (/invite)
+INV_EMAIL = 500
+INV_LIBS = 501
+INV_CONFIRM = 502
 
 # --- Issue type maps --------------------------------------------------------
 

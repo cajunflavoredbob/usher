@@ -617,6 +617,12 @@ def _settings_page(
             return f'<span class="saved-marker ok">✓ {_esc(message)}</span>'
         return ""
 
+    req_chk = " checked" if s.tg_notify_requester else ""
+    adm_chk = " checked" if s.tg_notify_admin_requests else ""
+    fail_chk = " checked" if s.tg_notify_admin_failed else ""
+    iss_chk = " checked" if s.tg_notify_issues else ""
+    subs_chk = " checked" if s.tg_notify_subscriptions else ""
+    cards_chk = " checked" if s.tg_progress_cards else ""
     telegram_form = f"""
 <form id="telegram-form" method="POST" action="/admin/telegram">
   {csrf}
@@ -629,6 +635,16 @@ def _settings_page(
   <label>Usher Admin UI URL <span class="note">(optional)</span></label>
   <input type="text" name="usher_public_url" value="{_esc(s.usher_public_url)}" placeholder="http://192.168.1.15:8765 or https://usher.example.com">
   <div class="note">Used in the bot's startup DM to point you back here. Leave blank to fall back to a generic placeholder.</div>
+
+  <h2>Notifications</h2>
+  <div class="note">Which DM classes the bot sends. Turning one off silences that class for everyone; events that fire while a class is off are not replayed later.</div>
+  <label class="inline-check"><input type="checkbox" name="tg_notify_requester"{req_chk}> Request updates to requesters (approved / declined / available / failed)</label>
+  <label class="inline-check"><input type="checkbox" name="tg_notify_admin_requests"{adm_chk}> New-request and auto-approved notices to the admin</label>
+  <label class="inline-check"><input type="checkbox" name="tg_notify_admin_failed"{fail_chk}> Failed-download alarm to the admin</label>
+  <label class="inline-check"><input type="checkbox" name="tg_notify_issues"{iss_chk}> Issue reported / comment / resolved DMs</label>
+  <label class="inline-check"><input type="checkbox" name="tg_notify_subscriptions"{subs_chk}> Availability-watch notifications</label>
+  <label class="inline-check"><input type="checkbox" name="tg_progress_cards"{cards_chk}> Morphing progress cards on requests and auto-fixes (paint only: queue boosting and tracking continue while off)</label>
+
   <div class="btn-row divided">
     <button type="button" class="test-btn" data-test="telegram" data-form="telegram-form">Test</button>
     <button type="submit">Save</button>{marker("telegram")}
@@ -1209,6 +1225,10 @@ async def telegram_post(request: web.Request) -> web.Response:
     s.telegram_bot_token = token
     s.admin_telegram_id = admin_tg
     s.usher_public_url = public_url
+    for flag in ("tg_notify_requester", "tg_notify_admin_requests",
+                 "tg_notify_admin_failed", "tg_notify_issues",
+                 "tg_notify_subscriptions", "tg_progress_cards"):
+        setattr(s, flag, form.get(flag) is not None)
     restart_needed = (token != _orig_token) or (admin_tg != _orig_admin)
     return await _save_and_render(
         request, active_tab="telegram",

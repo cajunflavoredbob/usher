@@ -365,3 +365,11 @@ def test_user_friendly_unknown_exception_hides_internals():
     assert "ABC123" not in msg
     assert "/api/v3" not in msg
     assert "unexpected" in msg.lower()
+
+
+def test_classify_parses_plex_errors_array():
+    """plex.tv's v2 error shape: {"errors": [{"code": ..., "message": ...}]}."""
+    body = b'{"errors": [{"code": 1041, "message": "Invalid email address"}]}'
+    with pytest.raises(PermanentAPIError) as ei:
+        classify_response(_response(422, body), service="Plex")
+    assert "Invalid email address" in ei.value.user_message

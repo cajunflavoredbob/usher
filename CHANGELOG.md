@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-08-17
+
+Admin provisioning and notification controls.
+
+### Added
+- **`/invite`** (admin, DM-only) — share the Plex server with an email or
+  Plex username straight from the bot: a per-invite library checklist
+  (all libraries pre-selected, tap to exclude, e.g. the 4K sections), an
+  explicit confirmation showing exactly what will be shared, then the
+  Plex invite is sent from the admin's own linked account. Seerr picks
+  the new user up on their first Plex sign-in.
+- **`/uninvite`** (admin, DM-only) — revoke a share or cancel a pending
+  invite, with a live lookup, disambiguation when several shares match,
+  and an explicit confirm step.
+- **Notification controls** in the admin panel (Telegram tab): per-class
+  toggles for requester request updates, admin new-request notices, the
+  failed-download alarm, issue DMs, availability-watch notifications, and
+  the morphing progress cards. All default on. Silencing a class stops
+  its DMs (events that fire while it's off are not replayed later); the
+  cards toggle is paint-only, so queue boosting and download tracking
+  continue underneath. The requester's failure DM drops its "admin has
+  been notified" claim when the admin alarm is off.
+
+### Changed
+- Progress pollers tick every 10s (was 20s) for snappier card updates.
+  The arr RefreshMonitoredDownloads nudge stays throttled to one per 15s
+  per arr, and Telegram edits still fire only when the line changes.
+
 ## [0.16.2] - 2026-08-17
 
 Live progress that tracks reality, and a search fix for punctuated titles.

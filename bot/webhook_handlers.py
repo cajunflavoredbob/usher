@@ -30,6 +30,8 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
     conversation: the reporter when someone else comments, and the admin when
     the reporter (or a third party) comments. Whoever wrote the comment is
     never notified about their own comment."""
+    if not app.bot_data["settings_store"].settings.tg_notify_issues:
+        return
     issue = payload.get("issue") or {}
     comment = payload.get("comment") or {}
     media = payload.get("media") or {}
@@ -141,6 +143,8 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
 async def handle_seerr_resolved(app: Application, payload: dict) -> None:
     """Process an ISSUE_RESOLVED webhook and DM the reporter (and the admin
     unless admin IS the reporter)."""
+    if not app.bot_data["settings_store"].settings.tg_notify_issues:
+        return
     issue = payload.get("issue") or {}
     media = payload.get("media") or {}
 
@@ -221,6 +225,8 @@ async def handle_seerr_resolved(app: Application, payload: dict) -> None:
 async def handle_seerr_reported(app: Application, payload: dict) -> None:
     """Process an ISSUE_CREATED/ISSUE_REPORTED webhook and DM the admin
     (unless admin filed the issue themselves)."""
+    if not app.bot_data["settings_store"].settings.tg_notify_issues:
+        return
     issue = payload.get("issue") or {}
     media = payload.get("media") or {}
     description = (payload.get("message") or "").strip()
@@ -384,8 +390,26 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
         return
     requester_line, admin_line = lines_for
     if requester_line is None and admin_line is None:
+        # Table-silent event (MEDIA_AUTO_REQUESTED): nothing downstream
+        # consumes it either.
         logger.info("Webhook media event %s: deliberately not notified", nt)
         return
+    # DM-class toggles null the MESSAGE templates only. The tail of this
+    # handler (card morphing, subscription fan-out) runs regardless: one
+    # silenced DM class must never disable the other, still-enabled ones.
+    cfg = app.bot_data["settings_store"].settings
+    if not cfg.tg_notify_requester:
+        requester_line = None
+    if admin_line is not None:
+        if nt == "MEDIA_FAILED":
+            if not cfg.tg_notify_admin_failed:
+                admin_line = None
+        elif not cfg.tg_notify_admin_requests:
+            admin_line = None
+    # "The admin has been notified" must not survive with the alarm off.
+    if (requester_line and nt == "MEDIA_FAILED"
+            and not cfg.tg_notify_admin_failed):
+        requester_line = "⚠️ Your request failed to download."
 
     media = payload.get("media") or {}
     request = payload.get("request") or {}
@@ -425,7 +449,7 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
     # "The admin has been notified" is a lie when the requester IS the
     # admin (the admin FYI below is suppressed as self-noise); drop the
     # clause for them.
-    if requester_is_admin and nt == "MEDIA_FAILED":
+    if requester_line and requester_is_admin and nt == "MEDIA_FAILED":
         requester_line = "⚠️ Your request failed to download."
 
     async def _dm(chat_id: int, first_line: str, *, with_requester: bool) -> None:
@@ -456,8 +480,10 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
         requester_chat_id = mapping.telegram_id
     elif requester_is_admin and admin_id:
         requester_chat_id = admin_id
+    requester_dmed = False
     if requester_line and requester_chat_id:
         await _dm(requester_chat_id, requester_line, with_requester=False)
+        requester_dmed = True
 
     # The admin line is skipped when the admin is the requester: their own
     # request coming back as "New request" is noise.
@@ -482,6 +508,9 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
         m_type = media.get("media_type")
         if isinstance(tmdb_id, int) and m_type in ("movie", "tv"):
             from bot.subscriptions import fan_out_availability
-            already = {requester_chat_id} if requester_chat_id else set()
+            # Exclude the requester only when the requester DM actually
+            # went out: with that class silenced, their subscription row is
+            # their only notification and must still deliver.
+            already = {requester_chat_id} if requester_dmed else set()
             await fan_out_availability(app, m_type, tmdb_id, title_line,
                                        already_notified=already)

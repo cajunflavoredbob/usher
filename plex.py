@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlencode
+from xml.etree import ElementTree
 
 import httpx
 
@@ -23,6 +24,10 @@ DEVICE_NAME = "Telegram Bot"
 PLATFORM = "Linux"
 PLEX_API_BASE = "https://plex.tv/api/v2"
 PLEX_AUTH_URL_BASE = "https://app.plex.tv/auth"
+# plex.tv's sharing surface spans two API generations: the section-id map
+# and share listing live on the v1 XML API (/api/servers/...), while invite
+# creation and removal use the v2 JSON API (/api/v2/shared_servers).
+PLEX_API_V1_BASE = "https://plex.tv/api"
 
 
 @dataclass
@@ -30,6 +35,23 @@ class PlexPin:
     id: int
     code: str
     auth_url: str
+
+
+@dataclass
+class PlexLibrarySection:
+    id: int          # GLOBAL section id (what shared_servers wants, not the
+                     # server-local library key)
+    title: str
+    type: str        # movie / show / artist / photo
+
+
+@dataclass
+class PlexShare:
+    id: int
+    email: str
+    username: str
+    accepted: bool   # False = invite still pending
+    all_libraries: bool
 
 
 @dataclass
@@ -98,6 +120,87 @@ class PlexClient:
         r = await execute(self._http, "GET", f"{PLEX_API_BASE}/pins/{pin_id}",
                           service=_SERVICE)
         return json_or_raise(r, service=_SERVICE, what="PIN poll").get("authToken")
+
+    # --- Server sharing (admin /invite, /uninvite) -------------------------
+
+    async def get_owned_server(self, token: str) -> tuple[str, str]:
+        """(machine_identifier, name) of the account's owned server. Raises
+        LookupError when the token owns no server."""
+        r = await execute(self._http, "GET", f"{PLEX_API_BASE}/resources",
+                          service=_SERVICE,
+                          params={"includeHttps": "1"},
+                          headers={"X-Plex-Token": token})
+        resources = json_or_raise(r, service=_SERVICE, what="resources",
+                                  expect=list)
+        for res in resources or []:
+            res = res or {}
+            if "server" in (res.get("provides") or "") and res.get("owned"):
+                return res.get("clientIdentifier"), res.get("name") or "Plex"
+        raise LookupError("this Plex account owns no server")
+
+    async def get_library_sections(self, token: str,
+                                   machine_id: str) -> list[PlexLibrarySection]:
+        """The owned server's library sections with their GLOBAL ids (the
+        invite POST wants these, not the local library keys)."""
+        r = await execute(self._http, "GET",
+                          f"{PLEX_API_V1_BASE}/servers/{machine_id}",
+                          service=_SERVICE,
+                          headers={"X-Plex-Token": token,
+                                   "Accept": "application/xml"})
+        out: list[PlexLibrarySection] = []
+        for sec in ElementTree.fromstring(r.text).findall(".//Section"):
+            try:
+                out.append(PlexLibrarySection(
+                    id=int(sec.get("id")),
+                    title=sec.get("title") or "?",
+                    type=sec.get("type") or "?",
+                ))
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    async def invite_to_server(self, token: str, machine_id: str, email: str,
+                               section_ids: list) -> None:
+        """Share the server with an email/username. Plex sends the invite
+        mail; the share sits pending until accepted."""
+        await execute(self._http, "POST", f"{PLEX_API_BASE}/shared_servers",
+                      service=_SERVICE,
+                      headers={"X-Plex-Token": token},
+                      json={
+                          "machineIdentifier": machine_id,
+                          "invitedEmail": email,
+                          "librarySectionIds": list(section_ids),
+                          "settings": {},
+                      })
+
+    async def list_shares(self, token: str,
+                          machine_id: str) -> list[PlexShare]:
+        """Current shares (accepted + pending) on the owned server."""
+        r = await execute(self._http, "GET",
+                          f"{PLEX_API_V1_BASE}/servers/{machine_id}/shared_servers",
+                          service=_SERVICE,
+                          headers={"X-Plex-Token": token,
+                                   "Accept": "application/xml"})
+        out: list[PlexShare] = []
+        for share in ElementTree.fromstring(r.text).findall(".//SharedServer"):
+            try:
+                out.append(PlexShare(
+                    id=int(share.get("id")),
+                    email=share.get("email") or "",
+                    username=share.get("username") or "",
+                    accepted=bool((share.get("acceptedAt") or "").strip()),
+                    all_libraries=share.get("allLibraries") == "1",
+                ))
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    async def remove_share(self, token: str, share_id: int) -> None:
+        """Revoke a share (or cancel a pending invite)."""
+        await execute(self._http, "DELETE",
+                      f"{PLEX_API_BASE}/shared_servers/{share_id}",
+                      service=_SERVICE,
+                      headers={"X-Plex-Token": token})
 
     async def get_user(self, auth_token: str) -> PlexUser:
         r = await execute(self._http, "GET", f"{PLEX_API_BASE}/user",

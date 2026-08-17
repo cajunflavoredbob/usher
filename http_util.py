@@ -82,6 +82,13 @@ def _parse_error_body(r: httpx.Response) -> str:
             msg = data.get("message") or data.get("error") or data.get("detail")
             if isinstance(msg, str) and msg.strip():
                 return msg.strip()
+            # plex.tv's v2 shape: {"errors": [{"code": ..., "message": ...}]}
+            errors = data.get("errors")
+            if isinstance(errors, list) and errors:
+                first = errors[0] or {}
+                msg = first.get("message") if isinstance(first, dict) else None
+                if isinstance(msg, str) and msg.strip():
+                    return msg.strip()
     except Exception:
         pass
     text = (r.text or "").strip()

@@ -145,6 +145,11 @@ async def _paint_progress(ctx: ContextTypes.DEFAULT_TYPE, store: UserStore,
                         fix.bumped = 1
         if line == fix.last_progress:
             return
+        # The cards toggle gates the EDIT only; the progress fetch and the
+        # SABnzbd bump above must run regardless (turning off cosmetics
+        # must never turn off queue prioritization).
+        if not ctx.bot_data["settings_store"].settings.tg_progress_cards:
+            return
         await ctx.bot.edit_message_text(
             chat_id=fix.chat_id,
             message_id=fix.message_id,

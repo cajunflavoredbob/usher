@@ -122,6 +122,10 @@ async def fan_out_availability(app, media_type: str, tmdb_id: int,
     """DM every subscriber of a now-available title (one-shot: rows are
     consumed atomically). Called from the MEDIA_AVAILABLE webhook handler;
     `already_notified` suppresses a double DM to the requester."""
+    if not app.bot_data["settings_store"].settings.tg_notify_subscriptions:
+        # Silenced class: leave the rows unconsumed so re-enabling the
+        # toggle lets a later availability event deliver them.
+        return
     store: UserStore = app.bot_data["store"]
     try:
         subscribers = await store.pop_subscribers(media_type, tmdb_id)

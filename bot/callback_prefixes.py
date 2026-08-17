@@ -65,5 +65,14 @@ DV_INFO: Final = "dvi"                # dvi:<version>:<media_type>:<tmdb_id>
 SUB_ADD: Final = "subadd"             # subadd:<media_type>:<tmdb_id>
 SUB_DEL: Final = "subdel"             # subdel:<sub_id> from /subscriptions
 
+# --- Admin provisioning (/invite, /uninvite) --------------------------------
+INV_LIB: Final = "invl"               # invl:<version>:<section_id> toggle
+INV_ALL: Final = "inva"               # inva:<version> select all libraries
+INV_DONE: Final = "invd"              # invd:<version> proceed to confirm
+INV_GO: Final = "invgo"               # invgo:<version> send the invite
+INV_CANCEL: Final = "invx"            # invx:<version> cancel the invite flow
+UNINV_GO: Final = "uninv"             # uninv:<share_id>:<a|p> confirmed removal
+UNINV_KEEP: Final = "uninvk"          # dismiss the /uninvite confirm card
+
 # --- Post-autofix resolve follow-up ----------------------------------------
 RESOLVE: Final = "resolve"            # resolve:<issue_id>:yes|no|skip

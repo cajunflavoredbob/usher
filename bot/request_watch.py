@@ -132,6 +132,15 @@ async def refresh_arr_downloads(ctx, *, movies: bool, tv: bool) -> None:
             logger.debug("%s refresh failed (non-fatal)", key, exc_info=True)
 
 
+def _cards_enabled(bot_data: dict) -> bool:
+    """The tg_progress_cards toggle gates card EDITS only: watch rows,
+    webhook state/lifecycle, and the SABnzbd bump all keep running so the
+    toggle is purely cosmetic and re-enabling resumes painting mid-flight."""
+    settings_store = bot_data.get("settings_store")
+    return bool(getattr(getattr(settings_store, "settings", None),
+                        "tg_progress_cards", True))
+
+
 def _card_text(label: str, body_line: str, *, footer: bool = True) -> str:
     text = f"<b>{html.escape(label)}</b>\n{body_line}"
     if footer:
@@ -141,6 +150,8 @@ def _card_text(label: str, body_line: str, *, footer: bool = True) -> str:
 
 async def _edit_card(ctx, watch: dict, body_line: str, *,
                      footer: bool = True) -> bool:
+    if not _cards_enabled(ctx.bot_data):
+        return False
     try:
         await ctx.bot.edit_message_text(
             chat_id=watch["chat_id"],
@@ -305,6 +316,10 @@ _FINAL_LINES = {
     "MEDIA_FAILED": "⚠️ Download failed — the admin has been notified.",
 }
 
+# "The admin has been notified" must not survive on the card when the
+# failed-download alarm is off (same rule as the requester DM copy).
+_FAILED_LINE_NO_ALARM = "⚠️ Download failed."
+
 
 async def apply_webhook_event(app, nt: str, media_type: str,
                               tmdb_id: int) -> None:
@@ -332,6 +347,9 @@ async def apply_webhook_event(app, nt: str, media_type: str,
                 await _edit_card(ctx, watch, "✅ Approved — grabbing…")
         return
     final = _FINAL_LINES.get(nt)
+    if (nt == "MEDIA_FAILED" and not
+            app.bot_data["settings_store"].settings.tg_notify_admin_failed):
+        final = _FAILED_LINE_NO_ALARM
     if final is None:
         return
     for watch in watches:

@@ -97,7 +97,7 @@ def make_update(*, text: Optional[str] = None, callback_data: Optional[str] = No
     (for a CallbackQueryHandler-style update); not both.
     """
     eff_user = SimpleNamespace(id=user_id)
-    eff_chat = SimpleNamespace(id=chat_id)
+    eff_chat = SimpleNamespace(id=chat_id, type="private")
     if callback_data is not None:
         q = make_callback_query(callback_data, user_id=user_id, chat_id=chat_id,
                                 message_id=message_id)
@@ -212,9 +212,18 @@ def make_ctx(*, admin_id: int = 999, user_data: Optional[dict] = None,
         "allowlist": {admin_id},
         "settings_store": SimpleNamespace(
             settings=SimpleNamespace(daily_autofix_limit=3,
-                                     sabnzbd_boost="off"),
+                                     sabnzbd_boost="off",
+                                     tg_notify_requester=True,
+                                     tg_notify_admin_requests=True,
+                                     tg_notify_admin_failed=True,
+                                     tg_notify_issues=True,
+                                     tg_notify_subscriptions=True,
+                                     tg_progress_cards=True),
         ),
         "sabnzbd": None,
+        # invite/uninvite tests stub return values per-test; a default here
+        # keeps handlers from KeyErroring when they reach for the client.
+        "plex": AsyncMock(),
     }
     if bot_data_overrides:
         bot_data.update(bot_data_overrides)

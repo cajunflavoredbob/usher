@@ -136,3 +136,13 @@ async def test_store_subscription_round_trip(fresh_store):
     assert not await fresh_store.remove_subscription(sub_id, telegram_id=2)
     assert await fresh_store.remove_subscription(sub_id, telegram_id=1)
     assert await fresh_store.list_subscriptions(1) == []
+
+
+async def test_fanout_disabled_keeps_rows_unconsumed():
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    app = ctx.application
+    app.bot_data["settings_store"].settings.tg_notify_subscriptions = False
+    app.bot_data["store"].pop_subscribers = AsyncMock(return_value=[42])
+    await fan_out_availability(app, "movie", 550, "T", already_notified=set())
+    app.bot_data["store"].pop_subscribers.assert_not_awaited()
+    app.bot.send_message.assert_not_awaited()

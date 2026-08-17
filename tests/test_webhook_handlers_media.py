@@ -198,3 +198,87 @@ async def test_unlinked_admin_gets_lifecycle_dms():
     text = app.bot.send_message.call_args.kwargs["text"]
     assert "failed to download" in text
     assert "admin has been notified" not in text  # requester IS the admin
+
+
+# --- notification-class gates -------------------------------------------------
+
+async def test_requester_class_disabled_silences_requester_dm():
+    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app.bot_data["settings_store"].settings.tg_notify_requester = False
+    await handle_seerr_media(app, _payload("MEDIA_APPROVED"))
+    assert app.bot.send_message.call_args_list == []
+
+
+async def test_admin_request_class_disabled_keeps_failed_alarm():
+    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app.bot_data["settings_store"].settings.tg_notify_admin_requests = False
+    await handle_seerr_media(app, _payload("MEDIA_PENDING"))
+    assert app.bot.send_message.call_args_list == []
+    await handle_seerr_media(app, _payload("MEDIA_FAILED"))
+    chat_ids = [c.kwargs["chat_id"] for c in app.bot.send_message.call_args_list]
+    assert ADMIN_ID in chat_ids  # the alarm class is separate
+
+
+async def test_admin_failed_disabled_drops_notified_claim():
+    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app.bot_data["settings_store"].settings.tg_notify_admin_failed = False
+    await handle_seerr_media(app, _payload("MEDIA_FAILED"))
+    texts = [c.kwargs["text"] for c in app.bot.send_message.call_args_list]
+    assert len(texts) == 1  # requester only
+    assert "admin has been notified" not in texts[0]
+
+
+async def test_issue_class_disabled_silences_issue_handlers():
+    from bot.webhook_handlers import handle_seerr_resolved
+    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app.bot_data["settings_store"].settings.tg_notify_issues = False
+    await handle_seerr_resolved(app, {
+        "issue": {"issue_id": "5", "reportedBy_username": "user1plex"},
+        "media": {"media_type": "movie", "tmdbId": 550},
+    })
+    assert app.bot.send_message.call_args_list == []
+
+
+async def test_requester_class_off_still_runs_cards_and_fanout():
+    """A silenced DM class must never disable the still-enabled card morphs
+    or subscription fan-out (the gate nulls message templates only)."""
+    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app.bot_data["settings_store"].settings.tg_notify_requester = False
+    app.bot_data["store"].find_request_watches = AsyncMock(return_value=[])
+    app.bot_data["store"].pop_subscribers = AsyncMock(return_value=[88])
+    await handle_seerr_media(app, _payload("MEDIA_AVAILABLE"))
+    # No requester DM, but the fan-out still delivered to the subscriber.
+    chat_ids = [c.kwargs["chat_id"] for c in app.bot.send_message.call_args_list]
+    assert chat_ids == [88]
+    app.bot_data["store"].find_request_watches.assert_awaited()  # morph ran
+
+
+async def test_requester_class_off_subscription_still_delivers_to_requester():
+    """With the requester DM class silenced, the requester's own
+    subscription row is their only notification: the fan-out must not
+    skip them via already_notified (their DM never went out)."""
+    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app.bot_data["settings_store"].settings.tg_notify_requester = False
+    app.bot_data["store"].find_request_watches = AsyncMock(return_value=[])
+    app.bot_data["store"].pop_subscribers = AsyncMock(return_value=[USER_ID])
+    await handle_seerr_media(app, _payload("MEDIA_AVAILABLE"))
+    chat_ids = [c.kwargs["chat_id"] for c in app.bot.send_message.call_args_list]
+    assert chat_ids == [USER_ID]
+
+
+async def test_failed_card_line_honors_admin_alarm_toggle():
+    """The card must not claim 'the admin has been notified' when the
+    failed-download alarm is off."""
+    from bot.request_watch import apply_webhook_event
+    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app.bot_data["settings_store"].settings.tg_notify_admin_failed = False
+    app.bot_data["store"].find_request_watches = AsyncMock(return_value=[{
+        "id": 1, "chat_id": USER_ID, "message_id": 5, "status": "grabbing",
+        "last_progress": "", "media_type": "movie", "tmdb_id": 550,
+        "label": "Movie (2026)",
+    }])
+    app.bot_data["store"].delete_request_watch = AsyncMock()
+    await apply_webhook_event(app, "MEDIA_FAILED", "movie", 550)
+    text = app.bot.edit_message_text.call_args.kwargs.get("text") or \
+        app.bot.edit_message_text.call_args.args[0]
+    assert "Download failed" in text and "admin has been notified" not in text
