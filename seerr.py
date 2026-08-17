@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import urllib.parse
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Optional, Union
@@ -501,9 +502,15 @@ class SeerrClient:
 
     async def search(self, query: str,
                      limit: int = SEARCH_RESULT_LIMIT) -> list[MediaResult]:
-        """Search Seerr for movies + TV shows matching the query."""
-        r = await execute(self._client, "GET", "/search", service=_SERVICE,
-                          params={"query": query})
+        """Search Seerr for movies + TV shows matching the query.
+
+        The query is percent-encoded with NO safe characters: Seerr 400s on
+        RFC-3986 reserved characters that httpx legitimately leaves raw in
+        query strings (a verbatim "Goodbye, Lara" search died on its
+        comma)."""
+        encoded = urllib.parse.quote(query, safe="")
+        r = await execute(self._client, "GET", f"/search?query={encoded}",
+                          service=_SERVICE)
         data = _json_or_raise(r, what="search")
         return self._parse_media_results(data.get("results"), limit)
 

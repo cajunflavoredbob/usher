@@ -224,6 +224,14 @@ class SonarrClient:
             return err
         return await self._run_episode_workflow(series=series, match=match, blocklist=True)
 
+    async def refresh_monitored_downloads(self) -> None:
+        """Ask the arr to sync with its download clients NOW. The arrs only
+        poll their clients on their own schedule, so queue records (and the
+        import that ends them) can lag a minute-plus behind reality; firing
+        this before reading the queue keeps the morphing cards honest."""
+        await execute(self._client, "POST", "/command", service=_SERVICE,
+                      json={"name": "RefreshMonitoredDownloads"})
+
     async def get_queue_progress(self, series_id: int,
                                  episode_ids: "list[int] | None" = None):
         """Download progress for a series' queue records (optionally only

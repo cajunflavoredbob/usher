@@ -69,6 +69,14 @@ class RadarrClient:
         await execute(self._client, "POST", "/command", service=_SERVICE,
                       json={"name": "MoviesSearch", "movieIds": [movie_id]})
 
+    async def refresh_monitored_downloads(self) -> None:
+        """Ask the arr to sync with its download clients NOW. The arrs only
+        poll their clients on their own schedule, so queue records (and the
+        import that ends them) can lag a minute-plus behind reality; firing
+        this before reading the queue keeps the morphing cards honest."""
+        await execute(self._client, "POST", "/command", service=_SERVICE,
+                      json={"name": "RefreshMonitoredDownloads"})
+
     async def get_queue_progress(self, movie_id: int):
         """Download progress for a movie's queue records, or None when the
         queue holds nothing for it."""

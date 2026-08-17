@@ -62,3 +62,58 @@ async def test_api_level_failure_raises():
         await c.ping()
     assert "API Key Incorrect" in str(exc_info.value)
     await c.close()
+
+
+async def test_get_items_status_batches_queue_and_history():
+    """Both lookups are FILTERED batch calls (queue then history for the
+    remainder), never per-id fetches."""
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(dict(request.url.params))
+        if request.url.params["mode"] == "queue":
+            return httpx.Response(200, json={"queue": {"slots": [
+                {"nzo_id": "a", "percentage": "37", "timeleft": "0:03:12"}]}})
+        return httpx.Response(200, json={"history": {"slots": [
+            {"nzo_id": "b", "status": "Extracting"},
+            {"nzo_id": "c", "status": "Completed"},
+            {"nzo_id": "f", "status": "Failed"}]}})
+
+    c = _client(handler)
+    out = await c.get_items_status(["a", "b", "c", "f", "ghost"])
+    assert out == {
+        "a": ("downloading", 37, "0:03:12"),
+        "b": ("postproc", 100, "Extracting"),
+        "c": ("completed", 100, ""),
+        "f": ("failed", 100, ""),
+    }
+    assert len(calls) == 2
+    assert calls[0]["mode"] == "queue" and calls[0]["nzo_ids"] == "a,b,c,f,ghost"
+    assert calls[1]["mode"] == "history" and "a" not in calls[1]["nzo_ids"].split(",")
+    await c.close()
+
+
+async def test_get_items_status_all_in_queue_skips_history():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.params["mode"])
+        return httpx.Response(200, json={"queue": {"slots": [
+            {"nzo_id": "a", "percentage": "50", "timeleft": ""}]}})
+
+    c = _client(handler)
+    out = await c.get_items_status(["a"])
+    assert out["a"][0] == "downloading"
+    assert calls == ["queue"]
+    await c.close()
+
+
+async def test_get_items_status_empty_and_unknown():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"queue": {"slots": []},
+                                         "history": {"slots": []}})
+
+    c = _client(handler)
+    assert await c.get_items_status([]) == {}
+    assert await c.get_items_status(["nope"]) == {}
+    await c.close()

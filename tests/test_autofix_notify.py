@@ -258,3 +258,26 @@ async def test_paint_progress_searching_state_when_queue_empty():
                           last_progress="", bumped=0)
     await _paint_progress(ctx, ctx.bot_data["store"], fix)
     assert "Searching" in ctx.bot.edit_message_text.call_args.kwargs["text"]
+
+
+async def test_autofix_tick_fires_arr_refresh():
+    from unittest.mock import AsyncMock
+    from types import SimpleNamespace
+    from bot import request_watch as rw
+    from bot.autofix_poll import poll_pending_autofixes
+    from tests._handler_harness import make_ctx
+
+    rw._last_refresh.clear()
+    ctx = make_ctx()
+    ctx.bot_data["radarr"].refresh_monitored_downloads = AsyncMock()
+    fix = SimpleNamespace(id=1, chat_id=100, message_id=None, media_type="movie",
+                          radarr_movie_id=9, sonarr_series_id=None,
+                          sonarr_episode_id=None, sonarr_season=None,
+                          expected_episode_ids=[], label="M", issue_id=1,
+                          issue_url="", started_at="",
+                          timeout_at="2099-01-01 00:00:00",
+                          last_progress="", bumped=0)
+    fix.is_complete = AsyncMock(return_value=(False, ""))
+    ctx.bot_data["store"].list_pending_autofixes = AsyncMock(return_value=[fix])
+    await poll_pending_autofixes(ctx)
+    ctx.bot_data["radarr"].refresh_monitored_downloads.assert_awaited_once()

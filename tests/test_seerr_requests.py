@@ -426,3 +426,19 @@ async def test_create_request_parses_granted_seasons(monkeypatch):
                                           seasons=[1, 2, 3])
     assert created.seasons == [2, 3]
     await client.close()
+
+
+async def test_search_percent_encodes_reserved_characters(monkeypatch):
+    """Seerr 400s on raw reserved characters in the query string (a verbatim
+    "Goodbye, Lara" search died on its comma); the client must encode with
+    no safe characters."""
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["raw"] = request.url.raw_path.decode()
+        return httpx.Response(200, json={"results": []})
+
+    client = _client(monkeypatch, handler)
+    await client.search("goodbye, lara & friends")
+    assert "query=goodbye%2C%20lara%20%26%20friends" in captured["raw"]
+    await client.close()

@@ -22,13 +22,15 @@ from sonarr import SonarrClient
 from store import UserStore
 
 from bot.callback_prefixes import RESOLVE
+from bot.request_watch import (maybe_bump_priority, refresh_arr_downloads,
+                               resolve_progress_line)
 from bot.shared import record_btn
 from const import AUTOFIX_TIMEOUT_HOURS
 
 logger = logging.getLogger("usher")
 
 # Module-level set of fix IDs currently being processed by a tick. If a single
-# tick's await chain stretches past the next 60s mark (slow Sonarr/Radarr), the
+# tick's await chain stretches past the next poll mark (slow Sonarr/Radarr), the
 # next tick sees the ID still in-flight and skips it -- otherwise we'd
 # double-notify on a fix that completes mid-tick.
 _inflight: set[int] = set()
@@ -41,6 +43,10 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not pending:
         return
     logger.debug("Polling %d pending auto-fixes", len(pending))
+    await refresh_arr_downloads(
+        ctx,
+        movies=any(f.media_type == "movie" for f in pending),
+        tv=any(f.media_type == "tv" for f in pending))
 
     for fix in pending:
         if fix.id in _inflight:
@@ -64,7 +70,7 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             except Exception:
                 # The timestamp is the ONLY time bound on a fix. Leaving
                 # timed_out False on a corrupt value re-polled the row every
-                # 60s forever; treat it as timed out so it
+                # tick forever; treat it as timed out so it
                 # exits the poll set through the normal marked path.
                 logger.exception(
                     "timeout parse failed for fix %d; treating as timed out", fix.id)
@@ -130,12 +136,10 @@ async def _paint_progress(ctx: ContextTypes.DEFAULT_TYPE, store: UserStore,
             if progress is None:
                 line = "🔎 Searching for a replacement…"
             else:
-                line = f"⬇️ Replacing — {progress.percent}%"
-                timeleft = (progress.timeleft or "").strip()
-                if timeleft and timeleft != "00:00:00":
-                    line += f" · ~{timeleft} left"
+                line = await resolve_progress_line(
+                    ctx, progress, verb="Replacing",
+                    fallback_line=fix.last_progress)
                 if not fix.bumped and progress.download_ids:
-                    from bot.request_watch import maybe_bump_priority
                     if await maybe_bump_priority(ctx, progress.download_ids):
                         await store.mark_autofix_bumped(fix.id)
                         fix.bumped = 1

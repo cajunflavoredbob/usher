@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.2] - 2026-08-17
+
+Live progress that tracks reality, and a search fix for punctuated titles.
+
+### Fixed
+- **Searches containing commas (or any reserved URL character) work.**
+  Seerr rejects raw reserved characters in the query string, so a verbatim
+  title like "Goodbye, Lara" failed outright; queries are now fully
+  percent-encoded. The no-matches message also nudges toward spelling and
+  fewer words, since TMDB search is strict.
+- **Progress cards no longer lag minutes behind the download.** Three
+  causes fixed together: pollers tick every 20s instead of 45-60s; each
+  tick asks Radarr/Sonarr to sync with the download client
+  (RefreshMonitoredDownloads) instead of waiting out their own schedule;
+  and when SABnzbd is configured the card reads the job's LIVE state
+  directly from it — real percent and time left while downloading, then
+  "📦 Post-processing (Extracting)…" and "📥 Importing…" instead of the
+  old frozen 95% during unpack and import. Multi-file grabs aggregate
+  across their downloads, a failed download shows an honest "waiting for
+  another release" holding line instead of stranding, and a card the
+  webhook just finalized can no longer be overwritten by a stale progress
+  edit.
+
 ## [0.16.1] - 2026-08-16
 
 ### Fixed

@@ -315,7 +315,9 @@ async def _run_search(
         await reply_method(f"Search failed. {user_friendly_message(exc)}")
         return ConversationHandler.END
     if not results:
-        await reply_method(f'No matches for "{query}". Try a different title, or /cancel.')
+        await reply_method(
+            f'No matches for "{query}". TMDB search is strict about '
+            "spelling — try fewer words or a corrected title, or /cancel.")
         return RQ_TITLE
 
     version = _current_version(ctx) + 1

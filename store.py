@@ -534,21 +534,24 @@ class UserStore:
                 "last_progress", "bumped", "timeout_at")
         return [dict(zip(keys, r)) for r in rows]
 
-    async def update_request_watch(self, watch_id: int, **fields) -> None:
-        """Update whitelisted columns on one watch row."""
+    async def update_request_watch(self, watch_id: int, **fields) -> bool:
+        """Update whitelisted columns on one watch row. Returns True when
+        the row still existed -- the poller uses this to skip painting
+        progress over a card the webhook just finalized and deleted."""
         allowed = {"status", "arr_id", "last_progress", "bumped"}
         updates = {k: v for k, v in fields.items() if k in allowed}
         if not updates:
-            return
+            return False
 
-        def _do():
+        def _do() -> bool:
             with self._conn() as c:
                 sets = ", ".join(f"{k} = ?" for k in updates)
-                c.execute(
+                cur = c.execute(
                     f"UPDATE request_watches SET {sets} WHERE id = ?",
                     (*updates.values(), watch_id))
+                return cur.rowcount > 0
 
-        await self._run(_do)
+        return await self._run(_do)
 
     async def delete_request_watch(self, watch_id: int) -> None:
         def _do():
