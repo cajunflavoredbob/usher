@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.2] - 2026-08-21
+
+Honest install docs.
+
+### Fixed
+- **README no longer claims a Community Applications listing.** Usher was
+  never submitted to CA; the Unraid section now walks through adding the
+  repo as a template repository instead.
+
+### Changed
+- **The published image is the documented install path.** A `docker run`
+  block using `cajunflavoredbob/usher:latest` leads the install section,
+  `docker-compose.yml` pulls that image by default (building from source
+  is the commented-out alternative), and first-run setup is factored into
+  one section shared by every install path.
+
 ## [0.17.1] - 2026-08-17
 
 Terser admin panel.

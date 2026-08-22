@@ -25,35 +25,54 @@ Usher runs two things in one container:
 
 All configuration lives in `/data/settings.json`, managed through the web UI. On first run — before an admin account and the required fields exist — Usher starts in **setup-only mode** (just the web UI), then restarts into full mode once setup is complete.
 
-## Install (Unraid Community Applications)
+## Install (Docker)
 
-1. Search Community Apps for **Usher** and install.
-2. Set **App Data** (e.g. `/mnt/user/appdata/usher`) and the **Web UI / Webhook Port** (default `8765`). Start the container.
-3. Grab the first-run setup token from the logs:
+Every release publishes a multi-arch (amd64 + arm64) image to Docker Hub and GHCR.
+
+```sh
+docker run -d --name usher \
+  -p 8765:8765 \
+  -v ./data:/data \
+  --restart unless-stopped \
+  cajunflavoredbob/usher:latest
+```
+
+Then do [First-run setup](#first-run-setup).
+
+## Install (Unraid)
+
+Usher is not in Community Applications; the repo ships `unraid-template.xml` instead.
+
+1. Docker tab, **Template Repositories**, add `https://github.com/cajunflavoredbob/usher` and save.
+2. **Add Container**, pick **usher** from the template list.
+3. Set **App Data** (e.g. `/mnt/user/appdata/usher`) and the **Web UI / Webhook Port** (default `8765`). Start the container.
+4. Do [First-run setup](#first-run-setup).
+
+## Install (docker compose, from source)
+
+```sh
+git clone https://github.com/cajunflavoredbob/usher.git
+cd usher
+docker compose up -d
+```
+
+`docker-compose.yml` pulls the published image by default; uncomment `build: .` to build from source instead. You can pre-seed first-run values via environment variables (see [Configuration](#configuration)), but the web UI is the source of truth after that.
+
+## First-run setup
+
+1. Grab the first-run setup token from the logs:
    ```sh
    docker logs usher | grep "setup token"
    ```
-4. Open `http://<your-server>:8765/admin`, enter the setup token, and complete the wizard:
+2. Open `http://<your-server>:8765/admin`, enter the setup token, and complete the wizard:
    - **Telegram bot token** (from `@BotFather`)
    - **Admin Telegram user ID** (DM `@userinfobot`)
    - **Seerr URL** + **API key** (Seerr → Settings → General)
    - Optionally Radarr/Sonarr URLs + API keys for auto-fix
 
    The container restarts into full mode when setup finishes.
-5. In `@BotFather` → `/setprivacy` → select your bot → **Disable** (lets the bot see `/issue` in group chats).
-6. Configure the Seerr webhook (see [Webhook setup](#webhook-setup)).
-
-## Install (docker compose)
-
-```sh
-git clone https://github.com/cajunflavoredbob/usher.git
-cd usher
-docker compose up -d
-docker compose logs | grep "setup token"
-# open http://localhost:8765/admin, enter the token, finish setup
-```
-
-You can pre-seed first-run values via environment variables (see [Configuration](#configuration)), but the web UI is the source of truth after that.
+3. In `@BotFather` → `/setprivacy` → select your bot → **Disable** (lets the bot see `/issue` in group chats).
+4. Configure the Seerr webhook (see [Webhook setup](#webhook-setup)).
 
 ## Linking users
 

@@ -1,8 +1,8 @@
 services:
   usher:
-    # For local development: build .
-    # For published image: image: cajunflavoredbob/usher:latest
-    build: .
+    # To build from source instead: comment `image:` and uncomment `build: .`
+    # build: .
+    image: cajunflavoredbob/usher:latest
     container_name: usher
     restart: unless-stopped
     ports:
