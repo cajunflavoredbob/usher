@@ -1,7 +1,9 @@
 """Tests for session invalidation on password change, the loopback-only
-webhook self-test, and the unencrypted-backup acknowledgement gate."""
+webhook self-test, the unencrypted-backup acknowledgement gate, and the
+no-store header on /admin redirects."""
 from __future__ import annotations
 
+from http.cookies import SimpleCookie
 from types import SimpleNamespace
 
 import pytest
@@ -148,3 +150,58 @@ async def test_backup_with_passphrase_needs_no_ack(client):
                              cookies=_cookies())
     assert resp.status == 200
     assert "usher-backup" in resp.headers["Content-Disposition"]
+
+
+# --- /admin redirects keep Cache-Control: no-store ----------------------------
+
+
+def _set_cookies(resp) -> SimpleCookie:
+    sc: SimpleCookie = SimpleCookie()
+    for set_cookie in resp.headers.getall("Set-Cookie", []):
+        sc.load(set_cookie)
+    return sc
+
+
+@pytest.mark.parametrize("path,admin_set,logged_in,location", [
+    ("/admin", True, False, "/admin/login"),
+    ("/admin", False, False, "/admin/setup"),
+    ("/admin/setup", True, False, "/admin/login"),
+    ("/admin/login", True, True, "/admin"),
+])
+async def test_admin_redirects_carry_no_store(client, path, admin_set,
+                                              logged_in, location):
+    if not admin_set:
+        # First run: no admin on file yet.
+        client.settings_store.settings.admin.password_hash = ""
+    resp = await client.get(path, cookies=_cookies() if logged_in else None,
+                            allow_redirects=False)
+    assert resp.status == 302
+    assert resp.headers["Location"] == location
+    assert resp.headers["Cache-Control"] == "no-store"
+
+
+async def test_login_redirect_carries_no_store_and_session(client):
+    # Login-page CSRF tokens use the no-session binding.
+    csrf = webui.generate_csrf_token(SECRET)
+    resp = await client.post("/admin/login", data={
+        "username": "admin", "password": "old-password", "csrf_token": csrf,
+    }, cookies={"usher_csrf": csrf}, allow_redirects=False)
+    assert resp.status == 302
+    assert resp.headers["Location"] == "/admin"
+    assert resp.headers["Cache-Control"] == "no-store"
+    session = _set_cookies(resp)[webui.SESSION_COOKIE].value
+    assert webui._verify_session_cookie(SECRET, session, 0) == "admin"
+
+
+async def test_logout_redirect_carries_no_store_and_clears_session(
+        client, monkeypatch):
+    # Throwaway denylist keeps the pinned session valid for later tests.
+    monkeypatch.setattr(webui, "_revoked_sessions", {})
+    resp = await client.post("/admin/logout", data={"csrf_token": CSRF},
+                             cookies=_cookies(), allow_redirects=False)
+    assert resp.status == 302
+    assert resp.headers["Location"] == "/admin/login"
+    assert resp.headers["Cache-Control"] == "no-store"
+    session = _set_cookies(resp)[webui.SESSION_COOKIE]
+    assert session.value == ""
+    assert session["max-age"] == "0"

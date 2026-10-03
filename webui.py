@@ -855,7 +855,7 @@ def _webhook_url_from_request(request: web.Request) -> str:
 async def setup_get(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
     if store.settings.admin.is_set():
-        return web.HTTPFound("/admin/login")
+        raise web.HTTPFound("/admin/login")
     setup_token = load_or_create_setup_token(request.app["data_dir"])
     if setup_token == _SETUP_TOKEN_UNREADABLE:
         return web.Response(
@@ -913,7 +913,7 @@ async def setup_get(request: web.Request) -> web.Response:
 async def setup_post(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
     if store.settings.admin.is_set():
-        return web.HTTPFound("/admin/login")
+        raise web.HTTPFound("/admin/login")
     form = await request.post()
     if not validate_csrf(request, form.get(CSRF_FORM_FIELD)):
         audit("setup_csrf_fail", ip=client_ip(request))
@@ -994,9 +994,9 @@ async def setup_post(request: web.Request) -> web.Response:
 async def login_get(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
     if not store.settings.admin.is_set():
-        return web.HTTPFound("/admin/setup")
+        raise web.HTTPFound("/admin/setup")
     if _current_user(request):
-        return web.HTTPFound("/admin")
+        raise web.HTTPFound("/admin")
     csrf = csrf_for_request(request)
     body = _page("Login", f"""
 <h1>Usher Admin</h1>
@@ -1094,7 +1094,7 @@ async def login_post(request: web.Request) -> web.Response:
     attach_csrf_cookie(
         resp, generate_csrf_token(request.app["session_secret"], new_binding),
         secure=secure)
-    return resp
+    raise resp
 
 
 async def logout(request: web.Request) -> web.Response:
@@ -1111,7 +1111,7 @@ async def logout(request: web.Request) -> web.Response:
     audit("logout", user=user or "-", ip=client_ip(request))
     resp = web.HTTPFound("/admin/login")
     resp.del_cookie(SESSION_COOKIE)
-    return resp
+    raise resp
 
 
 async def admin_get(request: web.Request) -> web.Response:
@@ -1626,8 +1626,8 @@ async def restore_upload(request: web.Request) -> web.Response:
                 finally:
                     try:
                         Path(tmp_path).unlink()
-                    except OSError:
-                        pass
+                    except OSError as exc:
+                        logger.warning("Could not remove temp file %s: %s", tmp_path, exc)
     except Exception as exc:
         return _restore_error(request, f"Invalid backup: {exc}")
 
@@ -1911,15 +1911,20 @@ async def auth_middleware(request: web.Request, handler) -> web.Response:
         resp.headers.setdefault("Cache-Control", "no-store")
         return resp
 
-    store: SettingsStore = request.app["settings_store"]
-    # First-run: force /admin/setup until admin exists
-    if not store.settings.admin.is_set() and path != "/admin/setup":
-        return _no_store(web.HTTPFound("/admin/setup"))
-    if path in PUBLIC_ADMIN_PATHS:
-        return _no_store(await handler(request))
-    if _current_user(request):
-        return _no_store(await handler(request))
-    return _no_store(web.HTTPFound("/admin/login"))
+    try:
+        store: SettingsStore = request.app["settings_store"]
+        # First-run: force /admin/setup until admin exists
+        if not store.settings.admin.is_set() and path != "/admin/setup":
+            raise web.HTTPFound("/admin/setup")
+        if path in PUBLIC_ADMIN_PATHS:
+            return _no_store(await handler(request))
+        if _current_user(request):
+            return _no_store(await handler(request))
+        raise web.HTTPFound("/admin/login")
+    except web.HTTPException as exc:
+        # Raised responses skip the return path; mark them too.
+        _no_store(exc)
+        raise
 
 
 # --- Attach -----------------------------------------------------------------

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.3] - 2026-10-02
+
+Dependency refresh.
+
+### Changed
+- **aiohttp 3.14.3 and cryptography 50.0.2.** Existing backups and stored
+  Plex tokens carry over unchanged.
+
 ## [0.17.2] - 2026-08-21
 
 Honest install docs.
