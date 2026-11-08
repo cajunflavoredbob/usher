@@ -1,7 +1,11 @@
 """Settings management for Usher.
 
-settings.json under /data is the source of truth. Env vars seed it on
-first run, then become inert.
+settings.json under /data is the source of truth for panel settings
+(ADR 0005). Env vars seed it on first run, and again if settings.json is
+unreadable; a blank bot token or Admin id is also filled from the
+environment at start. Deployment variables (TRUSTED_PROXIES, WEBHOOK_PORT,
+DATA_DIR, USHER_ENCRYPTION_KEY and similar) are read from the environment
+at every start.
 
 Includes admin password helpers (pbkdf2_sha256, stdlib-only) and the
 session-secret loader used by the webui.
@@ -46,8 +50,11 @@ class AdminAccount:
     # Format: pbkdf2_sha256$<iter>$<salt_hex>$<hash_hex>
     password_hash: str = ""
     # Bumped on every password change; session cookies embed the value they
-    # were minted with, so a bump invalidates all outstanding sessions
-    # (a stolen 7-day cookie survived a password rotation).
+    # were minted with, so a bump invalidates every session minted before it
+    # (a stolen 7-day cookie survived a password rotation). The panel's
+    # password-change handler re-issues the current session at the new
+    # value, so a password change signs out every other session and keeps
+    # the current one.
     password_version: int = 0
 
     def is_set(self) -> bool:

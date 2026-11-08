@@ -1391,8 +1391,9 @@ async def change_password(request: web.Request) -> web.Response:
         )
     user = _current_user(request) or "-"
     admin.password_hash = hash_password(new)
-    # Invalidate every outstanding session: a stolen cookie
-    # must die when the admin rotates the password in response to it.
+    # Sign out every other session: a stolen cookie must die when the
+    # admin rotates the password in response to it. The current session
+    # is kept by re-issuing it at the new version below.
     admin.password_version += 1
     await store.save_async()
     audit("password_changed", user=user, ip=client_ip(request))
