@@ -1,0 +1,3 @@
+# settings.json is the source of truth for panel settings
+
+Usher can be installed with no environment variables and set up entirely from the admin panel. Settings shown in the panel are seeded from environment variables on first run, and again if settings.json is unreadable; after that settings.json wins (a blank bot token or Admin id is also filled from the environment at start). Deployment variables (TRUSTED_PROXIES, WEBHOOK_PORT, DATA_DIR, USHER_ENCRYPTION_KEY and similar) are still read from the environment at every start. Changing the bot token or the Admin's Telegram id in the panel restarts the container.
