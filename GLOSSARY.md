@@ -83,6 +83,12 @@ A Linked user's ask for a movie or show, made in Seerr as that user.
 A one-shot ask to be told when a title becomes available.
 _Avoid_: watch, availability watch
 
+## Chat
+
+**Hub**:
+A command in the bot's menu that opens one message of buttons for an area of the bot, such as requests, Tickets, the Link, or the Admin's tools. Every flow started from a Hub ends with a way back to it.
+_Avoid_: menu (the command list itself), panel (the web admin panel)
+
 **Progress card**:
 A bot message that edits itself in place as a Request or fix moves along.
 _Avoid_: morphing card, request watch
