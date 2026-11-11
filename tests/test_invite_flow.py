@@ -14,14 +14,14 @@ from telegram.ext import ConversationHandler
 from bot import hub
 from bot.admin_hub import ADMIN_HUB, cmd_admin
 from bot.callback_prefixes import (ADMIN_INVITE, ADMIN_SHARES, ADMIN_STATUS,
-                                   HUB_OPEN, SHARE_REMOVE, SHARE_VIEW,
-                                   UNINV_KEEP)
+                                   HUB_OPEN, SHARE_MATCHES, SHARE_REMOVE,
+                                   SHARE_VIEW, UNINV_KEEP)
 from bot.invite_flow import (_invite_conversation, _invite_timeout,
                              admin_shares, cmd_uninvite, invite_cancel,
                              invite_email, invite_hub_start,
                              invite_libs_done, invite_send, invite_start,
-                             invite_toggle_lib, share_remove, share_view,
-                             uninvite_cancel, uninvite_go)
+                             invite_toggle_lib, share_matches, share_remove,
+                             share_view, uninvite_cancel, uninvite_go)
 from bot.shared import INV_CONFIRM, INV_EMAIL, INV_LIBS
 from http_util import TransientAPIError
 from plex import PlexLibrarySection, PlexShare
@@ -585,16 +585,41 @@ async def test_uninvite_two_matches_shows_buttons():
     ctx.bot_data["plex"].remove_share.assert_not_awaited()
 
 
-async def test_uninvite_many_matches_caps_at_eight():
-    ctx = _shares_ctx(shares=_nine_shares())
-    ctx.args = ["example.com"]
-    upd = make_update(text="/uninvite example.com", user_id=ADMIN_ID)
+async def test_uninvite_many_matches_page_like_the_share_list():
+    ctx = _shares_ctx(shares=_nine_shares() + [_share(10, "zed@other.example")])
+    ctx.args = ["Example.com"]
+    upd = make_update(text="/uninvite Example.com", user_id=ADMIN_ID)
     await cmd_uninvite(upd, ctx)
     reply = upd.effective_message.reply_calls[-1]
-    assert "Showing the first 8." in reply["text"]
-    views = [b for b in _flat(reply["reply_markup"])
-             if b[1].startswith(f"{SHARE_VIEW}:")]
-    assert len(views) == 8
+    assert reply["text"].startswith('9 Shares match "example.com".')
+    assert "Page 1 of 2." in reply["text"]
+    flat = _flat(reply["reply_markup"])
+    assert len([b for b in flat if b[1].startswith(f"{SHARE_VIEW}:")]) == 8
+    assert ("Next ▶️", f"{SHARE_MATCHES}:1") in flat
+    assert not any(t == "◀️ Prev" for t, _ in flat)
+    assert flat[-1] == BACK
+
+    upd2 = make_update(callback_data=f"{SHARE_MATCHES}:1", user_id=ADMIN_ID)
+    await share_matches(upd2, ctx)
+    edit = upd2.callback_query.edits[0]
+    assert edit["text"].startswith('9 Shares match "example.com".')
+    assert "Page 2 of 2." in edit["text"]
+    flat2 = _flat(edit["reply_markup"])
+    assert [b for b in flat2 if b[1].startswith(f"{SHARE_VIEW}:")] == [
+        ("⏳ pending9@example.com (pending)", f"{SHARE_VIEW}:9")]
+    assert ("◀️ Prev", f"{SHARE_MATCHES}:0") in flat2
+    assert not any(t == "Next ▶️" for t, _ in flat2)
+    assert flat2[-1] == BACK
+
+
+async def test_uninvite_match_page_without_a_search_ends_with_back():
+    ctx = _shares_ctx(shares=_nine_shares())
+    upd = make_update(callback_data=f"{SHARE_MATCHES}:1", user_id=ADMIN_ID)
+    await share_matches(upd, ctx)
+    edit = upd.callback_query.edits[0]
+    assert edit["text"] == "That search expired. Type /uninvite again."
+    assert _flat(edit["reply_markup"]) == [BACK]
+    ctx.bot_data["plex"].list_shares.assert_not_awaited()
 
 
 # --- Status -------------------------------------------------------------------------
@@ -661,6 +686,7 @@ def test_admin_hub_handlers_registered():
             ("admin_shares", r'fr"\^\{ADMIN_SHARES\}:\\d\+\$"'),
             ("share_view", r'fr"\^\{SHARE_VIEW\}:\\d\+\$"'),
             ("share_remove", r'fr"\^\{SHARE_REMOVE\}:\\d\+\$"'),
+            ("share_matches", r'fr"\^\{SHARE_MATCHES\}:\\d\+\$"'),
             ("admin_hub_status", r'fr"\^\{ADMIN_STATUS\}\$"')):
         found = re.search(
             rf"CallbackQueryHandler\({handler},\s*pattern={pattern}\)", src)

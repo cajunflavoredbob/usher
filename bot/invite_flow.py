@@ -49,6 +49,7 @@ from bot.callback_prefixes import (
     INV_DONE,
     INV_GO,
     INV_LIB,
+    SHARE_MATCHES,
     SHARE_REMOVE,
     SHARE_VIEW,
     UNINV_GO,
@@ -504,12 +505,14 @@ async def invite_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # --- Shares: the Admin Hub's list, one Share's view, and its removal ---------
 #
 # Not a conversation: every step fetches the listing live from plex.tv and
-# carries what it needs in its callback, so no user_data is kept between taps.
+# carries what it needs in its callback. The one exception is the search text
+# of a typed /uninvite, kept in user_data so its match pages can refilter.
 
 SHARES_PER_PAGE = 8
 _NO_SERVER = ("Your linked Plex account doesn't own a server — sharing needs "
               "the server owner's account.")
-_MATCH_CAP = 8
+# user_data key holding the search text of the last typed /uninvite.
+_SHARE_QUERY_KEY = "share_query"
 
 
 def _who(share: PlexShare) -> str:
@@ -568,6 +571,47 @@ def _sorted_shares(shares) -> list[PlexShare]:
     return sorted(shares, key=lambda s: _who(s).lower())
 
 
+def _share_page(shares, page: int, nav_prefix: str,
+                header: str) -> tuple[str, InlineKeyboardMarkup]:
+    """One page of Share buttons with Prev/Next (`nav_prefix:<page>`) and
+    "⬅️ Admin"; `header` gets "Page N of M." when there is more than one."""
+    pages = -(-len(shares) // SHARES_PER_PAGE)
+    page = min(max(page, 0), pages - 1)
+    start = page * SHARES_PER_PAGE
+    rows = _share_rows(shares[start:start + SHARES_PER_PAGE])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(
+            "◀️ Prev", callback_data=f"{nav_prefix}:{page - 1}"))
+    if page < pages - 1:
+        nav.append(InlineKeyboardButton(
+            "Next ▶️", callback_data=f"{nav_prefix}:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([back_button(ADMIN_HUB)])
+    if pages > 1:
+        header += f"\nPage {page + 1} of {pages}."
+    return header, InlineKeyboardMarkup(rows)
+
+
+def _matching(shares, query: str) -> list[PlexShare]:
+    return _sorted_shares(
+        s for s in shares
+        if query in s.email.lower() or query in s.username.lower())
+
+
+def _matches_header(count: int, query: str) -> str:
+    return (f'{count} Shares match "{html.escape(query)}". '
+            "Tap one to see it or remove it.")
+
+
+def _page_of(data: str) -> int:
+    try:
+        return int(data.split(":")[1])
+    except (ValueError, IndexError):
+        return 0
+
+
 async def _edit_recorded(update, ctx, text: str,
                          markup: InlineKeyboardMarkup) -> None:
     sent = await edit_or_send(update.callback_query, text,
@@ -617,10 +661,6 @@ async def admin_shares(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
     await q.answer()
     force_end_flow_conversations(ctx, update)
-    try:
-        page = int(q.data.split(":")[1])
-    except (ValueError, IndexError):
-        page = 0
     shares = await _load_shares(update, ctx, q.data)
     if shares is None:
         return
@@ -629,24 +669,35 @@ async def admin_shares(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                    "👥 <b>Shares</b>\nNo one has a Share on your server yet.",
                    ADMIN_HUB, parse_mode="HTML")
         return
-    pages = -(-len(shares) // SHARES_PER_PAGE)
-    page = min(max(page, 0), pages - 1)
-    start = page * SHARES_PER_PAGE
-    rows = _share_rows(shares[start:start + SHARES_PER_PAGE])
-    nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton(
-            "◀️ Prev", callback_data=f"{ADMIN_SHARES}:{page - 1}"))
-    if page < pages - 1:
-        nav.append(InlineKeyboardButton(
-            "Next ▶️", callback_data=f"{ADMIN_SHARES}:{page + 1}"))
-    if nav:
-        rows.append(nav)
-    rows.append([back_button(ADMIN_HUB)])
-    text = f"👥 <b>Shares</b> ({len(shares)})\nTap one to see it or remove it."
-    if pages > 1:
-        text += f"\nPage {page + 1} of {pages}."
-    await _edit_recorded(update, ctx, text, InlineKeyboardMarkup(rows))
+    await _edit_recorded(update, ctx, *_share_page(
+        shares, _page_of(q.data), ADMIN_SHARES,
+        f"👥 <b>Shares</b> ({len(shares)})\nTap one to see it or remove it."))
+
+
+async def share_matches(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Prev/Next of a typed /uninvite's matches (shq:<page>): refilters the
+    live listing with the search text kept in user_data."""
+    if await refuse_outside_admin_dm(update, ctx):
+        return
+    q = update.callback_query
+    await q.answer()
+    query = ctx.user_data.get(_SHARE_QUERY_KEY)
+    if not query:
+        await _end(update, ctx, "That search expired. Type /uninvite again.",
+                   ADMIN_HUB)
+        return
+    shares = await _load_shares(update, ctx, q.data)
+    if shares is None:
+        return
+    matches = _matching(shares, query)
+    if not matches:
+        await _end(update, ctx,
+                   f'No share matches "{html.escape(query)}" any more.',
+                   ADMIN_HUB, parse_mode="HTML")
+        return
+    await _edit_recorded(update, ctx, *_share_page(
+        matches, _page_of(q.data), SHARE_MATCHES,
+        _matches_header(len(matches), query)))
 
 
 async def _tapped_share(update: Update,
@@ -711,9 +762,7 @@ async def cmd_uninvite(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text(
             f"Couldn't list shares. {user_friendly_message(exc)}")
         return
-    matches = _sorted_shares(
-        s for s in shares
-        if query in s.email.lower() or query in s.username.lower())
+    matches = _matching(shares, query)
     if not matches:
         await update.effective_message.reply_text(
             f'No share matches "{query}". Nothing changed.')
@@ -721,14 +770,9 @@ async def cmd_uninvite(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if len(matches) == 1:
         await _reply_recorded(update, ctx, *_share_view(matches[0]))
         return
-    text = (f'{len(matches)} Shares match "{html.escape(query)}". '
-            "Tap one to see it or remove it.")
-    if len(matches) > _MATCH_CAP:
-        text += (f"\nShowing the first {_MATCH_CAP}. Type more of the name "
-                 "to narrow it down.")
-    rows = _share_rows(matches[:_MATCH_CAP])
-    rows.append([back_button(ADMIN_HUB)])
-    await _reply_recorded(update, ctx, text, InlineKeyboardMarkup(rows))
+    ctx.user_data[_SHARE_QUERY_KEY] = query
+    await _reply_recorded(update, ctx, *_share_page(
+        matches, 0, SHARE_MATCHES, _matches_header(len(matches), query)))
 
 
 async def uninvite_go(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:

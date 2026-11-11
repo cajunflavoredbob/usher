@@ -53,6 +53,7 @@ from bot.callback_prefixes import (
     RQ_LIST_CANCEL,
     LINK_HELP,
     SHARE_REMOVE,
+    SHARE_MATCHES,
     SHARE_VIEW,
     TK_BACK,
     TK_BACK_LIST,
@@ -71,8 +72,8 @@ from bot.link_flow import (_link_conversation, account_unlink, cmd_account,
 from bot.discover_cmd import (cmd_trending, dv_category, dv_info, dv_page,
                               trending_hub)
 from bot.invite_flow import (_INV_KEYS, _invite_conversation, admin_shares,
-                             cmd_uninvite, share_remove, share_view,
-                             uninvite_cancel, uninvite_go)
+                             cmd_uninvite, share_matches, share_remove,
+                             share_view, uninvite_cancel, uninvite_go)
 from bot.subscriptions import (cmd_subscriptions, sub_add, sub_del,
                                subscriptions_hub)
 from bot.request_flow import (_RQ_KEYS, _request_conversation,
@@ -460,6 +461,8 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
                                          pattern=fr"^{SHARE_VIEW}:\d+$"))
     app.add_handler(CallbackQueryHandler(share_remove,
                                          pattern=fr"^{SHARE_REMOVE}:\d+$"))
+    app.add_handler(CallbackQueryHandler(share_matches,
+                                         pattern=fr"^{SHARE_MATCHES}:\d+$"))
     app.add_handler(CallbackQueryHandler(admin_hub_status,
                                          pattern=fr"^{ADMIN_STATUS}$"))
     # MUST stay the last callback handler in the default group:
