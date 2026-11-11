@@ -2,6 +2,7 @@
 started from the Hub), the ticket list, and the detail card opened from it."""
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -730,3 +731,45 @@ async def test_reply_from_dm_ends_without_buttons():
     upd = make_update(text="on it", user_id=ADMIN_ID)
     await tk_reply_text(upd, ctx)
     assert upd.effective_message.reply_calls[-1].get("reply_markup") is None
+
+
+# --- the Progress card keeps the Hub's keyboard -------------------------------------
+
+def _autofix_ctx(hub_name=None):
+    ctx = _submit_ctx(hub_name)
+    ctx.bot_data["settings_store"].settings.daily_autofix_unlimited = True
+    ctx.bot_data["radarr"].auto_fix.return_value = FixResult.success(
+        "Deleted file and triggered re-search.", steps_done=["delete", "search"],
+        poll_info={"movie_id": 555})
+    return ctx
+
+
+async def test_hub_report_progress_card_stores_its_keyboard():
+    ctx = _autofix_ctx(TICKETS_HUB)
+    upd = make_update(text="no sound", user_id=USER_ID)
+    await _submit_issue(upd, ctx, autofix=True)
+    store = ctx.bot_data["store"]
+    store.set_autofix_message.assert_awaited_once()
+    stored = store.set_autofix_message.call_args.kwargs["reply_markup"]
+    assert stored == hub.end_markup(TICKETS_HUB).to_json()
+
+
+async def test_typed_report_progress_card_stores_no_keyboard():
+    ctx = _autofix_ctx()
+    upd = make_update(text="no sound", user_id=USER_ID)
+    await _submit_issue(upd, ctx, autofix=True)
+    store = ctx.bot_data["store"]
+    store.set_autofix_message.assert_awaited_once()
+    assert store.set_autofix_message.call_args.kwargs.get("reply_markup", "") == ""
+
+
+async def test_fix_from_list_progress_card_stores_its_keyboard():
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    ctx.bot_data["seerr"].get_issue.return_value = _issue(id=5)
+    ctx.bot_data["radarr"].auto_fix.return_value = FixResult.success(
+        "Deleted file and triggered re-search.", steps_done=["delete", "search"],
+        poll_info={"movie_id": 555})
+    upd = _from_list_submenu(make_update(callback_data="tkfd:5", user_id=ADMIN_ID))
+    await _apply_fix(upd, ctx, strategy="redownload")
+    stored = ctx.bot_data["store"].set_autofix_message.call_args.kwargs["reply_markup"]
+    assert _flat(InlineKeyboardMarkup.de_json(json.loads(stored), None)) == [LIST_BACK]

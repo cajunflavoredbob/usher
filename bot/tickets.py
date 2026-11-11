@@ -692,16 +692,19 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
 
         prefix = "🔧" if result.ok else "⚠️"
         tail = "\n\n🔔 I'll DM when the new file finishes downloading." if result.should_poll else ""
+        markup = _result_markup(from_list)
         outcome = await _edit_result(q, ctx,
             f"{prefix} {action_name} for #{issue_id}.\n{fix.label}\n\n{result.message}{tail}",
-            _result_markup(from_list),
+            markup,
         )
         # Attach the outcome message as the morphing progress card (the
         # /issue flow does the same with its confirmation; without this,
         # admin-triggered fixes never showed live replacement progress).
         if pending_id and getattr(outcome, "message_id", None):
             try:
-                await store.set_autofix_message(pending_id, outcome.message_id)
+                await store.set_autofix_message(
+                    pending_id, outcome.message_id,
+                    reply_markup=markup.to_json() if markup is not None else "")
             except Exception:
                 logger.exception("couldn't attach autofix card for #%d", issue_id)
         return

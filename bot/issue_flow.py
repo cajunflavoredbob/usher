@@ -961,20 +961,19 @@ async def _submit_issue_inner(
                 end_action(ctx, media_key)
 
     lines.append("\nUse /tickets to manage it.")
-    if hub is None:
-        sent = await update.effective_message.reply_text("\n".join(lines))
-    else:
-        # The autofix poller edits this message without a keyboard, so the
-        # back button lasts until its first progress paint.
-        sent = await update.effective_message.reply_text(
-            "\n".join(lines), reply_markup=end_markup(hub))
+    markup = None if hub is None else end_markup(hub)
+    sent = await update.effective_message.reply_text(
+        "\n".join(lines), reply_markup=markup)
+    if markup is not None:
         record_btn(ctx.application, update.effective_user.id, sent)
     # If a poller row was enqueued this submit, attach the confirmation
     # message so the poll ticks can morph it into a progress card.
     pending_id = ctx.user_data.pop("_pending_autofix_id", None)
     if pending_id and getattr(sent, "message_id", None):
         try:
-            await store.set_autofix_message(pending_id, sent.message_id)
+            await store.set_autofix_message(
+                pending_id, sent.message_id,
+                reply_markup=markup.to_json() if markup is not None else "")
         except Exception:
             logger.exception("couldn't attach autofix card message")
     ctx.user_data.clear()

@@ -216,7 +216,7 @@ async def test_paint_progress_edits_card_and_dedupes():
     fix = SimpleNamespace(id=1, chat_id=100, message_id=77, media_type="movie",
                           radarr_movie_id=9, sonarr_series_id=None,
                           sonarr_episode_id=None, label="Movie (2026)",
-                          last_progress="", bumped=0)
+                          last_progress="", bumped=0, reply_markup="")
     ctx.bot_data["radarr"].get_queue_progress = AsyncMock(
         return_value=QueueProgress(percent=61, timeleft="00:05:00",
                                    download_ids=["nzo"], count=1))
@@ -241,7 +241,7 @@ async def test_paint_progress_skips_legacy_rows():
     fix = SimpleNamespace(id=1, chat_id=100, message_id=None,
                           media_type="movie", radarr_movie_id=9,
                           sonarr_series_id=None, sonarr_episode_id=None,
-                          label="M", last_progress="", bumped=0)
+                          label="M", last_progress="", bumped=0, reply_markup="")
     await _paint_progress(ctx, ctx.bot_data["store"], fix)
     ctx.bot.edit_message_text.assert_not_awaited()
 
@@ -255,7 +255,7 @@ async def test_paint_progress_searching_state_when_queue_empty():
     fix = SimpleNamespace(id=1, chat_id=100, message_id=77, media_type="movie",
                           radarr_movie_id=9, sonarr_series_id=None,
                           sonarr_episode_id=None, label="M",
-                          last_progress="", bumped=0)
+                          last_progress="", bumped=0, reply_markup="")
     await _paint_progress(ctx, ctx.bot_data["store"], fix)
     assert "Searching" in ctx.bot.edit_message_text.call_args.kwargs["text"]
 
@@ -276,8 +276,53 @@ async def test_autofix_tick_fires_arr_refresh():
                           expected_episode_ids=[], label="M", issue_id=1,
                           issue_url="", started_at="",
                           timeout_at="2099-01-01 00:00:00",
-                          last_progress="", bumped=0)
+                          last_progress="", bumped=0, reply_markup="")
     fix.is_complete = AsyncMock(return_value=(False, ""))
     ctx.bot_data["store"].list_pending_autofixes = AsyncMock(return_value=[fix])
     await poll_pending_autofixes(ctx)
     ctx.bot_data["radarr"].refresh_monitored_downloads.assert_awaited_once()
+
+
+async def test_paint_progress_keeps_the_card_keyboard():
+    from unittest.mock import AsyncMock
+    from types import SimpleNamespace
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    from fix_result import QueueProgress
+    from bot.autofix_poll import _paint_progress
+    from tests._handler_harness import make_ctx
+
+    markup = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⬅️ Tickets", callback_data="hubo:tickets")]])
+    ctx = make_ctx()
+    fix = SimpleNamespace(id=1, chat_id=100, message_id=77, media_type="movie",
+                          radarr_movie_id=9, sonarr_series_id=None,
+                          sonarr_episode_id=None, label="Movie (2026)",
+                          last_progress="", bumped=0,
+                          reply_markup=markup.to_json())
+    ctx.bot_data["radarr"].get_queue_progress = AsyncMock(
+        return_value=QueueProgress(percent=61, timeleft="00:05:00",
+                                   download_ids=["nzo"], count=1))
+    await _paint_progress(ctx, ctx.bot_data["store"], fix)
+    assert ctx.bot.edit_message_text.call_args.kwargs["reply_markup"] == markup
+    await _paint_progress(ctx, ctx.bot_data["store"], fix,
+                          final="🎉 Replacement downloaded.")
+    assert ctx.bot.edit_message_text.call_args.kwargs["reply_markup"] == markup
+
+
+async def test_paint_progress_without_a_stored_keyboard_sends_none():
+    from unittest.mock import AsyncMock
+    from types import SimpleNamespace
+    from fix_result import QueueProgress
+    from bot.autofix_poll import _paint_progress
+    from tests._handler_harness import make_ctx
+
+    ctx = make_ctx()
+    fix = SimpleNamespace(id=1, chat_id=100, message_id=77, media_type="movie",
+                          radarr_movie_id=9, sonarr_series_id=None,
+                          sonarr_episode_id=None, label="Movie (2026)",
+                          last_progress="", bumped=0, reply_markup="")
+    ctx.bot_data["radarr"].get_queue_progress = AsyncMock(
+        return_value=QueueProgress(percent=61, timeleft="00:05:00",
+                                   download_ids=["nzo"], count=1))
+    await _paint_progress(ctx, ctx.bot_data["store"], fix)
+    assert ctx.bot.edit_message_text.call_args.kwargs.get("reply_markup") is None

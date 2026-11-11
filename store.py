@@ -116,6 +116,8 @@ class PendingAutofix:
     last_progress: str = ""             # last rendered progress line (edit
                                         # dedupe)
     bumped: int = 0                     # SABnzbd priority boost applied
+    reply_markup: str = ""              # the card's keyboard as JSON, kept on
+                                        # each progress edit ("" = none)
 
     async def is_complete(self, radarr, sonarr) -> tuple[bool, str]:
         """Returns (done, extra_suffix). Polymorphic dispatch over media_type
@@ -322,6 +324,7 @@ class UserStore:
             ("message_id",           "ALTER TABLE pending_autofixes ADD COLUMN message_id INTEGER"),
             ("last_progress",        "ALTER TABLE pending_autofixes ADD COLUMN last_progress TEXT NOT NULL DEFAULT ''"),
             ("bumped",               "ALTER TABLE pending_autofixes ADD COLUMN bumped INTEGER NOT NULL DEFAULT 0"),
+            ("reply_markup",         "ALTER TABLE pending_autofixes ADD COLUMN reply_markup TEXT NOT NULL DEFAULT ''"),
         ],
     }
 
@@ -790,7 +793,7 @@ class UserStore:
                            sonarr_series_id, sonarr_episode_id, sonarr_season,
                            expected_episode_ids, label, issue_id, issue_url,
                            started_at, timeout_at, message_id, last_progress,
-                           bumped
+                           bumped, reply_markup
                     FROM pending_autofixes
                     WHERE status = 'pending'
                     ORDER BY id
@@ -817,20 +820,23 @@ class UserStore:
                     started_at=r[12], timeout_at=r[13],
                     message_id=r[14], last_progress=r[15] or "",
                     bumped=r[16] or 0,
+                    reply_markup=r[17] or "",
                 ))
             except Exception:
                 logger.exception("Skipping corrupt pending_autofix row id=%s", r[0])
         return out
 
-    async def set_autofix_message(self, pending_id: int,
-                                  message_id: int) -> None:
-        """Attach the confirmation message a fix's progress card lives on."""
+    async def set_autofix_message(self, pending_id: int, message_id: int,
+                                  reply_markup: str = "") -> None:
+        """Attach the confirmation message a fix's progress card lives on,
+        with its keyboard as JSON ("" for none) so progress edits keep it."""
 
         def _do():
             with self._conn() as c:
                 c.execute(
-                    "UPDATE pending_autofixes SET message_id = ? WHERE id = ?",
-                    (message_id, pending_id))
+                    "UPDATE pending_autofixes SET message_id = ?, "
+                    "reply_markup = ? WHERE id = ?",
+                    (message_id, reply_markup, pending_id))
 
         await self._run(_do)
 

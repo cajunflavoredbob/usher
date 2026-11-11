@@ -248,3 +248,15 @@ async def test_old_shape_autofix_table_is_reconciled(tmp_db_path: Path,
     )
     pending = await store.list_pending_autofixes()
     assert [p.id for p in pending] == [pid]
+
+
+async def test_pending_autofix_keeps_the_card_keyboard(fresh_store: UserStore):
+    pid = await fresh_store.add_pending_autofix(
+        chat_id=100, user_id=42, media_type="movie",
+        label="Movie (2026)", issue_id=1, issue_url="http://x/issues/1",
+        radarr_movie_id=555,
+    )
+    assert (await fresh_store.list_pending_autofixes())[0].reply_markup == ""
+    await fresh_store.set_autofix_message(pid, 77, reply_markup='{"k": 1}')
+    row = (await fresh_store.list_pending_autofixes())[0]
+    assert row.message_id == 77 and row.reply_markup == '{"k": 1}'

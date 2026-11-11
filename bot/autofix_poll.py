@@ -9,6 +9,7 @@ global button gate rejects its taps (see bot.shared.record_btn).
 from __future__ import annotations
 
 import html
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -113,7 +114,8 @@ async def _paint_progress(ctx: ContextTypes.DEFAULT_TYPE, store: UserStore,
                           fix, final: str = "") -> None:
     """Morph the /issue confirmation message through the replacement: live
     queue percent/ETA while downloading, a final line on completion or
-    timeout. Legacy rows (no message_id) keep the send-only behavior. All
+    timeout. Each edit keeps the card's stored keyboard. Legacy rows (no
+    message_id) keep the send-only behavior. All
     failures are non-fatal -- the completion/timeout DMs remain the
     guaranteed channel."""
     if not fix.message_id:
@@ -145,11 +147,17 @@ async def _paint_progress(ctx: ContextTypes.DEFAULT_TYPE, store: UserStore,
                         fix.bumped = 1
         if line == fix.last_progress:
             return
+        # An edit without reply_markup drops the keyboard, so pass back the
+        # one the card was sent with (a Hub's back button).
+        markup = (InlineKeyboardMarkup.de_json(json.loads(fix.reply_markup),
+                                               ctx.bot)
+                  if fix.reply_markup else None)
         await ctx.bot.edit_message_text(
             chat_id=fix.chat_id,
             message_id=fix.message_id,
             text=(f"🔧 Auto-fix: <b>{html.escape(fix.label)}</b>\n{line}"),
             parse_mode="HTML",
+            reply_markup=markup,
         )
         await store.set_autofix_progress(fix.id, line)
     except Exception:
