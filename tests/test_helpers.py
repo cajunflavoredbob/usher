@@ -86,7 +86,7 @@ def test_bot_command_menu_covers_registered_commands():
     app registers (menu drift shipped 0.15.0 with /request invisible).
     Typed-only commands that left the menu under ADR 0009 (link and unlink,
     which /account replaces; requests, trending and subscriptions, which
-    /request replaces) are excluded."""
+    /request replaces; issue, which /tickets replaces) are excluded."""
     import re
     from bot.app import _BOT_COMMANDS, _ADMIN_BOT_COMMANDS
     src = open("bot/app.py").read()
@@ -95,5 +95,6 @@ def test_bot_command_menu_covers_registered_commands():
     menu = {c for c, _ in _ADMIN_BOT_COMMANDS}
     # cancel is deliberately unlisted (contextual); start aliases help.
     missing = registered - menu - {"cancel", "start", "link", "unlink",
-                                      "requests", "trending", "subscriptions"}
+                                      "requests", "trending", "subscriptions",
+                                      "issue"}
     assert not missing, f"commands missing from the Telegram menu: {missing}"

@@ -9,11 +9,14 @@ from __future__ import annotations
 from typing import Final
 
 # --- Ticket management (/tickets, webhook DMs) -----------------------------
-TK_OPEN: Final = "tkopen"             # [#N] from /tickets list -> detail view
+TK_OPEN: Final = "tkopen"             # [#N] from the ticket list, or [📜 History]
+                                      # in a ticket DM -> detail view
 TK_REPLY: Final = "tkr"               # [💬 Reply] (top-level + comment-DM)
 TK_FIX: Final = "tkf"                 # [🔧 Fix] sub-menu opener (admin)
 TK_CLOSE: Final = "tkc"               # [✅ Close] sub-menu opener (admin)
-TK_BACK: Final = "tkback"             # [⬅️ Cancel] in sub-menus
+TK_BACK: Final = "tkback"             # [⬅️ Back] in sub-menus
+TK_BACK_LIST: Final = "tkbl"          # [⬅️ Back] in sub-menus of a detail card
+                                      # opened from the ticket list
 
 # Sub-menu actions
 TK_FIX_REDOWNLOAD: Final = "tkfd"     # delete + search
@@ -91,3 +94,7 @@ REQUESTS_NEW: Final = "rqhn"          # Requests Hub "New request" (request
 REQUESTS_MINE: Final = "rqhm"         # Requests Hub "My requests" (global handler)
 REQUESTS_TRENDING: Final = "rqht"     # Requests Hub "Trending" (global handler)
 REQUESTS_SUBS: Final = "rqhs"         # Requests Hub "Subscriptions" (global handler)
+TICKETS_REPORT: Final = "tkhr"        # Tickets Hub "Report a problem" (issue
+                                      # conversation entry point)
+TICKETS_LIST: Final = "tkhl"          # Tickets Hub list button and a detail
+                                      # card's "⬅️ Tickets": show the list

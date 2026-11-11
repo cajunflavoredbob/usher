@@ -343,8 +343,8 @@ def test_typed_list_commands_still_registered():
 
 
 NEW_START_LINE = "  /request — new request, your requests, trending, subscriptions"
-NEW_START_NOTE = ("(/link, /unlink, /requests, /trending and /subscriptions "
-                  "still work when typed.)")
+NEW_START_NOTE = ("(/link, /unlink, /issue, /requests, /trending and "
+                  "/subscriptions still work when typed.)")
 
 
 def _assert_start_text(text):

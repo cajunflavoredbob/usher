@@ -1,12 +1,13 @@
-"""Tests for bot.tickets.cmd_tickets: list rendering for admin vs user,
-empty list, Seerr error."""
+"""Tests for the ticket list (bot.tickets.tickets_hub_list, the Tickets Hub's
+list button; typed /tickets now opens the Hub): list rendering for admin vs
+user, empty list, Seerr error."""
 from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
 import pytest
 
-from bot.tickets import cmd_tickets
+from bot.tickets import tickets_hub_list
 from seerr import IssueListItem
 from tests._handler_harness import make_ctx, make_mapping, make_update
 
@@ -31,12 +32,12 @@ def _issue(id: int = 1, **kwargs) -> IssueListItem:
 
 
 async def test_admin_lists_all_issues():
-    upd = make_update(text="/tickets", user_id=999)
+    upd = make_update(callback_data="tkhl", user_id=999)
     ctx = make_ctx(admin_id=999)
     ctx.bot_data["seerr"].list_issues.return_value = ([_issue(id=1), _issue(id=2)], 2)
-    await cmd_tickets(upd, ctx)
+    await tickets_hub_list(upd, ctx)
     # Admin sees "All open tickets" framing.
-    text = upd.message.reply_calls[0]["text"]
+    text = upd.callback_query.edits[0]["text"]
     assert "All open tickets" in text
     assert "#1" in text and "#2" in text
     # Admin call sets as_plex_token=None.
@@ -46,11 +47,11 @@ async def test_admin_lists_all_issues():
 
 async def test_user_lists_only_their_issues():
     mapping = make_mapping(telegram_id=42, plex_token="user-token")
-    upd = make_update(text="/tickets", user_id=42)
+    upd = make_update(callback_data="tkhl", user_id=42)
     ctx = make_ctx(admin_id=999, mapping=mapping)
     ctx.bot_data["seerr"].list_issues.return_value = ([_issue(id=7)], 1)
-    await cmd_tickets(upd, ctx)
-    text = upd.message.reply_calls[0]["text"]
+    await tickets_hub_list(upd, ctx)
+    text = upd.callback_query.edits[0]["text"]
     assert "Your open tickets" in text
     assert "#7" in text
     # User call passes their token so Seerr scopes the list.
@@ -62,39 +63,39 @@ async def test_user_lists_only_their_issues():
 
 
 async def test_unlinked_non_admin_gets_link_prompt():
-    upd = make_update(text="/tickets", user_id=42)
+    upd = make_update(callback_data="tkhl", user_id=42)
     ctx = make_ctx(admin_id=999, mapping=None)  # not linked
-    await cmd_tickets(upd, ctx)
-    text = upd.message.reply_calls[0]["text"]
+    await tickets_hub_list(upd, ctx)
+    text = upd.callback_query.edits[0]["text"]
     assert "/link" in text
     # Seerr was NOT called.
     ctx.bot_data["seerr"].list_issues.assert_not_called()
 
 
 async def test_empty_list_for_admin():
-    upd = make_update(text="/tickets", user_id=999)
+    upd = make_update(callback_data="tkhl", user_id=999)
     ctx = make_ctx(admin_id=999)
     ctx.bot_data["seerr"].list_issues.return_value = ([], 0)
-    await cmd_tickets(upd, ctx)
-    assert "No open tickets across all users" in upd.message.reply_calls[0]["text"]
+    await tickets_hub_list(upd, ctx)
+    assert "No open tickets across all users" in upd.callback_query.edits[0]["text"]
 
 
 async def test_empty_list_for_user():
     mapping = make_mapping(telegram_id=42, plex_token="t")
-    upd = make_update(text="/tickets", user_id=42)
+    upd = make_update(callback_data="tkhl", user_id=42)
     ctx = make_ctx(admin_id=999, mapping=mapping)
     ctx.bot_data["seerr"].list_issues.return_value = ([], 0)
-    await cmd_tickets(upd, ctx)
-    assert "No open tickets" in upd.message.reply_calls[0]["text"]
-    assert "across all users" not in upd.message.reply_calls[0]["text"]
+    await tickets_hub_list(upd, ctx)
+    assert "No open tickets" in upd.callback_query.edits[0]["text"]
+    assert "across all users" not in upd.callback_query.edits[0]["text"]
 
 
 async def test_seerr_error_shows_friendly_message():
-    upd = make_update(text="/tickets", user_id=999)
+    upd = make_update(callback_data="tkhl", user_id=999)
     ctx = make_ctx(admin_id=999)
     ctx.bot_data["seerr"].list_issues.side_effect = RuntimeError("boom")
-    await cmd_tickets(upd, ctx)
-    text = upd.message.reply_calls[0]["text"]
+    await tickets_hub_list(upd, ctx)
+    text = upd.callback_query.edits[0]["text"]
     assert "Couldn't fetch tickets" in text
     # And the raw exception isn't echoed -- user_friendly_message wrap.
     assert "boom" not in text
@@ -104,9 +105,9 @@ async def test_seerr_error_shows_friendly_message():
 
 
 async def test_seerr_not_configured_short_circuits():
-    upd = make_update(text="/tickets", user_id=999)
+    upd = make_update(callback_data="tkhl", user_id=999)
     ctx = make_ctx(admin_id=999, bot_data_overrides={"seerr": None})
-    await cmd_tickets(upd, ctx)
+    await tickets_hub_list(upd, ctx)
     # The require_seerr helper sends its own message; no list_issues call.
     assert upd.message.reply_calls
     assert "isn't configured" in upd.message.reply_calls[0]["text"]

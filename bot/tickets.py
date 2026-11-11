@@ -2,7 +2,8 @@
 reply ConversationHandler.
 
 Public entry points:
-  cmd_tickets          /tickets list command
+  cmd_tickets          /tickets: sends the Tickets Hub (bot.tickets_hub)
+  tickets_hub_list     the Hub's list button and a detail card's "⬅️ Tickets"
   tk_open, tk_back, tk_close_menu, tk_close_direct, tk_fix,
     tk_fix_redownload, tk_fix_mark_failed                callback handlers
   tk_reply_start, tk_close_with_comment_start, tk_reply_text  reply convo
@@ -40,7 +41,9 @@ from sonarr import SonarrClient
 from store import UserStore
 
 from bot.callback_prefixes import (
+    TICKETS_LIST,
     TK_BACK,
+    TK_BACK_LIST,
     TK_CLOSE_DIRECT,
     TK_CLOSE_WITH_COMMENT,
     TK_FIX_MARK_FAILED,
@@ -49,6 +52,9 @@ from bot.callback_prefixes import (
     TK_REPLY,
 )
 from const import TICKET_BUTTONS_PER_ROW, TICKET_REPLY_TIMEOUT_S
+from bot.hub import (back_button, came_from_hub, end_markup, send_hub,
+                     try_again_button)
+from bot.tickets_hub import TICKETS_HUB, list_back_button
 from bot.shared import (
     truncate_message,
     DECRYPT_FAILED_MSG,
@@ -63,6 +69,7 @@ from bot.shared import (
     ticket_detail_kb,
     token_for,
     end_action,
+    force_end_flow_conversations,
     media_action_key,
     prompt_plex_relink,
     send_typing,
@@ -105,7 +112,25 @@ async def _require_admin(
 
 
 async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    seerr = await require_seerr(update, ctx)
+    """/tickets opens the Tickets Hub. It needs no gate: each button runs its
+    own checks."""
+    await send_hub(update, ctx, TICKETS_HUB)
+
+
+async def tickets_hub_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """The Hub's list button ("My tickets" / "Open tickets") and a detail
+    card's "⬅️ Tickets": edit the tapped message into the open-ticket list,
+    which ends with "⬅️ Tickets" back to the Hub."""
+    q = update.callback_query
+    await q.answer()
+    force_end_flow_conversations(ctx, update)
+    back = end_markup(TICKETS_HUB)
+
+    async def show(text, markup):
+        sent = await edit_or_send(q, text, reply_markup=markup)
+        record_btn(ctx.application, update.effective_user.id, sent)
+
+    seerr = await require_seerr(update, ctx, reply_markup=back)
     if seerr is None:
         return
     await send_typing(update, ctx)  # list + title fetches can take seconds
@@ -120,12 +145,11 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     # first" is the wrong remedy (they need /unlink then /link).
     if not is_admin:
         if mapping and mapping.plex_token_decrypt_failed:
-            await update.effective_message.reply_text(DECRYPT_FAILED_MSG)
+            await show(DECRYPT_FAILED_MSG, back)
             return
         if not mapping or not mapping.plex_token:
-            await update.effective_message.reply_text(
-                "DM me /link first so I know which Plex account is yours."
-            )
+            await show("DM me /link first so I know which Plex account is yours.",
+                       back)
             return
 
     # Fetch issues
@@ -139,13 +163,14 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     except Exception as exc:
         logger.exception("list_issues failed")
-        await update.effective_message.reply_text(f"Couldn't fetch tickets. {user_friendly_message(exc)}")
+        await show(f"Couldn't fetch tickets. {user_friendly_message(exc)}",
+                   end_markup(TICKETS_HUB, TICKETS_LIST))
         return
 
     if not issues:
-        await update.effective_message.reply_text(
-            ("No open tickets across all users. 🎉" if is_admin else "No open tickets! 🎉")
-        )
+        await show(
+            ("No open tickets across all users. 🎉" if is_admin else "No open tickets! 🎉"),
+            back)
         return
 
     # Resolve media titles in parallel
@@ -190,18 +215,42 @@ async def cmd_tickets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             current = []
     if current:
         button_rows.append(current)
+    button_rows.append([back_button(TICKETS_HUB)])
+    await show(text, InlineKeyboardMarkup(button_rows))
 
-    msg = await update.effective_message.reply_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(button_rows) if button_rows else None,
+
+def _has_list_back(message) -> bool:
+    """True when `message`'s keyboard holds a button with the list callback
+    (the detail card's "⬅️ Tickets")."""
+    markup = getattr(message, "reply_markup", None)
+    return any(
+        getattr(btn, "callback_data", None) == TICKETS_LIST
+        for row in getattr(markup, "inline_keyboard", ()) or ()
+        for btn in row
     )
-    record_btn(ctx.application, update.effective_user.id, msg)
+
+
+def _with_list_back(kb: Optional[InlineKeyboardMarkup], issue_id: int,
+                    *, retry: bool) -> InlineKeyboardMarkup:
+    """Add the "⬅️ Tickets" (back to the list) row to a detail keyboard. A
+    detail that failed to load (kb None) gets Try again beside it when
+    `retry` is set, else the back button alone."""
+    if kb is None:
+        row = [list_back_button()]
+        if retry:
+            row.insert(0, try_again_button(f"{TK_OPEN}:{issue_id}"))
+        return InlineKeyboardMarkup([row])
+    return InlineKeyboardMarkup(
+        [list(r) for r in kb.inline_keyboard] + [[list_back_button()]])
 
 
 async def tk_open(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Tapped [#N] from /tickets list. Sends a NEW detail message with the
-    ticket's context (type, media, S/E, reporter, age) so the admin/user knows
-    what they're acting on without having to scroll back to the list."""
+    """Tapped [#N] in the ticket list, or [📜 History] in a ticket DM. Shows
+    the ticket's context (type, media, S/E, reporter, age) so the admin/user
+    knows what they're acting on. From the list (the tapped message carries
+    the Hub's back button, or the list-back button of a detail that failed to
+    load) the detail replaces the tapped message and ends with "⬅️ Tickets"
+    back to the list; from a DM it is a new message without that row."""
     q = update.callback_query
     await q.answer()
     try:
@@ -220,10 +269,18 @@ async def tk_open(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await q.message.reply_text("DM me /link first so I can act on tickets as you.")
         return
 
+    from_list = (came_from_hub(q.message, TICKETS_HUB)
+                 or _has_list_back(q.message))
     try:
         text, kb = await _build_ticket_detail(ctx, issue_id, is_admin, token)
     except PlexTokenInvalidError:
         await prompt_plex_relink(update, ctx)
+        return
+    if from_list:
+        msg = await edit_or_send(
+            q, text, parse_mode="HTML",
+            reply_markup=_with_list_back(kb, issue_id, retry=True))
+        record_btn(ctx.application, tg_id, msg)
         return
     msg = await q.message.reply_text(
         text,
@@ -308,9 +365,12 @@ async def _build_ticket_detail(
 
 
 async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Back from a sub-menu -- edit the message back to the ticket detail view."""
+    """Back from a sub-menu -- edit the message back to the ticket detail view.
+    `tkbl:<id>` (a sub-menu of a detail opened from the list) keeps the
+    detail's "⬅️ Tickets" row; `tkback:<id>` does not."""
     q = update.callback_query
     await q.answer()
+    from_list = q.data.startswith(f"{TK_BACK_LIST}:")
     try:
         issue_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
@@ -333,6 +393,8 @@ async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     except PlexTokenInvalidError:
         await prompt_plex_relink(update, ctx)
         return
+    if from_list:
+        kb = _with_list_back(kb, issue_id, retry=False)
     try:
         await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
     except Exception:
@@ -340,6 +402,12 @@ async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     # The same message_id is the active one; refresh sent_at so the 6h timer resets.
     record_btn(ctx.application, tg_id, q.message)
+
+
+def _back_prefix(q) -> str:
+    """The sub-menu Back callback: keep the list-back row when the detail card
+    it was opened from carries it."""
+    return TK_BACK_LIST if _has_list_back(q.message) else TK_BACK
 
 
 async def tk_close_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -358,7 +426,7 @@ async def tk_close_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             InlineKeyboardButton("💬 Comment", callback_data=f"{TK_CLOSE_WITH_COMMENT}:{issue_id}"),
             InlineKeyboardButton("✓ No comment", callback_data=f"{TK_CLOSE_DIRECT}:{issue_id}"),
         ],
-        [InlineKeyboardButton("⬅️ Back", callback_data=f"{TK_BACK}:{issue_id}")],
+        [InlineKeyboardButton("⬅️ Back", callback_data=f"{_back_prefix(q)}:{issue_id}")],
     ])
     await q.edit_message_text(f"Close ticket #{issue_id}?", reply_markup=kb)
     record_btn(ctx.application, update.effective_user.id, q.message)
@@ -380,7 +448,7 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             InlineKeyboardButton("🔄 Redownload", callback_data=f"{TK_FIX_REDOWNLOAD}:{issue_id}"),
             InlineKeyboardButton("🚫 Mark Failed", callback_data=f"{TK_FIX_MARK_FAILED}:{issue_id}"),
         ],
-        [InlineKeyboardButton("⬅️ Back", callback_data=f"{TK_BACK}:{issue_id}")],
+        [InlineKeyboardButton("⬅️ Back", callback_data=f"{_back_prefix(q)}:{issue_id}")],
     ])
     await q.edit_message_text(
         f"🔧 Fix #{issue_id} — how?\n"

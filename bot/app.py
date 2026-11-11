@@ -39,6 +39,7 @@ from bot.callback_prefixes import (
     REQUESTS_MINE,
     REQUESTS_SUBS,
     REQUESTS_TRENDING,
+    TICKETS_LIST,
     DV_CATEGORY,
     DV_INFO,
     DV_PAGE,
@@ -50,6 +51,7 @@ from bot.callback_prefixes import (
     RQ_LIST_CANCEL,
     LINK_HELP,
     TK_BACK,
+    TK_BACK_LIST,
     TK_CLOSE,
     TK_CLOSE_DIRECT,
     TK_FIX,
@@ -81,6 +83,7 @@ from bot.shared import (
 from bot.tickets import (
     _ticket_conversation,
     cmd_tickets,
+    tickets_hub_list,
     tk_back,
     tk_close_direct,
     tk_close_menu,
@@ -256,12 +259,11 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             "Hi! I take movie/TV requests and forward issue reports to Seerr.\n\n"
             "*Commands*\n"
             "  /account — link or unlink your Plex account\n"
-            "  /issue — report a problem with a movie or TV show\n"
             "  /request — new request, your requests, trending, subscriptions\n"
-            "  /tickets — list your open tickets\n"
+            "  /tickets — report a problem or check on your tickets\n"
             "  /help — show this\n\n"
-            "(/link, /unlink, /requests, /trending and /subscriptions still "
-            "work when typed.)",
+            "(/link, /unlink, /issue, /requests, /trending and /subscriptions "
+            "still work when typed.)",
             parse_mode="Markdown",
         )
         return
@@ -278,16 +280,15 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "",
         "<b>Commands</b>",
         "  /account — link or unlink your Plex account",
-        "  /issue — report a problem with a movie or TV show",
         "  /request — new request, your requests, trending, subscriptions",
-        "  /tickets — list your open tickets",
+        "  /tickets — report a problem or check on your tickets",
         "  /invite — share the Plex server with someone (admin only)",
         "  /uninvite — revoke someone's access (admin only)",
         "  /status — connection diagnostics (admin only)",
         "  /help — show this",
         "",
-        "(/link, /unlink, /requests, /trending and /subscriptions still "
-        "work when typed.)",
+        "(/link, /unlink, /issue, /requests, /trending and /subscriptions "
+        "still work when typed.)",
     ]
     await update.effective_message.reply_text(
         "\n".join(lines), parse_mode="HTML"
@@ -407,7 +408,7 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CallbackQueryHandler(tk_fix, pattern=fr"^{TK_FIX}:\d+$"))
     app.add_handler(CallbackQueryHandler(tk_fix_redownload, pattern=fr"^{TK_FIX_REDOWNLOAD}:\d+$"))
     app.add_handler(CallbackQueryHandler(tk_fix_mark_failed, pattern=fr"^{TK_FIX_MARK_FAILED}:\d+$"))
-    app.add_handler(CallbackQueryHandler(tk_back, pattern=fr"^{TK_BACK}:\d+$"))
+    app.add_handler(CallbackQueryHandler(tk_back, pattern=fr"^({TK_BACK}|{TK_BACK_LIST}):\d+$"))
     app.add_handler(ticket_conv)
     app.add_handler(CallbackQueryHandler(cmd_link_didnt_work, pattern=fr"^{LINK_HELP}$"))
     # Hub back button + Account Hub Unlink (Link is a link-conversation entry).
@@ -422,6 +423,10 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
                                          pattern=fr"^{REQUESTS_TRENDING}$"))
     app.add_handler(CallbackQueryHandler(subscriptions_hub,
                                          pattern=fr"^{REQUESTS_SUBS}$"))
+    # Tickets Hub list button, also a detail card's "⬅️ Tickets" (Report a
+    # problem is an issue-conversation entry).
+    app.add_handler(CallbackQueryHandler(tickets_hub_list,
+                                         pattern=fr"^{TICKETS_LIST}$"))
     # MUST stay the last callback handler in the default group:
     # catches taps on keyboards whose conversation has timed out or ended.
     app.add_handler(CallbackQueryHandler(unmatched_callback))
@@ -468,8 +473,7 @@ async def _prune_autofix_history_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 _BOT_COMMANDS = [
     ("account", "your Plex link: link or unlink"),
     ("request", "new request, your requests, trending, subscriptions"),
-    ("issue", "report a problem with a movie or TV show"),
-    ("tickets", "list your open tickets"),
+    ("tickets", "report a problem or check on your tickets"),
     ("help", "show commands and status"),
 ]
 _ADMIN_BOT_COMMANDS = _BOT_COMMANDS + [
