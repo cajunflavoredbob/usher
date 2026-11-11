@@ -5,15 +5,15 @@ A Telegram bot and web admin panel that sit in front of a Plex server and its [S
 ## Features
 
 - **Link**: `/account` opens the Account Hub, where a User links or unlinks their Plex sign-in. It is a Plex OAuth flow, so no usernames or passwords are typed into Telegram. The User's Plex token is encrypted at rest and used to authenticate to Seerr on their behalf.
-- **Requests**: a Linked user asks for a movie or show with `/request`, and the Request is made in Seerr as that user. Once a Request is made, a Progress card shows "Waiting for approval" until it is approved, then edits itself in place as the title is grabbed, downloaded and becomes available. `/requests` lists a User's own Requests and cancels pending ones. The Admin sees everyone's.
-- **Trending**: `/trending` browses what is trending, with `movies`, `tv` and `upcoming` as optional arguments. Any title in the list can be requested by tapping its number.
+- **Requests**: a Linked user asks for a movie or show with `/request`, and the Request is made in Seerr as that user. A Request that needs approval gets a Progress card that says 'Waiting for approval' until it is approved or declined, then edits itself in place as the title is grabbed, downloaded and becomes available. `/requests` lists a User's own Requests and cancels pending ones. The Admin sees everyone's.
+- **Trending**: `/trending` browses what is trending, with `movies`, `tv` and `upcoming` as optional arguments. Tapping a title's number starts a Request for it.
 - **Subscriptions**: the bell button on a title's detail card asks to be told when it becomes available. A Subscription is one-shot: the first availability notice uses it up. `/subscriptions` lists and removes a User's own.
 - **Tickets**: `/tickets` opens the Tickets Hub, with buttons to report a problem and to list open Tickets: a User sees their own, the Admin sees everyone's. A Ticket records the title, an Issue type (Video, Audio, Subtitles or Other) and, for TV, its Scope: one episode or one whole season. Replies post back to Seerr as comments, and Tickets can be closed from Telegram.
-- **Fixes**: the Admin can start a Fix from a Ticket. **Redownload** deletes the file and searches again. **Mark failed** blocklists the current release when one is found, deletes the file, then searches again. Progress shows on a Progress card, and whoever started the Fix is told when the new file lands.
+- **Fixes**: the Admin can start a Fix from a Ticket. **Redownload** deletes the file and searches again. **Mark failed** blocklists the current release when one is found, deletes the file, then searches again. Progress shows on a Progress card, and the chat where the Fix was started is told when the new file lands, or when it times out.
 - **Auto-fix**: for Video / Audio / Subtitles Tickets, the Reporter can start a Redownload themselves on one episode or movie, gated by the Admin's allowlist and daily limit (see [Auto-fix details](#auto-fix-details)).
 - **Shares**: the Admin can `/invite` someone to the Plex server by email or Plex username, choosing the Libraries to share, and `/uninvite` them. The Admin Hub also has a Share list, where each Share can be viewed and removed. An Invite is a Share the recipient has not accepted yet, and `/uninvite` removes either kind.
 - **SABnzbd priority**: with SABnzbd connected, the Admin can have downloads that Requests and auto-fixes trigger bumped up its queue, at High priority or Force. The bump applies once per download.
-- **Notification toggles**: in the web admin panel's Telegram tab, the Admin can turn each class of bot DM off for everyone: Request updates to Requesters, new-Request notices to the Admin, the failed-download alarm to the Admin, Ticket DMs, and availability notices for Subscriptions.
+- **Notification toggles**: in the web admin panel's Telegram tab, the Admin can turn off five classes of bot DM for everyone: Request updates to Requesters, new-Request notices to the Admin, the failed-download alarm to the Admin, Ticket DMs, and availability notices for Subscriptions.
 - **Webhook-driven updates**: Seerr posts to Usher at `/webhook/seerr`, so new comments on a Ticket, resolutions and Request status changes are delivered in Telegram and the close flow stays in sync.
 - **Admin web panel** at `/admin`: first-run setup wizard, settings tabs for Telegram, Seerr, Auto-fix, SABnzbd, Webhook and Account, connection **Test** buttons, encrypted backups, and restore.
 - Works in DMs or any Telegram group the bot is added to with per-user conversation state. The Admin Hub is DM-only.
@@ -21,7 +21,7 @@ A Telegram bot and web admin panel that sit in front of a Plex server and its [S
 
 ## Commands
 
-The bot's command menu lists the Hubs plus `/help`. A Hub is a command that opens one message of buttons for an area of the bot, and every flow started from a Hub ends with a way back to it. The menu is registered at every startup, so it always matches the code.
+The bot's command menu lists the Hubs plus `/help`. A Hub is a command that opens one message of buttons for an area of the bot, and flows started from a Hub normally end with a way back to it. The menu is registered at every startup, so it always matches the code.
 
 | Menu entry | Shown to | What it holds |
 |---|---|---|
@@ -150,7 +150,7 @@ bot:  ✅ Reported as ticket #14
 Usher receives events from Seerr so Ticket comments and resolutions, and Request updates, reach the user in Telegram.
 
 1. In `/admin` → **Webhook** tab, copy the webhook URL and the secret (use **Show**/**Copy**; **Generate** rolls a new one). A secret is mandatory and auto-generated on first run, and Usher rejects unauthenticated webhook POSTs.
-2. In Seerr → Settings → Notifications → **Webhook**: set the URL, paste the secret into the **Authorization Header** field, and enable the **Issue Reported**, **Issue Comment**, and **Issue Resolved** events, plus the Request events (Usher handles all of them; leaving one off silently drops that notification type).
+2. In Seerr → Settings → Notifications → **Webhook**: set the URL, paste the secret into the **Authorization Header** field, and enable the **Issue Reported**, **Issue Comment**, and **Issue Resolved** events, plus the Request events: Request Pending Approval, Request Approved, Request Automatically Approved, Request Available, Request Declined and Request Processing Failed (Usher handles all of them; leaving one off drops that notification type, and /status lists the missing ones).
 3. Use the Webhook tab's **Test** button to confirm the round-trip.
 
 Seerr reaches Usher on its LAN address and port. No public URL is required, but Seerr must be able to reach the Usher port.
