@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from former_name import legacy_env, legacy_key
 from settings import (
     AdminAccount,
     Settings,
@@ -323,27 +324,27 @@ def test_session_secret_preserves_whitespace_bytes(tmp_path: Path):
     assert len(loaded) == 32
 
 
-def test_from_dict_reads_legacy_hermes_public_url():
-    s = Settings.from_dict({"hermes_public_url": "http://box:8765"})
+def test_from_dict_reads_pre_rename_public_url():
+    s = Settings.from_dict({legacy_key("public_url"): "http://box:8765"})
     assert s.usher_public_url == "http://box:8765"
     # and it is written back under the new key only
     d = s.to_dict()
     assert d.get("usher_public_url") == "http://box:8765"
-    assert "hermes_public_url" not in d
+    assert legacy_key("public_url") not in d
 
 
 def test_from_dict_prefers_new_public_url_key():
     s = Settings.from_dict({"usher_public_url": "http://new:1",
-                            "hermes_public_url": "http://old:2"})
+                            legacy_key("public_url"): "http://old:2"})
     assert s.usher_public_url == "http://new:1"
 
 
-def test_env_falls_back_to_legacy_hermes_names(monkeypatch):
+def test_env_falls_back_to_pre_rename_names(monkeypatch):
     for var in ("USHER_PUBLIC_URL", "USHER_WEBHOOK_SECRET",
                 "USHER_ENCRYPTION_KEY"):
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("HERMES_PUBLIC_URL", "http://legacy:8765")
-    monkeypatch.setenv("HERMES_WEBHOOK_SECRET", "legacy-secret")
+    monkeypatch.setenv(legacy_env("PUBLIC_URL"), "http://legacy:8765")
+    monkeypatch.setenv(legacy_env("WEBHOOK_SECRET"), "legacy-secret")
     s = SettingsStore._seed_from_env()
     assert s.usher_public_url == "http://legacy:8765"
     assert s.webhook_secret == "legacy-secret"
@@ -351,6 +352,6 @@ def test_env_falls_back_to_legacy_hermes_names(monkeypatch):
 
 def test_env_prefers_new_usher_names(monkeypatch):
     monkeypatch.setenv("USHER_PUBLIC_URL", "http://new:8765")
-    monkeypatch.setenv("HERMES_PUBLIC_URL", "http://legacy:8765")
+    monkeypatch.setenv(legacy_env("PUBLIC_URL"), "http://legacy:8765")
     s = SettingsStore._seed_from_env()
     assert s.usher_public_url == "http://new:8765"

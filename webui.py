@@ -57,6 +57,7 @@ from auth_util import (
 )
 from const import (ADMIN_PASSWORD_MIN_CHARS, ADMIN_UPLOAD_MAX_BYTES,
                    MIN_BACKUP_PASSPHRASE_CHARS, RESTORE_MEMBER_MAX_BYTES)
+from former_name import LEGACY_BACKUP_EXT
 from fsutil import atomic_write_bytes
 from procutil import schedule_clean_exit
 from backup_crypto import is_wrapped, unwrap, wrap
@@ -793,7 +794,7 @@ def _settings_page(
 <form method="POST" action="/admin/restore" enctype="multipart/form-data">
   {csrf}
   <h2>Restore from Backup</h2>
-  <input type="file" name="backup" accept=".zip,.usher-backup,.hermes-backup" required>
+  <input type="file" name="backup" accept=".zip,.usher-backup,{LEGACY_BACKUP_EXT}" required>
   <label>Passphrase <span class="note">if encrypted</span></label>
   <input type="password" name="passphrase" placeholder="Leave blank for plain ZIP">
   <div class="note">Overwrites settings, mappings, and the encryption key. A snapshot is saved first.</div>

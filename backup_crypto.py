@@ -17,10 +17,12 @@ from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
+from former_name import legacy_magic
+
 MAGIC = b"USHER-BAK1\n"
 # Backups written before the rename carry the old magic (12 bytes, so the
 # header length must be derived from whichever magic matched).
-LEGACY_MAGIC = b"HERMES-BAK1\n"
+LEGACY_MAGIC = legacy_magic()
 SALT_LEN = 16
 PBKDF2_ITERATIONS = 600_000
 

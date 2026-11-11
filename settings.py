@@ -23,6 +23,7 @@ from hmac import compare_digest
 from pathlib import Path
 from typing import Optional
 
+from former_name import legacy_env, legacy_key
 from fsutil import atomic_write_bytes
 
 logger = logging.getLogger("usher.settings")
@@ -129,7 +130,7 @@ class Settings:
             # settings.json written before the rename stores the old key;
             # keep reading it so an in-place upgrade preserves the URL.
             usher_public_url=(data.get("usher_public_url")
-                              or data.get("hermes_public_url") or ""),
+                              or data.get(legacy_key("public_url")) or ""),
             seerr_url=data.get("seerr_url", "") or "",
             seerr_api_key=data.get("seerr_api_key", "") or "",
             seerr_public_url=data.get("seerr_public_url", "") or "",
@@ -229,16 +230,16 @@ class SettingsStore:
             seerr_url=os.environ.get("SEERR_URL", "").strip(),
             seerr_api_key=os.environ.get("SEERR_API_KEY", "").strip(),
             seerr_public_url=os.environ.get("SEERR_PUBLIC_URL", "").strip(),
-            # Pre-rename installs may still set the HERMES_* env names.
+            # Pre-rename installs may still set the former-name env names.
             usher_public_url=(os.environ.get("USHER_PUBLIC_URL")
-                              or os.environ.get("HERMES_PUBLIC_URL") or "").strip(),
+                              or os.environ.get(legacy_env("PUBLIC_URL")) or "").strip(),
             radarr_url=os.environ.get("RADARR_URL", "").strip(),
             radarr_api_key=os.environ.get("RADARR_API_KEY", "").strip(),
             sonarr_url=os.environ.get("SONARR_URL", "").strip(),
             sonarr_api_key=os.environ.get("SONARR_API_KEY", "").strip(),
             allowed_autofix_telegram_ids=ids(os.environ.get("ALLOWED_AUTOFIX_TELEGRAM_IDS", "")),
             webhook_secret=(os.environ.get("USHER_WEBHOOK_SECRET")
-                            or os.environ.get("HERMES_WEBHOOK_SECRET") or "").strip(),
+                            or os.environ.get(legacy_env("WEBHOOK_SECRET")) or "").strip(),
             admin=AdminAccount(),  # always unset on first run
         )
 

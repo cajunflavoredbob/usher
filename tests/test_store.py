@@ -260,3 +260,24 @@ async def test_pending_autofix_keeps_the_card_keyboard(fresh_store: UserStore):
     await fresh_store.set_autofix_message(pid, 77, reply_markup='{"k": 1}')
     row = (await fresh_store.list_pending_autofixes())[0]
     assert row.message_id == 77 and row.reply_markup == '{"k": 1}'
+
+
+# --- pre-rename encryption-key env name ---
+
+
+def test_encryption_key_env_falls_back_to_pre_rename_name(monkeypatch, tmp_path: Path):
+    from former_name import legacy_env
+
+    key = Fernet.generate_key().decode()
+    monkeypatch.delenv("USHER_ENCRYPTION_KEY", raising=False)
+    monkeypatch.setenv(legacy_env("ENCRYPTION_KEY"), key)
+    assert TokenCrypto(key_path=tmp_path / "k.bin").key == key.encode()
+
+
+def test_encryption_key_env_prefers_new_name(monkeypatch, tmp_path: Path):
+    from former_name import legacy_env
+
+    new_key = Fernet.generate_key().decode()
+    monkeypatch.setenv("USHER_ENCRYPTION_KEY", new_key)
+    monkeypatch.setenv(legacy_env("ENCRYPTION_KEY"), Fernet.generate_key().decode())
+    assert TokenCrypto(key_path=tmp_path / "k.bin").key == new_key.encode()

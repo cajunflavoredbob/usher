@@ -27,6 +27,7 @@ from typing import Callable, Iterator, Optional, TypeVar
 from cryptography.fernet import Fernet, InvalidToken
 
 from const import AUTOFIX_TIMEOUT_HOURS
+from former_name import legacy_env
 from fsutil import atomic_write_bytes
 
 logger = logging.getLogger("usher." + __name__)
@@ -56,9 +57,9 @@ class TokenCrypto:
 
     def __init__(self, key_path: str | Path = "/data/encryption.key"):
         self.key_path = Path(key_path)
-        # Pre-rename installs may still set the HERMES_* env name.
+        # Pre-rename installs may still set the former-name env name.
         env_key = (os.environ.get("USHER_ENCRYPTION_KEY")
-                   or os.environ.get("HERMES_ENCRYPTION_KEY") or "").strip()
+                   or os.environ.get(legacy_env("ENCRYPTION_KEY")) or "").strip()
         if env_key:
             self.key = env_key.encode()
             logger.info("Using encryption key from env")

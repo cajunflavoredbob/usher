@@ -205,3 +205,12 @@ async def test_logout_redirect_carries_no_store_and_clears_session(
     session = _set_cookies(resp)[webui.SESSION_COOKIE]
     assert session.value == ""
     assert session["max-age"] == "0"
+
+
+async def test_restore_form_offers_pre_rename_backup_extension(client):
+    from former_name import LEGACY_BACKUP_EXT
+
+    resp = await client.get("/admin", cookies=_cookies())
+    assert resp.status == 200
+    body = await resp.text()
+    assert f'accept=".zip,.usher-backup,{LEGACY_BACKUP_EXT}"' in body

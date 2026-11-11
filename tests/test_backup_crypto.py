@@ -46,9 +46,10 @@ def test_different_salts_per_wrap():
     assert unwrap(b, "same-pass") == plain
 
 
-def test_unwrap_accepts_legacy_hermes_magic():
+def test_unwrap_accepts_pre_rename_magic():
     from backup_crypto import LEGACY_MAGIC
 
+    assert len(LEGACY_MAGIC) == 12 and LEGACY_MAGIC.endswith(b"-BAK1\n")
     plain = b"pre-rename backup bytes"
     wrapped = wrap(plain, "correct-horse-battery-staple")
     legacy = LEGACY_MAGIC + wrapped[len(MAGIC):]
