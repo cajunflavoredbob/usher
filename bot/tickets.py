@@ -230,6 +230,49 @@ def _has_list_back(message) -> bool:
     )
 
 
+def _opened_from_list(message) -> bool:
+    """True when `message` belongs to a detail card opened from the list: the
+    card or a Reply, Close or Fix result carries "⬅️ Tickets" (`TICKETS_LIST`),
+    and a Close or Fix sub-menu carries a `TK_BACK_LIST` Back."""
+    markup = getattr(message, "reply_markup", None)
+    return _has_list_back(message) or any(
+        str(getattr(btn, "callback_data", "")).startswith(f"{TK_BACK_LIST}:")
+        for row in getattr(markup, "inline_keyboard", ()) or ()
+        for btn in row
+    )
+
+
+def _result_markup(from_list: bool,
+                   retry: Optional[str] = None) -> Optional[InlineKeyboardMarkup]:
+    """Keyboard for a Reply, Close or Fix result: none unless the detail card
+    was opened from the list, else "⬅️ Tickets" back to the list, with Try
+    again (callback `retry`) before it when the step failed."""
+    if not from_list:
+        return None
+    row = [list_back_button()]
+    if retry is not None:
+        row.insert(0, try_again_button(retry))
+    return InlineKeyboardMarkup([row])
+
+
+async def _edit_result(q, ctx, text: str,
+                       markup: Optional[InlineKeyboardMarkup]):
+    """Edit the tapped message into a result; a keyboard is recorded with the
+    button gate."""
+    sent = await edit_or_send(q, text, reply_markup=markup)
+    if markup is not None:
+        record_btn(ctx.application, q.from_user.id, sent)
+    return sent
+
+
+async def _reply_result(update, ctx, text: str,
+                        markup: Optional[InlineKeyboardMarkup]) -> None:
+    """Reply with a result; a keyboard is recorded with the button gate."""
+    sent = await update.effective_message.reply_text(text, reply_markup=markup)
+    if markup is not None:
+        record_btn(ctx.application, update.effective_user.id, sent)
+
+
 def _with_list_back(kb: Optional[InlineKeyboardMarkup], issue_id: int,
                     *, retry: bool) -> InlineKeyboardMarkup:
     """Add the "⬅️ Tickets" (back to the list) row to a detail keyboard. A
@@ -486,6 +529,10 @@ class _FixContext:
     label: str
 
 
+# Start of the _resolve_fix_context error that a retry can fix.
+_FETCH_FAILED = "Couldn't fetch ticket"
+
+
 async def _resolve_fix_context(
     seerr: SeerrClient, issue_id: int, *, action_name: str,
 ) -> tuple[Optional[_FixContext], Optional[str]]:
@@ -496,7 +543,7 @@ async def _resolve_fix_context(
         issue = await seerr.get_issue(issue_id)
     except Exception as exc:
         logger.exception("get_issue failed for #%d", issue_id)
-        return None, f"Couldn't fetch ticket #{issue_id}. {user_friendly_message(exc)}"
+        return None, f"{_FETCH_FAILED} #{issue_id}. {user_friendly_message(exc)}"
 
     media_type = issue.media_type
     tmdb_id = issue.tmdb_id
@@ -574,6 +621,9 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
         return
     if not await _require_admin(q, ctx, action_label=f"_apply_fix:{strategy}"):
         return
+    # Read before the working-state edit below strips the keyboard.
+    from_list = _opened_from_list(q.message)
+    retry = q.data
     seerr: SeerrClient = ctx.bot_data["seerr"]
     radarr: Optional[RadarrClient] = ctx.bot_data.get("radarr")
     sonarr: Optional[SonarrClient] = ctx.bot_data.get("sonarr")
@@ -586,7 +636,9 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
 
     fix, err = await _resolve_fix_context(seerr, issue_id, action_name=action_name)
     if err is not None:
-        await edit_or_send(q, err)
+        fetch_failed = err.startswith(_FETCH_FAILED)
+        await _edit_result(q, ctx, err, _result_markup(
+            from_list, retry if fetch_failed else None))
         return
     assert fix is not None
 
@@ -595,9 +647,10 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
     # running concurrently - must not race delete/blocklist/search.
     media_key = media_action_key(fix.media)
     if not try_begin_action(ctx, media_key):
-        await edit_or_send(q,
+        await _edit_result(q, ctx,
             f"⏳ Another fix for {fix.label or f'#{issue_id}'} is already "
-            "running. Wait for its result before retrying."
+            "running. Wait for its result before retrying.",
+            _result_markup(from_list),
         )
         return
     try:
@@ -607,7 +660,9 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
         )
 
         if result.status == "failed":
-            await edit_or_send(q, f"⚠️ {action_name} for #{issue_id} didn't run: {result.message}")
+            await _edit_result(
+                q, ctx, f"⚠️ {action_name} for #{issue_id} didn't run: {result.message}",
+                _result_markup(from_list, retry))
             return
 
         # ok or partial: always log the autofix event (mirrors _submit_issue,
@@ -628,16 +683,18 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
             except Exception:
                 logger.exception("failed to enqueue pending autofix for #%d", issue_id)
                 prefix = "🔧" if result.ok else "⚠️"
-                await edit_or_send(q,
+                await _edit_result(q, ctx,
                     f"{prefix} {action_name} for #{issue_id} ({result.message}), "
-                    "but couldn't enqueue completion notification."
+                    "but couldn't enqueue completion notification.",
+                    _result_markup(from_list),
                 )
                 return
 
         prefix = "🔧" if result.ok else "⚠️"
         tail = "\n\n🔔 I'll DM when the new file finishes downloading." if result.should_poll else ""
-        outcome = await edit_or_send(q,
-            f"{prefix} {action_name} for #{issue_id}.\n{fix.label}\n\n{result.message}{tail}"
+        outcome = await _edit_result(q, ctx,
+            f"{prefix} {action_name} for #{issue_id}.\n{fix.label}\n\n{result.message}{tail}",
+            _result_markup(from_list),
         )
         # Attach the outcome message as the morphing progress card (the
         # /issue flow does the same with its confirmation; without this,
@@ -663,6 +720,7 @@ async def tk_close_direct(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         return
     if not await _require_admin(q, ctx, action_label="tk_close_direct"):
         return
+    from_list = _opened_from_list(q.message)
     seerr: SeerrClient = ctx.bot_data["seerr"]
     # Double-tap guard: strip the submenu before the network
     # call, and drop a racing second tap that got in before the edit (it
@@ -677,9 +735,12 @@ async def tk_close_direct(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
             await seerr.resolve_issue(issue_id, as_plex_token=None)
         except Exception as exc:
             logger.exception("resolve_issue failed for #%d", issue_id)
-            await edit_or_send(q, f"Couldn't close #{issue_id}. {user_friendly_message(exc)}")
+            await _edit_result(
+                q, ctx, f"Couldn't close #{issue_id}. {user_friendly_message(exc)}",
+                _result_markup(from_list, q.data))
             return
-        await edit_or_send(q, f"✅ Closed ticket #{issue_id}.")
+        await _edit_result(q, ctx, f"✅ Closed ticket #{issue_id}.",
+                           _result_markup(from_list))
     finally:
         end_action(ctx, close_key)
 
@@ -714,6 +775,7 @@ async def tk_reply_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
     ctx.user_data["tk_reply_id"] = issue_id
     ctx.user_data["tk_close_after"] = False
+    ctx.user_data["tk_reply_from_list"] = _opened_from_list(q.message)
     # Strip the inline buttons but keep the original issue-announcement text,
     # then prompt for the reply text in a separate message.
     try:
@@ -746,6 +808,7 @@ async def tk_close_with_comment_start(update: Update, ctx: ContextTypes.DEFAULT_
         return ConversationHandler.END
     ctx.user_data["tk_reply_id"] = issue_id
     ctx.user_data["tk_close_after"] = True
+    ctx.user_data["tk_reply_from_list"] = _opened_from_list(q.message)
     # Strip the inline buttons but keep the original issue-announcement text,
     # then prompt for the closing comment in a separate message.
     try:
@@ -758,10 +821,23 @@ async def tk_close_with_comment_start(update: Update, ctx: ContextTypes.DEFAULT_
     return AWAIT_TICKET_REPLY
 
 
+def _clear_reply_state(ctx) -> None:
+    for key in ("tk_reply_id", "tk_close_after", "tk_reply_from_list"):
+        ctx.user_data.pop(key, None)
+
+
+def _reply_retry(ctx, issue_id: int) -> str:
+    """Try again for a reply that never posted: start the same reply again."""
+    prefix = (TK_CLOSE_WITH_COMMENT if ctx.user_data.get("tk_close_after")
+              else TK_REPLY)
+    return f"{prefix}:{issue_id}"
+
+
 async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive the reply text, post it, optionally close."""
     issue_id = ctx.user_data.get("tk_reply_id")
     close_after = bool(ctx.user_data.get("tk_close_after"))
+    from_list = bool(ctx.user_data.get("tk_reply_from_list"))
     if not issue_id:
         return ConversationHandler.END
     text = (update.effective_message.text or "").strip()
@@ -770,14 +846,14 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         return AWAIT_TICKET_REPLY
     is_admin, token, decrypt_failed = await token_for(ctx, update.effective_user.id)
     if not is_admin and decrypt_failed:
-        await update.effective_message.reply_text(
-            DECRYPT_FAILED_MSG
-        )
+        await _reply_result(update, ctx, DECRYPT_FAILED_MSG,
+                            _result_markup(from_list))
         return ConversationHandler.END
     if not is_admin and token is None:
-        await update.effective_message.reply_text("Your /link is gone or incomplete. /link to re-link.")
-        ctx.user_data.pop("tk_reply_id", None)
-        ctx.user_data.pop("tk_close_after", None)
+        await _reply_result(update, ctx,
+                            "Your /link is gone or incomplete. /link to re-link.",
+                            _result_markup(from_list))
+        _clear_reply_state(ctx)
         return ConversationHandler.END
     seerr: SeerrClient = ctx.bot_data["seerr"]
     try:
@@ -788,15 +864,17 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         # attribution) can never hit this gate.
         await prompt_plex_relink(update, ctx, resume_kind="ticket_reply",
                                  resume_payload={"issue_id": issue_id,
-                                                 "text": text})
-        ctx.user_data.pop("tk_reply_id", None)
-        ctx.user_data.pop("tk_close_after", None)
+                                                 "text": text},
+                                 back=list_back_button() if from_list else None)
+        _clear_reply_state(ctx)
         return ConversationHandler.END
     except Exception as exc:
         logger.exception("add_issue_comment failed for #%d", issue_id)
-        await update.effective_message.reply_text(f"Couldn't post comment on #{issue_id}. {user_friendly_message(exc)}")
-        ctx.user_data.pop("tk_reply_id", None)
-        ctx.user_data.pop("tk_close_after", None)
+        await _reply_result(
+            update, ctx,
+            f"Couldn't post comment on #{issue_id}. {user_friendly_message(exc)}",
+            _result_markup(from_list, _reply_retry(ctx, issue_id)))
+        _clear_reply_state(ctx)
         return ConversationHandler.END
     # If the user started a new reply flow for a different issue during the
     # add_issue_comment await, our comment still landed on the right ticket
@@ -816,17 +894,19 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
             await seerr.resolve_issue(issue_id, as_plex_token=None)
         except Exception as exc:
             logger.exception("resolve_issue failed for #%d", issue_id)
-            await update.effective_message.reply_text(
-                f"💬 Comment posted on #{issue_id}, but couldn't close. {user_friendly_message(exc)}"
-            )
-            ctx.user_data.pop("tk_reply_id", None)
-            ctx.user_data.pop("tk_close_after", None)
+            await _reply_result(
+                update, ctx,
+                f"💬 Comment posted on #{issue_id}, but couldn't close. {user_friendly_message(exc)}",
+                _result_markup(from_list, f"{TK_CLOSE_DIRECT}:{issue_id}"))
+            _clear_reply_state(ctx)
             return ConversationHandler.END
-        await update.effective_message.reply_text(f"💬 Replied and ✅ closed ticket #{issue_id}.")
+        await _reply_result(update, ctx,
+                            f"💬 Replied and ✅ closed ticket #{issue_id}.",
+                            _result_markup(from_list))
     else:
-        await update.effective_message.reply_text(f"💬 Replied to ticket #{issue_id}.")
-    ctx.user_data.pop("tk_reply_id", None)
-    ctx.user_data.pop("tk_close_after", None)
+        await _reply_result(update, ctx, f"💬 Replied to ticket #{issue_id}.",
+                            _result_markup(from_list))
+    _clear_reply_state(ctx)
     return ConversationHandler.END
 
 
@@ -854,9 +934,9 @@ RELINK_RESUME_EXECUTORS["ticket_reply"] = _resume_ticket_reply
 
 
 async def tk_reply_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    ctx.user_data.pop("tk_reply_id", None)
-    ctx.user_data.pop("tk_close_after", None)
-    await update.effective_message.reply_text("Cancelled.")
+    markup = _result_markup(bool(ctx.user_data.get("tk_reply_from_list")))
+    _clear_reply_state(ctx)
+    await _reply_result(update, ctx, "Cancelled.", markup)
     return ConversationHandler.END
 
 
@@ -865,15 +945,21 @@ async def _tk_reply_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     conversation doesn't leak user_data for the life of the process, and tell
     the user (the flow explicitly solicited text, so silence loses their
     later reply with no explanation)."""
-    ctx.user_data.pop("tk_reply_id", None)
-    ctx.user_data.pop("tk_close_after", None)
+    issue_id = ctx.user_data.get("tk_reply_id")
+    markup = _result_markup(
+        bool(ctx.user_data.get("tk_reply_from_list")) and issue_id is not None,
+        _reply_retry(ctx, issue_id))
+    _clear_reply_state(ctx)
     try:
         if update is not None and update.effective_chat is not None:
-            await ctx.bot.send_message(
+            sent = await ctx.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text="⏱️ Timed out waiting for your reply. Tap Reply on the "
                      "ticket again from /tickets.",
+                reply_markup=markup,
             )
+            if markup is not None and update.effective_user is not None:
+                record_btn(ctx.application, update.effective_user.id, sent)
     except Exception:
         logger.debug("tk-reply-timeout notice failed (non-fatal)", exc_info=True)
     return ConversationHandler.END

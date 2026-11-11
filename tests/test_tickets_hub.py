@@ -15,9 +15,13 @@ from bot.issue_flow import (_issue_conversation, _issue_timeout,
                             _submit_issue, issue_cancel, issue_hub_report,
                             issue_start, issue_title)
 from bot.shared import TITLE
-from bot.tickets import (cmd_tickets, tickets_hub_list, tk_back,
-                         tk_close_menu, tk_fix, tk_open)
+from bot.tickets import (_apply_fix, _tk_reply_timeout, cmd_tickets,
+                         tickets_hub_list, tk_back, tk_close_direct,
+                         tk_close_menu, tk_close_with_comment_start, tk_fix,
+                         tk_open, tk_reply_cancel, tk_reply_start,
+                         tk_reply_text)
 from bot.tickets_hub import TICKETS_HUB, render_tickets_hub
+from fix_result import FixResult
 from seerr import CreatedIssue, IssueListItem
 
 from tests._handler_harness import make_ctx, make_mapping, make_update
@@ -27,6 +31,7 @@ ADMIN_ID = 999
 BACK = ("⬅️ Tickets", f"{HUB_OPEN}:tickets")
 LIST_BACK = ("⬅️ Tickets", TICKETS_LIST)
 RETRY_REPORT = ("🔁 Try again", TICKETS_REPORT)
+FIX_FAILED = FixResult.failed("No grab to mark failed.")
 
 
 def _flat(markup):
@@ -542,3 +547,186 @@ async def test_detail_from_dm_relink_prompt_has_relink_only():
     upd = make_update(callback_data=f"{TK_OPEN}:5", user_id=USER_ID)
     await tk_open(upd, ctx)
     assert _flat(upd.callback_query.edits[-1]["reply_markup"]) == [RELINK]
+
+
+# --- Reply, Close and Fix results of a detail opened from the list ----------------
+
+def _from_list_submenu(upd):
+    """Mark the tapped message as a Close or Fix sub-menu of a detail card
+    opened from the list (its Back keeps the list-back row)."""
+    upd.callback_query.message.reply_markup = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⬅️ Back", callback_data=f"{TK_BACK_LIST}:5")]])
+    return upd
+
+
+async def test_close_from_list_ends_with_tickets_back():
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    upd = _from_list_submenu(make_update(callback_data="tkcd:5", user_id=ADMIN_ID))
+    await tk_close_direct(upd, ctx)
+    edit = upd.callback_query.edits[-1]
+    assert edit["text"] == "✅ Closed ticket #5."
+    assert _flat(edit["reply_markup"]) == [LIST_BACK]
+
+
+async def test_close_from_list_failure_offers_try_again_and_tickets_back():
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    ctx.bot_data["seerr"].resolve_issue.side_effect = RuntimeError("boom")
+    upd = _from_list_submenu(make_update(callback_data="tkcd:5", user_id=ADMIN_ID))
+    await tk_close_direct(upd, ctx)
+    edit = upd.callback_query.edits[-1]
+    assert edit["text"].startswith("Couldn't close #5.")
+    assert _flat(edit["reply_markup"]) == [("🔁 Try again", "tkcd:5"), LIST_BACK]
+
+
+async def test_close_from_dm_has_no_buttons():
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    upd = make_update(callback_data="tkcd:5", user_id=ADMIN_ID)
+    await tk_close_direct(upd, ctx)
+    assert upd.callback_query.edits[-1].get("reply_markup") is None
+
+
+async def test_fix_from_list_ends_with_tickets_back():
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    ctx.bot_data["seerr"].get_issue.return_value = _issue(id=5)
+    ctx.bot_data["radarr"].auto_fix.return_value = FixResult.success(
+        "Deleted file and triggered re-search.", steps_done=["delete", "search"],
+        poll_info={"movie_id": 555})
+    upd = _from_list_submenu(make_update(callback_data="tkfd:5", user_id=ADMIN_ID))
+    await _apply_fix(upd, ctx, strategy="redownload")
+    edit = upd.callback_query.edits[-1]
+    assert edit["text"].startswith("🔧 Redownload for #5.")
+    assert _flat(edit["reply_markup"]) == [LIST_BACK]
+
+
+async def test_fix_from_list_that_did_not_run_offers_try_again_and_tickets_back():
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    ctx.bot_data["seerr"].get_issue.return_value = _issue(id=5)
+    ctx.bot_data["radarr"].mark_failed.return_value = FIX_FAILED
+    upd = _from_list_submenu(make_update(callback_data="tkfm:5", user_id=ADMIN_ID))
+    await _apply_fix(upd, ctx, strategy="mark_failed")
+    edit = upd.callback_query.edits[-1]
+    assert edit["text"].startswith("⚠️ Mark Failed for #5 didn't run")
+    assert _flat(edit["reply_markup"]) == [("🔁 Try again", "tkfm:5"), LIST_BACK]
+
+
+async def test_fix_from_list_fetch_failure_offers_try_again_and_tickets_back():
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    ctx.bot_data["seerr"].get_issue.side_effect = RuntimeError("boom")
+    upd = _from_list_submenu(make_update(callback_data="tkfd:5", user_id=ADMIN_ID))
+    await _apply_fix(upd, ctx, strategy="redownload")
+    edit = upd.callback_query.edits[-1]
+    assert edit["text"].startswith("Couldn't fetch ticket #5.")
+    assert _flat(edit["reply_markup"]) == [("🔁 Try again", "tkfd:5"), LIST_BACK]
+
+
+async def test_fix_from_list_on_a_whole_season_ends_with_tickets_back_only():
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    ctx.bot_data["seerr"].get_issue.return_value = _issue(
+        id=5, media_type="tv", problem_season=1, problem_episode=None)
+    upd = _from_list_submenu(make_update(callback_data="tkfd:5", user_id=ADMIN_ID))
+    await _apply_fix(upd, ctx, strategy="redownload")
+    edit = upd.callback_query.edits[-1]
+    assert "only works on individual episodes or movies" in edit["text"]
+    assert _flat(edit["reply_markup"]) == [LIST_BACK]
+
+
+async def test_fix_from_dm_has_no_buttons():
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    ctx.bot_data["seerr"].get_issue.side_effect = RuntimeError("boom")
+    upd = make_update(callback_data="tkfd:5", user_id=ADMIN_ID)
+    await _apply_fix(upd, ctx, strategy="redownload")
+    assert upd.callback_query.edits[-1].get("reply_markup") is None
+
+
+async def test_try_again_on_a_result_keeps_tickets_back():
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    upd = make_update(callback_data="tkcd:5", user_id=ADMIN_ID)
+    upd.callback_query.message.reply_markup = InlineKeyboardMarkup(
+        [[hub.try_again_button("tkcd:5"),
+          InlineKeyboardButton("⬅️ Tickets", callback_data=TICKETS_LIST)]])
+    await tk_close_direct(upd, ctx)
+    assert _flat(upd.callback_query.edits[-1]["reply_markup"]) == [LIST_BACK]
+
+
+async def _start_reply_from_list(ctx, data="tkr:5", user_id=ADMIN_ID):
+    upd = make_update(callback_data=data, user_id=user_id)
+    if data.startswith("tkr"):
+        await tk_reply_start(_from_list_detail(upd), ctx)
+    else:
+        await tk_close_with_comment_start(_from_list_submenu(upd), ctx)
+
+
+async def test_reply_from_list_ends_with_tickets_back():
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    await _start_reply_from_list(ctx)
+    upd = make_update(text="on it", user_id=ADMIN_ID)
+    await tk_reply_text(upd, ctx)
+    reply = upd.effective_message.reply_calls[-1]
+    assert reply["text"] == "💬 Replied to ticket #5."
+    assert _flat(reply["reply_markup"]) == [LIST_BACK]
+
+
+async def test_close_with_comment_from_list_ends_with_tickets_back():
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    await _start_reply_from_list(ctx, "tkcc:5")
+    upd = make_update(text="fixed", user_id=ADMIN_ID)
+    await tk_reply_text(upd, ctx)
+    reply = upd.effective_message.reply_calls[-1]
+    assert reply["text"] == "💬 Replied and ✅ closed ticket #5."
+    assert _flat(reply["reply_markup"]) == [LIST_BACK]
+
+
+async def test_reply_from_list_failure_offers_try_again_and_tickets_back():
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    ctx.bot_data["seerr"].add_issue_comment.side_effect = RuntimeError("boom")
+    await _start_reply_from_list(ctx)
+    upd = make_update(text="on it", user_id=ADMIN_ID)
+    await tk_reply_text(upd, ctx)
+    reply = upd.effective_message.reply_calls[-1]
+    assert reply["text"].startswith("Couldn't post comment on #5.")
+    assert _flat(reply["reply_markup"]) == [("🔁 Try again", "tkr:5"), LIST_BACK]
+
+
+async def test_close_failure_after_comment_offers_close_again_and_tickets_back():
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    ctx.bot_data["seerr"].resolve_issue.side_effect = RuntimeError("boom")
+    await _start_reply_from_list(ctx, "tkcc:5")
+    upd = make_update(text="fixed", user_id=ADMIN_ID)
+    await tk_reply_text(upd, ctx)
+    reply = upd.effective_message.reply_calls[-1]
+    assert reply["text"].startswith("💬 Comment posted on #5, but couldn't close.")
+    assert _flat(reply["reply_markup"]) == [("🔁 Try again", "tkcd:5"), LIST_BACK]
+
+
+async def test_reply_from_list_relink_prompt_has_tickets_back():
+    from seerr import PlexTokenInvalidError
+    ctx = _linked_ctx()
+    ctx.bot_data["seerr"].add_issue_comment.side_effect = PlexTokenInvalidError()
+    await _start_reply_from_list(ctx, user_id=USER_ID)
+    upd = make_update(text="on it", user_id=USER_ID)
+    await tk_reply_text(upd, ctx)
+    assert _flat(upd.effective_message.reply_calls[-1]["reply_markup"]) == [
+        RELINK, LIST_BACK]
+
+
+async def test_reply_from_list_cancel_and_timeout_end_with_tickets_back():
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    await _start_reply_from_list(ctx)
+    upd = make_update(text="/cancel", user_id=ADMIN_ID)
+    await tk_reply_cancel(upd, ctx)
+    reply = upd.effective_message.reply_calls[-1]
+    assert reply["text"] == "Cancelled."
+    assert _flat(reply["reply_markup"]) == [LIST_BACK]
+    await _start_reply_from_list(ctx)
+    await _tk_reply_timeout(make_update(text="x", user_id=ADMIN_ID), ctx)
+    kwargs = ctx.bot.send_message.call_args.kwargs
+    assert _flat(kwargs["reply_markup"]) == [("🔁 Try again", "tkr:5"), LIST_BACK]
+    assert "tk_reply_from_list" not in ctx.user_data
+
+
+async def test_reply_from_dm_ends_without_buttons():
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    await tk_reply_start(make_update(callback_data="tkr:5", user_id=ADMIN_ID), ctx)
+    upd = make_update(text="on it", user_id=ADMIN_ID)
+    await tk_reply_text(upd, ctx)
+    assert upd.effective_message.reply_calls[-1].get("reply_markup") is None
