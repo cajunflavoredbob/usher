@@ -16,14 +16,14 @@ from bot.admin_hub import ADMIN_HUB, cmd_admin
 from bot.callback_prefixes import (ADMIN_INVITE, ADMIN_SHARES, ADMIN_STATUS,
                                    HUB_OPEN, SHARE_MATCHES, SHARE_REMOVE,
                                    SHARE_VIEW, UNINV_KEEP)
-from bot.invite_flow import (_invite_conversation, _invite_timeout,
+from bot.invite_flow import (_INV_KEYS, _invite_conversation, _invite_timeout,
                              admin_shares, cmd_uninvite, invite_cancel,
                              invite_email, invite_hub_start,
                              invite_libs_done, invite_send, invite_start,
                              invite_toggle_lib, share_matches, share_remove,
                              share_view, uninvite_cancel, uninvite_go)
 from bot.shared import INV_CONFIRM, INV_EMAIL, INV_LIBS
-from http_util import TransientAPIError
+from http_util import PermanentAPIError, TransientAPIError
 from plex import PlexLibrarySection, PlexShare
 
 from tests._handler_harness import make_ctx, make_mapping, make_update
@@ -375,6 +375,32 @@ async def test_hub_invite_failure_offers_try_again_and_back():
     edit = upd.callback_query.edits[-1]
     assert edit["text"].startswith("Couldn't send the invite.")
     assert _flat(edit["reply_markup"]) == [RETRY_INVITE, BACK]
+
+
+async def test_invite_already_sharing_400_names_uninvite():
+    ctx = _draft_ctx()
+    ctx.bot_data["plex"].invite_to_server.side_effect = PermanentAPIError(
+        "You're already sharing this server", status_code=400, service="plex")
+    upd = make_update(callback_data="invgo:1", user_id=ADMIN_ID)
+    state = await invite_send(upd, ctx)
+    assert state == ConversationHandler.END
+    text = upd.callback_query.edits[-1]["text"]
+    assert "friend@example.com already has a Share" in text
+    assert "/uninvite" in text
+    assert "Couldn't send the invite." not in text
+    assert not any(k in ctx.user_data for k in _INV_KEYS)
+
+
+async def test_invite_other_400_keeps_generic_reply():
+    ctx = _draft_ctx()
+    ctx.bot_data["plex"].invite_to_server.side_effect = PermanentAPIError(
+        "Invalid email", status_code=400, service="plex")
+    upd = make_update(callback_data="invgo:1", user_id=ADMIN_ID)
+    state = await invite_send(upd, ctx)
+    assert state == ConversationHandler.END
+    assert upd.callback_query.edits[-1]["text"].startswith(
+        "Couldn't send the invite.")
+    assert not any(k in ctx.user_data for k in _INV_KEYS)
 
 
 async def test_hub_invite_server_read_failure_offers_try_again():

@@ -8,6 +8,7 @@ import json
 import httpx
 import pytest
 
+from http_util import PermanentAPIError
 from plex import PlexClient
 
 
@@ -80,6 +81,20 @@ async def test_invite_posts_v2_shared_servers(tmp_path):
         "librarySectionIds": [112968621, 112968662],
         "settings": {},
     }
+    await c.close()
+
+
+async def test_invite_400_already_sharing_raises_recognisable_error(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"errors": [
+            {"code": 1001, "message": "You're already sharing this server",
+             "status": 400}]})
+
+    c = _client(handler, tmp_path)
+    with pytest.raises(PermanentAPIError) as ei:
+        await c.invite_to_server("tok", "mid-1", "friend@example.com", [1])
+    assert ei.value.status_code == 400
+    assert "already sharing" in ei.value.user_message.lower()
     await c.close()
 
 

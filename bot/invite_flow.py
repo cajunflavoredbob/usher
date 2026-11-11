@@ -36,7 +36,8 @@ from telegram.ext import (
     filters,
 )
 
-from http_util import NotFoundAPIError, user_friendly_message
+from http_util import (NotFoundAPIError, PermanentAPIError,
+                       user_friendly_message)
 from plex import PlexClient, PlexShare
 from store import UserStore
 
@@ -436,9 +437,14 @@ async def _invite_send_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
                                     sorted(selected))
     except Exception as exc:
         logger.exception("plex invite failed")
-        await end_flow(update, ctx,
-                       f"Couldn't send the invite. {user_friendly_message(exc)}",
-                       hub, ADMIN_INVITE)
+        if _is_already_sharing(exc):
+            text = (f"{email} already has a Share on your server, pending or "
+                    "accepted. Run /uninvite for that address. If /uninvite "
+                    "doesn't list it, remove the pending Invite in the Plex "
+                    "web app's sharing settings, then invite again.")
+        else:
+            text = f"Couldn't send the invite. {user_friendly_message(exc)}"
+        await end_flow(update, ctx, text, hub, ADMIN_INVITE)
         _clear(ctx)
         return ConversationHandler.END
 
@@ -451,6 +457,13 @@ async def _invite_send_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
                    hub, parse_mode="HTML")
     _clear(ctx)
     return ConversationHandler.END
+
+
+def _is_already_sharing(exc: Exception) -> bool:
+    """Plex answers 400 "You're already sharing this server" when the address
+    already holds a Share, including a pending one it no longer lists."""
+    return (isinstance(exc, PermanentAPIError) and exc.status_code == 400
+            and "already sharing" in exc.user_message.lower())
 
 
 def _clear(ctx: ContextTypes.DEFAULT_TYPE) -> None:
