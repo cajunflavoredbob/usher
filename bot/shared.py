@@ -338,7 +338,7 @@ async def edit_or_send(q, text: str, **kwargs):
     """Edit the callback's message; if Telegram rejects (e.g., the user edited
     or deleted the source message), send a new message in the same chat so the
     response isn't silently dropped. Returns the resulting Message (edited or
-    newly sent) so callers can track it (e.g. as a morphing progress card),
+    newly sent) so callers can track it (e.g. as a Progress card),
     or None when both paths failed."""
     try:
         return await q.edit_message_text(text, **kwargs)

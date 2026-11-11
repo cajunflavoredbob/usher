@@ -93,7 +93,7 @@ from bot.hub import (
     set_hub_origin,
 )
 from bot.media_card import send_detail_card
-from bot.request_watch import APPROVED_LINE, _card_text
+from bot.progress_card import APPROVED_LINE, _card_text
 from bot.requests_hub import REQUESTS_HUB
 from bot.shared import (
     DECRYPT_FAILED_MSG,
@@ -114,7 +114,7 @@ from bot.shared import (
 )
 from const import (
     KB_BUTTONS_PER_ROW,
-    REQUEST_WATCH_TIMEOUT_HOURS,
+    PROGRESS_CARD_TIMEOUT_HOURS,
     REQUEST_FLOW_TIMEOUT_S,
     REQUEST_RESULTS_PER_PAGE,
     REQUEST_SEARCH_FETCH_LIMIT,
@@ -1052,7 +1052,7 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     sent = await edit_or_send(q, text, parse_mode="HTML",
                               reply_markup=end_markup(REQUESTS_HUB))
     record_btn(ctx.application, update.effective_user.id, sent)
-    # The Progress card is a separate new message: the watch poller paints
+    # The Progress card is a separate new message: the poller paints
     # download progress onto it and lifecycle webhooks finish it; for a new
     # submit, neither edits the confirmation above.
     try:
@@ -1063,12 +1063,12 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             parse_mode="HTML",
         )
     except Exception:
-        logger.exception("couldn't send the progress card (no watch added)")
+        logger.exception("couldn't send the Progress card (no row added)")
     else:
         try:
-            # The watch row also drives the SABnzbd priority bump.
+            # The Progress card row also drives the SABnzbd priority bump.
             store: UserStore = ctx.bot_data["store"]
-            await store.add_request_watch(
+            await store.add_progress_card(
                 chat_id=update.effective_chat.id,
                 message_id=card.message_id,
                 user_id=update.effective_user.id,
@@ -1077,10 +1077,10 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                 label=label,
                 is4k=is4k,
                 status="grabbing" if approved else "waiting",
-                timeout_hours=REQUEST_WATCH_TIMEOUT_HOURS,
+                timeout_hours=PROGRESS_CARD_TIMEOUT_HOURS,
             )
         except Exception:
-            logger.exception("couldn't enqueue request watch (progress card stays static)")
+            logger.exception("couldn't enqueue the Progress card row (card stays static)")
     _clear_rq_state(ctx)
     return ConversationHandler.END
 

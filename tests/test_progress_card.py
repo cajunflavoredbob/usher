@@ -1,15 +1,15 @@
-"""Tests for the morphing request cards: queue-progress parsing, the watch
-poller's edit/dedupe/bump behavior, webhook-driven state changes, and the
-watch row created at submit time."""
+"""Tests for Progress cards: queue-progress parsing, the poller's
+edit/dedupe/bump behavior, webhook-driven state changes, and the
+Progress card row created at submit time."""
 from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
 from fix_result import QueueProgress, parse_queue_records
-from bot.request_watch import (
+from bot.progress_card import (
     apply_webhook_event,
     maybe_bump_priority,
-    poll_request_watches,
+    poll_progress_cards,
 )
 
 from tests._handler_harness import make_ctx, make_link, make_update
@@ -37,7 +37,7 @@ def test_parse_queue_records_empty_and_garbage():
     assert p.count == 1 and p.percent == 0
 
 
-def _watch(status="grabbing", **over):
+def _card_row(status="grabbing", **over):
     w = {"id": 1, "chat_id": 100, "message_id": 55, "user_id": USER_ID,
          "media_type": "movie", "tmdb_id": 550, "label": "Movie (2026)",
          "is4k": 0, "status": status, "arr_id": 7, "last_progress": "",
@@ -48,39 +48,39 @@ def _watch(status="grabbing", **over):
 
 async def test_poll_edits_card_with_progress_and_dedupes():
     ctx = make_ctx()
-    ctx.bot_data["store"].list_request_watches.return_value = [_watch()]
+    ctx.bot_data["store"].list_progress_cards.return_value = [_card_row()]
     ctx.bot_data["radarr"].get_queue_progress.return_value = QueueProgress(
         percent=42, timeleft="00:14:00", download_ids=["nzo_a"], count=1)
-    await poll_request_watches(ctx)
+    await poll_progress_cards(ctx)
     kwargs = ctx.bot.edit_message_text.call_args.kwargs
     assert kwargs["chat_id"] == 100 and kwargs["message_id"] == 55
     assert "42%" in kwargs["text"] and "00:14:00" in kwargs["text"]
-    ctx.bot_data["store"].update_request_watch.assert_awaited()
+    ctx.bot_data["store"].update_progress_card.assert_awaited()
 
     # Same progress next tick: no second edit.
     ctx.bot.edit_message_text.reset_mock()
-    ctx.bot_data["store"].list_request_watches.return_value = [
-        _watch(last_progress=kwargs["text"].split("\n")[1])]
-    await poll_request_watches(ctx)
+    ctx.bot_data["store"].list_progress_cards.return_value = [
+        _card_row(last_progress=kwargs["text"].split("\n")[1])]
+    await poll_progress_cards(ctx)
     ctx.bot.edit_message_text.assert_not_awaited()
 
 
-async def test_poll_waiting_watch_is_left_alone():
+async def test_poll_waiting_card_is_left_alone():
     ctx = make_ctx()
-    ctx.bot_data["store"].list_request_watches.return_value = [
-        _watch(status="waiting")]
-    await poll_request_watches(ctx)
+    ctx.bot_data["store"].list_progress_cards.return_value = [
+        _card_row(status="waiting")]
+    await poll_progress_cards(ctx)
     ctx.bot.edit_message_text.assert_not_awaited()
     ctx.bot_data["radarr"].get_queue_progress.assert_not_awaited()
 
 
 async def test_poll_timeout_finalizes_and_deletes():
     ctx = make_ctx()
-    ctx.bot_data["store"].list_request_watches.return_value = [
-        _watch(timeout_at="2020-01-01 00:00:00")]
-    await poll_request_watches(ctx)
+    ctx.bot_data["store"].list_progress_cards.return_value = [
+        _card_row(timeout_at="2020-01-01 00:00:00")]
+    await poll_progress_cards(ctx)
     assert "Still processing" in ctx.bot.edit_message_text.call_args.kwargs["text"]
-    ctx.bot_data["store"].delete_request_watch.assert_awaited_with(1)
+    ctx.bot_data["store"].delete_progress_card.assert_awaited_with(1)
 
 
 async def test_poll_bumps_priority_once_when_enabled():
@@ -88,18 +88,18 @@ async def test_poll_bumps_priority_once_when_enabled():
     ctx.bot_data["settings_store"].settings.sabnzbd_boost = "high"
     sab = AsyncMock()
     ctx.bot_data["sabnzbd"] = sab
-    ctx.bot_data["store"].list_request_watches.return_value = [_watch()]
+    ctx.bot_data["store"].list_progress_cards.return_value = [_card_row()]
     ctx.bot_data["radarr"].get_queue_progress.return_value = QueueProgress(
         percent=10, timeleft="", download_ids=["nzo_a"], count=1)
-    await poll_request_watches(ctx)
+    await poll_progress_cards(ctx)
     sab.set_priority.assert_awaited_with("nzo_a", "high")
     assert {"bumped": 1} in [c.kwargs for c in
-                             ctx.bot_data["store"].update_request_watch.call_args_list]
+                             ctx.bot_data["store"].update_progress_card.call_args_list]
 
     # Already-bumped rows never re-bump.
     sab.set_priority.reset_mock()
-    ctx.bot_data["store"].list_request_watches.return_value = [_watch(bumped=1)]
-    await poll_request_watches(ctx)
+    ctx.bot_data["store"].list_progress_cards.return_value = [_card_row(bumped=1)]
+    await poll_progress_cards(ctx)
     sab.set_priority.assert_not_awaited()
 
 
@@ -114,10 +114,10 @@ async def test_maybe_bump_respects_off():
 async def test_webhook_approved_flips_waiting_to_grabbing():
     ctx = make_ctx()
     app = ctx.application
-    app.bot_data["store"].find_request_watches = AsyncMock(
-        return_value=[_watch(status="waiting")])
+    app.bot_data["store"].find_progress_cards = AsyncMock(
+        return_value=[_card_row(status="waiting")])
     await apply_webhook_event(app, "MEDIA_APPROVED", "movie", 550)
-    app.bot_data["store"].update_request_watch.assert_awaited_with(
+    app.bot_data["store"].update_progress_card.assert_awaited_with(
         1, status="grabbing")
     assert "Approved" in app.bot.edit_message_text.call_args.kwargs["text"]
 
@@ -125,16 +125,16 @@ async def test_webhook_approved_flips_waiting_to_grabbing():
 async def test_webhook_available_finalizes_and_deletes():
     ctx = make_ctx()
     app = ctx.application
-    app.bot_data["store"].find_request_watches = AsyncMock(
-        return_value=[_watch()])
+    app.bot_data["store"].find_progress_cards = AsyncMock(
+        return_value=[_card_row()])
     await apply_webhook_event(app, "MEDIA_AVAILABLE", "movie", 550)
     text = app.bot.edit_message_text.call_args.kwargs["text"]
     assert "Available in Plex" in text
     assert "/requests" not in text  # terminal card drops the footer
-    app.bot_data["store"].delete_request_watch.assert_awaited_with(1)
+    app.bot_data["store"].delete_progress_card.assert_awaited_with(1)
 
 
-async def test_submit_enqueues_watch():
+async def test_submit_enqueues_progress_card():
     from seerr import CreatedRequest, REQUEST_STATUS_APPROVED
     from bot.request_flow import request_submit
     ctx = make_ctx(admin_id=999, link=make_link(telegram_id=USER_ID),
@@ -146,30 +146,30 @@ async def test_submit_enqueues_watch():
         id=5, status=REQUEST_STATUS_APPROVED)
     upd = make_update(callback_data="rqgo:1", user_id=USER_ID)
     await request_submit(upd, ctx)
-    kwargs = ctx.bot_data["store"].add_request_watch.call_args.kwargs
+    kwargs = ctx.bot_data["store"].add_progress_card.call_args.kwargs
     assert kwargs["media_type"] == "movie" and kwargs["tmdb_id"] == 550
     assert kwargs["status"] == "grabbing"
     assert kwargs["is4k"] is False
 
 
-async def test_store_watch_round_trip(fresh_store):
-    wid = await fresh_store.add_request_watch(
+async def test_store_progress_card_round_trip(fresh_store):
+    card_id = await fresh_store.add_progress_card(
         chat_id=1, message_id=2, user_id=3, media_type="movie", tmdb_id=550,
         label="Movie", is4k=False, status="waiting", timeout_hours=24)
-    rows = await fresh_store.list_request_watches()
-    assert rows[0]["id"] == wid and rows[0]["status"] == "waiting"
-    await fresh_store.update_request_watch(wid, status="grabbing", arr_id=9,
+    rows = await fresh_store.list_progress_cards()
+    assert rows[0]["id"] == card_id and rows[0]["status"] == "waiting"
+    await fresh_store.update_progress_card(card_id, status="grabbing", arr_id=9,
                                            last_progress="x", bumped=1)
-    row = (await fresh_store.find_request_watches("movie", 550))[0]
+    row = (await fresh_store.find_progress_cards("movie", 550))[0]
     assert (row["status"], row["arr_id"], row["bumped"]) == ("grabbing", 9, 1)
-    await fresh_store.delete_request_watch(wid)
-    assert await fresh_store.list_request_watches() == []
+    await fresh_store.delete_progress_card(card_id)
+    assert await fresh_store.list_progress_cards() == []
 
 
 # --- SAB-enriched progress lines ---------------------------------------------
 
 async def test_progress_line_prefers_sab_live_data():
-    from bot.request_watch import resolve_progress_line
+    from bot.progress_card import resolve_progress_line
     ctx = make_ctx()
     sab = AsyncMock()
     sab.get_items_status.return_value = {"nzo_a": ("downloading", 48, "0:02:00")}
@@ -183,7 +183,7 @@ async def test_progress_line_prefers_sab_live_data():
 async def test_progress_line_aggregates_multi_download():
     """A season grabbed as several NZBs shows the mean of the downloading
     jobs plus the file count, never just the first-listed job's state."""
-    from bot.request_watch import resolve_progress_line
+    from bot.progress_card import resolve_progress_line
     ctx = make_ctx()
     sab = AsyncMock()
     sab.get_items_status.return_value = {
@@ -201,7 +201,7 @@ async def test_progress_line_aggregates_multi_download():
 
 
 async def test_progress_line_shows_postproc_and_importing():
-    from bot.request_watch import resolve_progress_line
+    from bot.progress_card import resolve_progress_line
     ctx = make_ctx()
     sab = AsyncMock()
     ctx.bot_data["sabnzbd"] = sab
@@ -216,7 +216,7 @@ async def test_progress_line_shows_postproc_and_importing():
 
 
 async def test_progress_line_all_failed_and_error_fallback():
-    from bot import request_watch as rw
+    from bot import progress_card as rw
     ctx = make_ctx()
     sab = AsyncMock()
     ctx.bot_data["sabnzbd"] = sab
@@ -240,7 +240,7 @@ async def test_progress_line_all_failed_and_error_fallback():
 
 
 async def test_progress_line_falls_back_without_sab():
-    from bot.request_watch import resolve_progress_line
+    from bot.progress_card import resolve_progress_line
     ctx = make_ctx()  # sabnzbd None
     p = QueueProgress(percent=42, timeleft="00:14:00",
                       download_ids=["nzo_a"], count=1)
@@ -248,24 +248,24 @@ async def test_progress_line_falls_back_without_sab():
     assert "42%" in line and "00:14:00" in line
 
 
-async def test_poll_fires_arr_refresh_once_for_grabbing_watches():
-    from bot import request_watch as rw
+async def test_poll_fires_arr_refresh_once_for_grabbing_cards():
+    from bot import progress_card as rw
     rw._last_refresh.clear()
     ctx = make_ctx()
     ctx.bot_data["radarr"].refresh_monitored_downloads = AsyncMock()
-    ctx.bot_data["store"].list_request_watches.return_value = [
-        _watch(), _watch(id=2, message_id=56)]
+    ctx.bot_data["store"].list_progress_cards.return_value = [
+        _card_row(), _card_row(id=2, message_id=56)]
     ctx.bot_data["radarr"].get_queue_progress.return_value = None
-    await poll_request_watches(ctx)
+    await poll_progress_cards(ctx)
     ctx.bot_data["radarr"].refresh_monitored_downloads.assert_awaited_once()
 
 
 async def test_poll_skips_refresh_when_nothing_grabbing():
     ctx = make_ctx()
     ctx.bot_data["radarr"].refresh_monitored_downloads = AsyncMock()
-    ctx.bot_data["store"].list_request_watches.return_value = [
-        _watch(status="waiting")]
-    await poll_request_watches(ctx)
+    ctx.bot_data["store"].list_progress_cards.return_value = [
+        _card_row(status="waiting")]
+    await poll_progress_cards(ctx)
     ctx.bot_data["radarr"].refresh_monitored_downloads.assert_not_awaited()
 
 
@@ -274,25 +274,25 @@ async def test_failed_strand_recovers_to_searching_line():
     move off the failure line instead of stranding until the timeout edit
     contradicts it."""
     ctx = make_ctx()
-    ctx.bot_data["store"].list_request_watches.return_value = [
-        _watch(last_progress="⚠️ Download failed, waiting for another release…")]
-    ctx.bot_data["store"].update_request_watch.return_value = True
+    ctx.bot_data["store"].list_progress_cards.return_value = [
+        _card_row(last_progress="⚠️ Download failed, waiting for another release…")]
+    ctx.bot_data["store"].update_progress_card.return_value = True
     ctx.bot_data["radarr"].get_queue_progress.return_value = None
-    await poll_request_watches(ctx)
+    await poll_progress_cards(ctx)
     assert "Looking for another release" in \
         ctx.bot.edit_message_text.call_args.kwargs["text"]
 
 
 async def test_poll_skips_edit_when_row_deleted_mid_tick():
-    """update_request_watch returning False (webhook finalized + deleted the
+    """update_progress_card returning False (webhook finalized + deleted the
     row) must suppress the stale progress edit."""
     from fix_result import QueueProgress
     ctx = make_ctx()
-    ctx.bot_data["store"].list_request_watches.return_value = [_watch()]
-    ctx.bot_data["store"].update_request_watch.return_value = False
+    ctx.bot_data["store"].list_progress_cards.return_value = [_card_row()]
+    ctx.bot_data["store"].update_progress_card.return_value = False
     ctx.bot_data["radarr"].get_queue_progress.return_value = QueueProgress(
         percent=42, timeleft="", download_ids=[], count=1)
-    await poll_request_watches(ctx)
+    await poll_progress_cards(ctx)
     ctx.bot.edit_message_text.assert_not_awaited()
 
 
@@ -300,9 +300,9 @@ async def test_webhook_final_deletes_row_before_painting():
     ctx = make_ctx()
     app = ctx.application
     order = []
-    app.bot_data["store"].find_request_watches = AsyncMock(
-        return_value=[_watch()])
-    app.bot_data["store"].delete_request_watch = AsyncMock(
+    app.bot_data["store"].find_progress_cards = AsyncMock(
+        return_value=[_card_row()])
+    app.bot_data["store"].delete_progress_card = AsyncMock(
         side_effect=lambda *a: order.append("delete"))
     app.bot.edit_message_text = AsyncMock(
         side_effect=lambda **k: order.append("edit"))

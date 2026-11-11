@@ -202,7 +202,7 @@ async def test_failed_mark_suppresses_timeout_dm(monkeypatch):
     assert notified == []
 
 
-# --- morphing progress card ---------------------------------------------------
+# --- Progress card ---------------------------------------------------
 
 async def test_paint_progress_edits_card_and_dedupes():
     from unittest.mock import AsyncMock
@@ -263,7 +263,7 @@ async def test_paint_progress_searching_state_when_queue_empty():
 async def test_autofix_tick_fires_arr_refresh():
     from unittest.mock import AsyncMock
     from types import SimpleNamespace
-    from bot import request_watch as rw
+    from bot import progress_card as rw
     from bot.autofix_poll import poll_pending_autofixes
     from tests._handler_harness import make_ctx
 

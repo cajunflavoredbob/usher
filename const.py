@@ -18,10 +18,10 @@ PLEX_POLL_MAX_BACKOFF_S: Final = 12.0
 
 # --- Auto-fix poller --------------------------------------------------------
 AUTOFIX_POLL_INTERVAL_S: Final = 10
-# Morphing request cards: progress repaint cadence and how long a card is
+# Progress cards: repaint cadence and how long a card is
 # tracked before its final "still processing" edit.
-REQUEST_WATCH_POLL_INTERVAL_S: Final = 10
-REQUEST_WATCH_TIMEOUT_HOURS: Final = 24
+PROGRESS_CARD_POLL_INTERVAL_S: Final = 10
+PROGRESS_CARD_TIMEOUT_HOURS: Final = 24
 AUTOFIX_POLL_FIRST_DELAY_S: Final = 30
 AUTOFIX_TIMEOUT_HOURS: Final = 6
 

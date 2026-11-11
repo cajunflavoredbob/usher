@@ -54,8 +54,8 @@ class FixResult:
 @dataclass
 class QueueProgress:
     """Aggregate download progress for the queue records of one movie or
-    series, from the arr /queue/details endpoints. Backs the morphing
-    request/auto-fix cards and the SABnzbd priority boost."""
+    series, from the arr /queue/details endpoints. Backs the Progress
+    cards (Request and Fix) and the SABnzbd priority boost."""
     percent: int              # 0-100 across all records (size-weighted)
     timeleft: str             # arr's "00:14:32" string from the largest record, "" unknown
     download_ids: list        # download-client ids (SABnzbd nzo ids) seen

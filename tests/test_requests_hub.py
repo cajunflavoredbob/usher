@@ -288,13 +288,13 @@ async def test_submit_result_has_back_and_progress_card_is_new_message():
     assert kwargs["chat_id"] == 100 and kwargs["parse_mode"] == "HTML"
     assert kwargs["text"] == ("<b>New Movie (2026)</b>\n✅ Approved, grabbing…"
                               "\n\nUse /requests to check on it.")
-    watch = ctx.bot_data["store"].add_request_watch.call_args.kwargs
-    assert watch["message_id"] == 777
-    assert watch["message_id"] != upd.callback_query.message.message_id
-    assert watch["chat_id"] == 100
+    card_row = ctx.bot_data["store"].add_progress_card.call_args.kwargs
+    assert card_row["message_id"] == 777
+    assert card_row["message_id"] != upd.callback_query.message.message_id
+    assert card_row["chat_id"] == 100
 
 
-async def test_typed_submit_watch_points_at_progress_card():
+async def test_typed_submit_row_points_at_progress_card():
     ctx = _confirm_ctx()  # no Hub origin: the typed /request <title> path
     ctx.bot_data["seerr"].create_request.return_value = CreatedRequest(
         id=5, status=REQUEST_STATUS_PENDING)
@@ -305,12 +305,12 @@ async def test_typed_submit_watch_points_at_progress_card():
                             "Waiting for approval. I'll DM you when it moves.")
     assert _flat(edit["reply_markup"]) == [BACK]
     assert "⏳ Waiting for approval…" in ctx.bot.send_message.call_args.kwargs["text"]
-    watch = ctx.bot_data["store"].add_request_watch.call_args.kwargs
-    assert watch["message_id"] == 777
-    assert watch["status"] == "waiting"
+    card_row = ctx.bot_data["store"].add_progress_card.call_args.kwargs
+    assert card_row["message_id"] == 777
+    assert card_row["status"] == "waiting"
 
 
-async def test_submit_card_send_failure_adds_no_watch():
+async def test_submit_card_send_failure_adds_no_progress_card_row():
     ctx = _confirm_ctx(REQUESTS_HUB)
     ctx.bot.send_message.side_effect = RuntimeError("telegram down")
     ctx.bot_data["seerr"].create_request.return_value = CreatedRequest(
@@ -319,7 +319,7 @@ async def test_submit_card_send_failure_adds_no_watch():
     state = await request_submit(upd, ctx)
     assert state == ConversationHandler.END
     assert _flat(upd.callback_query.edits[-1]["reply_markup"]) == [BACK]
-    ctx.bot_data["store"].add_request_watch.assert_not_awaited()
+    ctx.bot_data["store"].add_progress_card.assert_not_awaited()
 
 
 # --- menu, /start and registration ---------------------------------------------

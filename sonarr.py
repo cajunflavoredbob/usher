@@ -228,7 +228,7 @@ class SonarrClient:
         """Ask the arr to sync with its download clients NOW. The arrs only
         poll their clients on their own schedule, so queue records (and the
         import that ends them) can lag a minute-plus behind reality; firing
-        this before reading the queue keeps the morphing cards honest."""
+        this before reading the queue keeps the Progress cards honest."""
         await execute(self._client, "POST", "/command", service=_SERVICE,
                       json={"name": "RefreshMonitoredDownloads"})
 

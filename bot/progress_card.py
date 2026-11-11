@@ -1,13 +1,13 @@
-"""Progress cards for Requests: the Progress card, a message sent after the
+"""Progress cards for Requests: a message sent after the
 /request confirmation, edits in place through the download's life (waiting →
 grabbing with live percent/ETA → final state), plus the SABnzbd priority
 boost for bot-originated grabs. The poller and webhooks do not edit the
 confirmation of a new submit.
 
 The poller paints progress (including a download-failed holding line while
-the arr hunts for another release); the states that CLOSE a watch come only
-from Seerr's webhook events (approved/declined/available/failed).
-A watch that outlives its timeout gets one honest final edit and is
+the arr hunts for another release); the final states (available/declined/failed)
+come only from Seerr's webhook events.
+A Progress card that outlives its timeout gets one honest final edit and is
 dropped -- the /requests list remains the source of truth."""
 from __future__ import annotations
 
@@ -22,11 +22,11 @@ from telegram.ext import ContextTypes
 from seerr import SeerrClient
 from store import UserStore
 
-from const import REQUEST_WATCH_TIMEOUT_HOURS
+from const import PROGRESS_CARD_TIMEOUT_HOURS
 
 logger = logging.getLogger("usher")
 
-# Watch ids currently mid-tick (same guard as the autofix poller: a slow
+# Progress card ids currently mid-tick (same guard as the autofix poller: a slow
 # tick must not double-process against the next one).
 _inflight: set[int] = set()
 
@@ -146,20 +146,20 @@ def _card_text(label: str, body_line: str, *, footer: bool = True) -> str:
 APPROVED_LINE = "✅ Approved, grabbing…"
 
 
-async def _edit_card(ctx, watch: dict, body_line: str, *,
+async def _edit_card(ctx, card: dict, body_line: str, *,
                      footer: bool = True) -> bool:
     try:
         await ctx.bot.edit_message_text(
-            chat_id=watch["chat_id"],
-            message_id=watch["message_id"],
-            text=_card_text(watch["label"], body_line, footer=footer),
+            chat_id=card["chat_id"],
+            message_id=card["message_id"],
+            text=_card_text(card["label"], body_line, footer=footer),
             parse_mode="HTML",
         )
         return True
     except Exception:
         # "message is not modified" and deleted-message errors both land
         # here; neither is worth more than a debug line.
-        logger.debug("watch card edit failed (non-fatal)", exc_info=True)
+        logger.debug("progress card edit failed (non-fatal)", exc_info=True)
         return False
 
 
@@ -185,81 +185,81 @@ async def maybe_bump_priority(ctx, download_ids: list) -> bool:
     return True
 
 
-async def _resolve_arr_id(ctx, watch: dict) -> Optional[int]:
-    """The arr's internal id for this watch's media (cached on the row)."""
-    if watch["arr_id"]:
-        return watch["arr_id"]
+async def _resolve_arr_id(ctx, card: dict) -> Optional[int]:
+    """The arr's internal id for this Progress card's media (cached on the row)."""
+    if card["arr_id"]:
+        return card["arr_id"]
     store: UserStore = ctx.bot_data["store"]
-    if watch["media_type"] == "movie":
+    if card["media_type"] == "movie":
         radarr = ctx.bot_data.get("radarr")
         if radarr is None:
             return None
-        movie = await radarr.get_movie_by_tmdb(watch["tmdb_id"])
+        movie = await radarr.get_movie_by_tmdb(card["tmdb_id"])
         if movie is None:
             return None
-        await store.update_request_watch(watch["id"], arr_id=movie.id)
+        await store.update_progress_card(card["id"], arr_id=movie.id)
         return movie.id
     sonarr = ctx.bot_data.get("sonarr")
     seerr: Optional[SeerrClient] = ctx.bot_data.get("seerr")
     if sonarr is None or seerr is None:
         return None
-    _, tvdb_id = await seerr.get_tv_seasons(watch["tmdb_id"])
+    _, tvdb_id = await seerr.get_tv_seasons(card["tmdb_id"])
     if not tvdb_id:
         return None
     series = await sonarr.get_series_by_tvdb(tvdb_id)
     if series is None:
         return None
-    await store.update_request_watch(watch["id"], arr_id=series.id)
+    await store.update_progress_card(card["id"], arr_id=series.id)
     return series.id
 
 
-async def poll_request_watches(ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Paint download progress onto each grabbing watch card."""
+async def poll_progress_cards(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Paint download progress onto each grabbing Progress card."""
     store: UserStore = ctx.bot_data["store"]
-    watches = await store.list_request_watches()
-    grabbing = [w for w in watches if w["status"] == "grabbing"]
+    cards = await store.list_progress_cards()
+    grabbing = [w for w in cards if w["status"] == "grabbing"]
     if grabbing:
         await refresh_arr_downloads(
             ctx,
             movies=any(w["media_type"] == "movie" for w in grabbing),
             tv=any(w["media_type"] == "tv" for w in grabbing))
-    for watch in watches:
-        if watch["id"] in _inflight:
+    for card in cards:
+        if card["id"] in _inflight:
             continue
-        _inflight.add(watch["id"])
+        _inflight.add(card["id"])
         try:
-            await _poll_one(ctx, store, watch)
+            await _poll_one(ctx, store, card)
         except Exception:
-            logger.exception("request-watch poll failed for %d", watch["id"])
+            logger.exception("progress-card poll failed for %d", card["id"])
         finally:
-            _inflight.discard(watch["id"])
+            _inflight.discard(card["id"])
 
 
-async def _poll_one(ctx, store: UserStore, watch: dict) -> None:
+async def _poll_one(ctx, store: UserStore, card: dict) -> None:
     # Timeout: one final honest edit, then drop the row.
     try:
         timeout_at = datetime.fromisoformat(
-            watch["timeout_at"].replace(" ", "T")).replace(tzinfo=timezone.utc)
+            card["timeout_at"].replace(" ", "T")).replace(tzinfo=timezone.utc)
         timed_out = datetime.now(timezone.utc) >= timeout_at
     except Exception:
         timed_out = True
     if timed_out:
         await _edit_card(
-            ctx, watch,
-            f"⏳ Still processing after {REQUEST_WATCH_TIMEOUT_HOURS}h, "
+            ctx, card,
+            f"⏳ Still processing after {PROGRESS_CARD_TIMEOUT_HOURS}h, "
             "I'll DM you when Seerr reports it available.")
-        await store.delete_request_watch(watch["id"])
+        await store.delete_progress_card(card["id"])
         return
 
-    # Pending-approval watches have nothing to poll; the MEDIA_APPROVED
+    # Pending-approval cards have nothing to poll; the MEDIA_APPROVED
     # webhook flips them to grabbing.
-    if watch["status"] != "grabbing":
+    if card["status"] != "grabbing":
         return
 
-    arr_id = await _resolve_arr_id(ctx, watch)
+    arr_id = await _resolve_arr_id(ctx, card)
     if arr_id is None:
         return
-    if watch["media_type"] == "movie":
+    if card["media_type"] == "movie":
         radarr = ctx.bot_data.get("radarr")
         progress = await radarr.get_queue_progress(arr_id) if radarr else None
     else:
@@ -271,37 +271,37 @@ async def _poll_one(ctx, store: UserStore, watch: dict) -> None:
         # record while it hunts for another release; without this the card
         # would sit on the failure line until the timeout edit contradicted
         # it.
-        if watch["last_progress"].startswith("⚠️"):
+        if card["last_progress"].startswith("⚠️"):
             line = "🔎 Looking for another release…"
-            if await store.update_request_watch(watch["id"],
+            if await store.update_progress_card(card["id"],
                                                 last_progress=line):
-                if not await _edit_card(ctx, watch, line):
+                if not await _edit_card(ctx, card, line):
                     # Roll back so the next tick retries the edit (persist-
                     # first is the race guard, but a swallowed failure on a
                     # static line would otherwise never repaint).
-                    await store.update_request_watch(
-                        watch["id"], last_progress=watch["last_progress"])
+                    await store.update_progress_card(
+                        card["id"], last_progress=card["last_progress"])
         return
 
-    if not watch["bumped"]:
+    if not card["bumped"]:
         if await maybe_bump_priority(ctx, progress.download_ids):
-            await store.update_request_watch(watch["id"], bumped=1)
+            await store.update_progress_card(card["id"], bumped=1)
 
     line = await resolve_progress_line(ctx, progress,
-                                       fallback_line=watch["last_progress"])
-    if line == watch["last_progress"]:
+                                       fallback_line=card["last_progress"])
+    if line == card["last_progress"]:
         return  # nothing changed; skip the edit
-    # Persist BEFORE editing: update_request_watch reports whether the row
-    # still exists, so a watch the webhook just finalized (and deleted)
+    # Persist BEFORE editing: update_progress_card reports whether the row
+    # still exists, so a Progress card the webhook just finalized (and deleted)
     # mid-tick doesn't get its terminal card overwritten with stale
     # progress.
-    if await store.update_request_watch(watch["id"], last_progress=line):
-        if not await _edit_card(ctx, watch, line):
+    if await store.update_progress_card(card["id"], last_progress=line):
+        if not await _edit_card(ctx, card, line):
             # Roll back so static lines (postproc/importing) retry next tick;
             # without this a transient Telegram failure on a line that never
             # changes text would strand the card (percent lines self-heal).
-            await store.update_request_watch(
-                watch["id"], last_progress=watch["last_progress"])
+            await store.update_progress_card(
+                card["id"], last_progress=card["last_progress"])
 
 
 # --- Webhook-driven state changes --------------------------------------------
@@ -319,16 +319,17 @@ _FAILED_LINE_NO_ALARM = "⚠️ Download failed."
 
 async def apply_webhook_event(app, nt: str, media_type: str,
                               tmdb_id: int) -> None:
-    """Morph every watch card for this media per the lifecycle event.
+    """Update every Progress card for this media per the lifecycle event.
     Approved -> grabbing (poller takes over); terminal events paint the
-    final line and close the watch."""
+    final line and close the Progress card."""
     store: UserStore = app.bot_data["store"]
     try:
-        watches = await store.find_request_watches(media_type, tmdb_id)
+        cards = await store.find_progress_cards(media_type, tmdb_id)
     except Exception:
-        logger.exception("watch lookup failed for %s/%s", media_type, tmdb_id)
+        logger.exception("progress card lookup failed for %s/%s",
+                         media_type, tmdb_id)
         return
-    if not watches:
+    if not cards:
         return
 
     class _Shim:  # _edit_card/maybe_bump take a ctx-shaped object
@@ -337,10 +338,10 @@ async def apply_webhook_event(app, nt: str, media_type: str,
 
     ctx = _Shim()
     if nt in ("MEDIA_APPROVED", "MEDIA_AUTO_APPROVED"):
-        for watch in watches:
-            if watch["status"] != "grabbing":
-                await store.update_request_watch(watch["id"], status="grabbing")
-                await _edit_card(ctx, watch, APPROVED_LINE)
+        for card in cards:
+            if card["status"] != "grabbing":
+                await store.update_progress_card(card["id"], status="grabbing")
+                await _edit_card(ctx, card, APPROVED_LINE)
         return
     final = _FINAL_LINES.get(nt)
     if (nt == "MEDIA_FAILED" and not
@@ -348,10 +349,10 @@ async def apply_webhook_event(app, nt: str, media_type: str,
         final = _FAILED_LINE_NO_ALARM
     if final is None:
         return
-    for watch in watches:
+    for card in cards:
         # Delete first: the poller guards its progress edits on the row
         # still existing, so removing the row before painting the terminal
         # line closes the overwrite race (a mid-tick poller would otherwise
         # stamp stale progress over the final state).
-        await store.delete_request_watch(watch["id"])
-        await _edit_card(ctx, watch, final, footer=False)
+        await store.delete_progress_card(card["id"])
+        await _edit_card(ctx, card, final, footer=False)

@@ -944,7 +944,7 @@ async def _submit_issue_inner(
     if markup is not None:
         record_btn(ctx.application, update.effective_user.id, sent)
     # If a poller row was enqueued this submit, attach the confirmation
-    # message so the poll ticks can morph it into a progress card.
+    # message so the poll ticks can turn it into a Progress card.
     pending_id = ctx.user_data.pop("_pending_autofix_id", None)
     if pending_id and getattr(sent, "message_id", None):
         try:

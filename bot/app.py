@@ -32,7 +32,7 @@ from webui import attach_webui
 from _version import __version__ as USHER_VERSION
 
 from bot.autofix_poll import poll_pending_autofixes
-from bot.request_watch import poll_request_watches
+from bot.progress_card import poll_progress_cards
 from bot.callback_prefixes import (
     ACCOUNT_UNLINK,
     ADMIN_SHARES,
@@ -113,7 +113,7 @@ from const import (
     AUTOFIX_POLL_FIRST_DELAY_S,
     AUTOFIX_POLL_INTERVAL_S,
     CLIENT_CLOSE_GRACE_S,
-    REQUEST_WATCH_POLL_INTERVAL_S,
+    PROGRESS_CARD_POLL_INTERVAL_S,
 )
 
 logging.basicConfig(
@@ -473,10 +473,10 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_error_handler(on_error)
 
     app.job_queue.run_repeating(
-        poll_request_watches,
-        interval=REQUEST_WATCH_POLL_INTERVAL_S,
+        poll_progress_cards,
+        interval=PROGRESS_CARD_POLL_INTERVAL_S,
         first=AUTOFIX_POLL_FIRST_DELAY_S,
-        name="request_watch_poll",
+        name="progress_card_poll",
     )
     app.job_queue.run_repeating(
         poll_pending_autofixes,

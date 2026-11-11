@@ -395,7 +395,7 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
         logger.info("Webhook media event %s: deliberately not notified", nt)
         return
     # DM-class toggles null the MESSAGE templates only. The tail of this
-    # handler (card morphing, subscription fan-out) runs regardless: one
+    # handler (card updates, subscription fan-out) runs regardless: one
     # silenced DM class must never disable the other, still-enabled ones.
     cfg = app.bot_data["settings_store"].settings
     if not cfg.tg_notify_requester:
@@ -490,16 +490,16 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
     if admin_line and admin_id and not requester_is_admin:
         await _dm(admin_id, admin_line, with_requester=True)
 
-    # Morph any request cards tracking this media (approved -> grabbing,
-    # terminal events paint the final line and close the watch).
-    tmdb_for_watch = media.get("tmdbId")
-    type_for_watch = media.get("media_type")
-    if isinstance(tmdb_for_watch, int) and type_for_watch in ("movie", "tv"):
-        from bot.request_watch import apply_webhook_event
+    # Update any Progress cards tracking this media (approved -> grabbing,
+    # terminal events paint the final line and close the Progress card).
+    tmdb_for_card = media.get("tmdbId")
+    type_for_card = media.get("media_type")
+    if isinstance(tmdb_for_card, int) and type_for_card in ("movie", "tv"):
+        from bot.progress_card import apply_webhook_event
         try:
-            await apply_webhook_event(app, nt, type_for_watch, tmdb_for_watch)
+            await apply_webhook_event(app, nt, type_for_card, tmdb_for_card)
         except Exception:
-            logger.exception("watch morph failed for %s", nt)
+            logger.exception("progress card update failed for %s", nt)
 
     # Subscriptions: one-shot fan-out to subscribers, minus whoever
     # this event already DMed as the requester.

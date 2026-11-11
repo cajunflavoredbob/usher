@@ -480,7 +480,7 @@ class UserStore:
     # status: waiting (pending approval) -> grabbing -> gone
     # (finalized rows are deleted, not kept).
 
-    async def add_request_watch(self, *, chat_id: int, message_id: int,
+    async def add_progress_card(self, *, chat_id: int, message_id: int,
                                 user_id: int, media_type: str, tmdb_id: int,
                                 label: str, is4k: bool,
                                 status: str, timeout_hours: int) -> int:
@@ -501,7 +501,7 @@ class UserStore:
 
         return await self._run(_do)
 
-    async def list_request_watches(self) -> list[dict]:
+    async def list_progress_cards(self) -> list[dict]:
         def _do() -> list[tuple]:
             with self._conn() as c:
                 return c.execute(
@@ -519,8 +519,8 @@ class UserStore:
                 "last_progress", "bumped", "timeout_at")
         return [dict(zip(keys, r)) for r in rows]
 
-    async def find_request_watches(self, media_type: str,
-                                   tmdb_id: int) -> list[dict]:
+    async def find_progress_cards(self, media_type: str,
+                                  tmdb_id: int) -> list[dict]:
         def _do() -> list[tuple]:
             with self._conn() as c:
                 return c.execute(
@@ -540,8 +540,8 @@ class UserStore:
                 "last_progress", "bumped", "timeout_at")
         return [dict(zip(keys, r)) for r in rows]
 
-    async def update_request_watch(self, watch_id: int, **fields) -> bool:
-        """Update whitelisted columns on one watch row. Returns True when
+    async def update_progress_card(self, card_id: int, **fields) -> bool:
+        """Update whitelisted columns on one Progress card row. Returns True when
         the row still existed -- the poller uses this to skip painting
         progress over a card the webhook just finalized and deleted."""
         allowed = {"status", "arr_id", "last_progress", "bumped"}
@@ -554,16 +554,16 @@ class UserStore:
                 sets = ", ".join(f"{k} = ?" for k in updates)
                 cur = c.execute(
                     f"UPDATE request_watches SET {sets} WHERE id = ?",
-                    (*updates.values(), watch_id))
+                    (*updates.values(), card_id))
                 return cur.rowcount > 0
 
         return await self._run(_do)
 
-    async def delete_request_watch(self, watch_id: int) -> None:
+    async def delete_progress_card(self, card_id: int) -> None:
         def _do():
             with self._conn() as c:
                 c.execute("DELETE FROM request_watches WHERE id = ?",
-                          (watch_id,))
+                          (card_id,))
 
         await self._run(_do)
 

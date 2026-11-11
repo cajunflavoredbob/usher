@@ -240,17 +240,17 @@ async def test_issue_class_disabled_silences_issue_handlers():
 
 
 async def test_requester_class_off_still_runs_cards_and_fanout():
-    """A silenced DM class must never disable the still-enabled card morphs
+    """A silenced DM class must never disable the still-enabled card updates
     or subscription fan-out (the gate nulls message templates only)."""
     app = _app(requester_link=make_link(telegram_id=USER_ID))
     app.bot_data["settings_store"].settings.tg_notify_requester = False
-    app.bot_data["store"].find_request_watches = AsyncMock(return_value=[])
+    app.bot_data["store"].find_progress_cards = AsyncMock(return_value=[])
     app.bot_data["store"].pop_subscribers = AsyncMock(return_value=[88])
     await handle_seerr_media(app, _payload("MEDIA_AVAILABLE"))
     # No requester DM, but the fan-out still delivered to the subscriber.
     chat_ids = [c.kwargs["chat_id"] for c in app.bot.send_message.call_args_list]
     assert chat_ids == [88]
-    app.bot_data["store"].find_request_watches.assert_awaited()  # morph ran
+    app.bot_data["store"].find_progress_cards.assert_awaited()  # card update ran
 
 
 async def test_requester_class_off_subscription_still_delivers_to_requester():
@@ -259,7 +259,7 @@ async def test_requester_class_off_subscription_still_delivers_to_requester():
     skip them via already_notified (their DM never went out)."""
     app = _app(requester_link=make_link(telegram_id=USER_ID))
     app.bot_data["settings_store"].settings.tg_notify_requester = False
-    app.bot_data["store"].find_request_watches = AsyncMock(return_value=[])
+    app.bot_data["store"].find_progress_cards = AsyncMock(return_value=[])
     app.bot_data["store"].pop_subscribers = AsyncMock(return_value=[USER_ID])
     await handle_seerr_media(app, _payload("MEDIA_AVAILABLE"))
     chat_ids = [c.kwargs["chat_id"] for c in app.bot.send_message.call_args_list]
@@ -269,15 +269,15 @@ async def test_requester_class_off_subscription_still_delivers_to_requester():
 async def test_failed_card_line_honors_admin_alarm_toggle():
     """The card must not claim 'the admin has been notified' when the
     failed-download alarm is off."""
-    from bot.request_watch import apply_webhook_event
+    from bot.progress_card import apply_webhook_event
     app = _app(requester_link=make_link(telegram_id=USER_ID))
     app.bot_data["settings_store"].settings.tg_notify_admin_failed = False
-    app.bot_data["store"].find_request_watches = AsyncMock(return_value=[{
+    app.bot_data["store"].find_progress_cards = AsyncMock(return_value=[{
         "id": 1, "chat_id": USER_ID, "message_id": 5, "status": "grabbing",
         "last_progress": "", "media_type": "movie", "tmdb_id": 550,
         "label": "Movie (2026)",
     }])
-    app.bot_data["store"].delete_request_watch = AsyncMock()
+    app.bot_data["store"].delete_progress_card = AsyncMock()
     await apply_webhook_event(app, "MEDIA_FAILED", "movie", 550)
     text = app.bot.edit_message_text.call_args.kwargs.get("text") or \
         app.bot.edit_message_text.call_args.args[0]

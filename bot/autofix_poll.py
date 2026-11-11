@@ -23,7 +23,7 @@ from sonarr import SonarrClient
 from store import UserStore
 
 from bot.callback_prefixes import RESOLVE
-from bot.request_watch import (maybe_bump_priority, refresh_arr_downloads,
+from bot.progress_card import (maybe_bump_priority, refresh_arr_downloads,
                                resolve_progress_line)
 from bot.shared import record_btn
 from const import AUTOFIX_TIMEOUT_HOURS
