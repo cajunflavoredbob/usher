@@ -6,7 +6,7 @@ A Telegram bot that lets your users report media issues to [Seerr](https://seerr
 
 - **`/issue` flow**: pick media → (for TV) pick season + episode → pick issue type (Video / Audio / Subtitles / Other) → describe the problem. The issue is created in Seerr **as the linked user**, not your admin account.
 - **Plex sign-in linking**: `/link` runs a Plex OAuth flow (no usernames or passwords typed into Telegram). The user's Plex token is encrypted at rest and used to authenticate to Seerr on their behalf.
-- **`/tickets`**: users list and follow up on their own open issues; the admin sees everyone's. Replies post back to Seerr as comments, and issues can be resolved from Telegram.
+- **`/tickets`**: opens the Tickets Hub, with buttons to report a problem (the `/issue` flow) and to list open tickets: a user sees their own, the admin sees everyone's. Replies post back to Seerr as comments, and issues can be resolved from Telegram.
 - **Webhook-driven updates**: Seerr posts to Usher at `/webhook/seerr`, so new comments on a user's issue are delivered to them in Telegram and the resolve flow stays in sync.
 - **Optional auto-fix** for Video / Audio / Subtitles: Usher tells Radarr (movies) or Sonarr (TV) to delete the current file and trigger a new search, then polls for completion and notifies the user. Gated by:
   - **Allowlist** of Telegram user IDs (defaults to admin only)

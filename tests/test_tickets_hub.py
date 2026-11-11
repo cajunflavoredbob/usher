@@ -631,7 +631,7 @@ async def test_fix_from_list_on_a_whole_season_ends_with_tickets_back_only():
     assert _flat(edit["reply_markup"]) == [LIST_BACK]
 
 
-async def test_fix_from_dm_has_no_buttons():
+async def test_fix_failure_from_dm_has_no_buttons():
     ctx = make_ctx(admin_id=ADMIN_ID)
     ctx.bot_data["seerr"].get_issue.side_effect = RuntimeError("boom")
     upd = make_update(callback_data="tkfd:5", user_id=ADMIN_ID)
