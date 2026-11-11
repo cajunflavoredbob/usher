@@ -1,29 +1,49 @@
 # Usher
 
-A Telegram bot that lets your users report media issues to [Seerr](https://seerr.dev/) and optionally trigger Radarr/Sonarr to auto-fix the problem by deleting the file and re-downloading. Users sign in with Plex, so every issue is filed in Seerr as the actual reporter. Configuration is done through a built-in web admin UI.
+A Telegram bot and web admin panel that sit in front of a Plex server and its [Seerr](https://seerr.dev/) request manager. Users sign in with Plex, which gives each one a Link. They then request movies and shows, browse what is trending, get told when a title becomes available, and report problems as Tickets. Requests and Tickets are made in Seerr as the actual user. The bot can also fix a bad file by telling Radarr or Sonarr to delete it and search again, and the Admin can invite people to the Plex server. Configuration is done through the built-in web admin panel.
 
 ## Features
 
-- **`/issue` flow**: pick media → (for TV) pick season + episode → pick issue type (Video / Audio / Subtitles / Other) → describe the problem. The issue is created in Seerr **as the linked user**, not your admin account.
-- **Plex sign-in linking**: `/link` runs a Plex OAuth flow (no usernames or passwords typed into Telegram). The user's Plex token is encrypted at rest and used to authenticate to Seerr on their behalf.
-- **`/tickets`**: opens the Tickets Hub, with buttons to report a problem (the `/issue` flow) and to list open tickets: a user sees their own, the admin sees everyone's. Replies post back to Seerr as comments, and issues can be resolved from Telegram.
-- **Webhook-driven updates**: Seerr posts to Usher at `/webhook/seerr`, so new comments on a user's issue are delivered to them in Telegram and the resolve flow stays in sync.
-- **Optional auto-fix** for Video / Audio / Subtitles: Usher tells Radarr (movies) or Sonarr (TV) to delete the current file and trigger a new search, then polls for completion and notifies the user. Gated by:
-  - **Allowlist** of Telegram user IDs (defaults to admin only)
-  - **Configurable daily limit** per user (default 3 per 24h)
-  - **Explicit confirmation** before any destructive action
-- **Admin web UI** at `/admin`: first-run setup wizard, settings tabs (Telegram / Seerr / Auto-fix / Webhook / Account), connection **Test** buttons, encrypted backups, and restore.
-- Works in DMs or any Telegram group the bot is added to (per-user conversation state).
-- Admin gets `/admin`, a DM-only Hub to invite someone to the Plex server, see and remove Shares, and check connections, plus a startup health DM.
+- **Link**: `/account` opens the Account Hub, where a User links or unlinks their Plex sign-in. It is a Plex OAuth flow, so no usernames or passwords are typed into Telegram. The User's Plex token is encrypted at rest and used to authenticate to Seerr on their behalf.
+- **Requests**: a Linked user asks for a movie or show with `/request`, and the Request is made in Seerr as that user. Once a Request is made, a Progress card shows "Waiting for approval" until it is approved, then edits itself in place as the title is grabbed, downloaded and becomes available. `/requests` lists a User's own Requests and cancels pending ones. The Admin sees everyone's.
+- **Trending**: `/trending` browses what is trending, with `movies`, `tv` and `upcoming` as optional arguments. Any title in the list can be requested by tapping its number.
+- **Subscriptions**: the bell button on a title's detail card asks to be told when it becomes available. A Subscription is one-shot: the first availability notice uses it up. `/subscriptions` lists and removes a User's own.
+- **Tickets**: `/tickets` opens the Tickets Hub, with buttons to report a problem and to list open Tickets: a User sees their own, the Admin sees everyone's. A Ticket records the title, an Issue type (Video, Audio, Subtitles or Other) and, for TV, its Scope: one episode or one whole season. Replies post back to Seerr as comments, and Tickets can be closed from Telegram.
+- **Fixes**: the Admin can start a Fix from a Ticket. **Redownload** deletes the file and searches again. **Mark failed** blocklists the current release when one is found, deletes the file, then searches again. Progress shows on a Progress card, and whoever started the Fix is told when the new file lands.
+- **Auto-fix**: for Video / Audio / Subtitles Tickets, the Reporter can start a Redownload themselves on one episode or movie, gated by the Admin's allowlist and daily limit (see [Auto-fix details](#auto-fix-details)).
+- **Shares**: the Admin can `/invite` someone to the Plex server by email or Plex username, choosing the Libraries to share, and `/uninvite` them. The Admin Hub also has a Share list, where each Share can be viewed and removed. An Invite is a Share the recipient has not accepted yet, and `/uninvite` removes either kind.
+- **SABnzbd priority**: with SABnzbd connected, the Admin can have downloads that Requests and auto-fixes trigger bumped up its queue, at High priority or Force. The bump applies once per download.
+- **Notification toggles**: in the web admin panel's Telegram tab, the Admin can turn each class of bot DM off for everyone: Request updates to Requesters, new-Request notices to the Admin, the failed-download alarm to the Admin, Ticket DMs, and availability notices for Subscriptions.
+- **Webhook-driven updates**: Seerr posts to Usher at `/webhook/seerr`, so new comments on a Ticket, resolutions and Request status changes are delivered in Telegram and the close flow stays in sync.
+- **Admin web panel** at `/admin`: first-run setup wizard, settings tabs for Telegram, Seerr, Auto-fix, SABnzbd, Webhook and Account, connection **Test** buttons, encrypted backups, and restore.
+- Works in DMs or any Telegram group the bot is added to with per-user conversation state. The Admin Hub is DM-only.
+- The Admin also gets a startup health DM.
+
+## Commands
+
+The bot's command menu lists the Hubs plus `/help`. A Hub is a command that opens one message of buttons for an area of the bot, and every flow started from a Hub ends with a way back to it. The menu is registered at every startup, so it always matches the code.
+
+| Menu entry | Shown to | What it holds |
+|---|---|---|
+| `/request` | everyone | **Requests Hub**: New request, My requests, Trending, Subscriptions. `/request <title>` skips the Hub and starts a Request for that title. |
+| `/tickets` | everyone | **Tickets Hub**: Report a problem, and My tickets (Open tickets for the Admin). |
+| `/account` | everyone | **Account Hub**: Link, or Unlink once linked. |
+| `/help` | everyone | The command list. For the Admin it also shows connection status. |
+| `/admin` | the Admin only (extra menu entry in the Admin's chat) | **Admin Hub**: Invite, Shares (the Share list), Status. DM only. |
+
+Every command that is not in the menu still works when typed, including the ones that take an argument:
+
+- Everyone: `/link`, `/unlink`, `/issue` (report a problem), `/requests`, `/trending [movies|tv|upcoming]`, `/subscriptions`.
+- Admin only, and only in a DM with the bot: `/invite [email or Plex username]`, `/uninvite <email or username>`, `/status` (connection status). Anyone else gets "Admin only."
 
 ## How it works
 
 Usher runs two things in one container:
 
-1. A **Telegram bot** (python-telegram-bot, long-polling — no inbound Telegram URL needed).
-2. An **HTTP server** (aiohttp) on port **8765** that serves the `/admin` web UI and receives Seerr webhooks at `/webhook/seerr`.
+1. A **Telegram bot** (python-telegram-bot, long-polling, so no inbound Telegram URL is needed).
+2. An **HTTP server** (aiohttp) on port **8765** that serves the `/admin` web admin panel and receives Seerr webhooks at `/webhook/seerr`.
 
-All configuration lives in `/data/settings.json`, managed through the web UI. On first run — before an admin account and the required fields exist — Usher starts in **setup-only mode** (just the web UI), then restarts into full mode once setup is complete.
+All configuration lives in `/data/settings.json`, managed through the web admin panel. On first run, before a Panel account and the required fields exist, Usher starts in **setup-only mode** (just the web admin panel), then restarts into full mode once setup is complete.
 
 ## Install (Docker)
 
@@ -56,7 +76,7 @@ cd usher
 docker compose up -d
 ```
 
-`docker-compose.yml` pulls the published image by default; uncomment `build: .` to build from source instead. You can pre-seed first-run values via environment variables (see [Configuration](#configuration)), but the web UI is the source of truth after that.
+`docker-compose.yml` pulls the published image by default; uncomment `build: .` to build from source instead. You can pre-seed first-run values via environment variables (see [Configuration](#configuration)), but the web admin panel is the source of truth after that.
 
 ## First-run setup
 
@@ -76,15 +96,15 @@ docker compose up -d
 
 ## Linking users
 
-Each user DMs the bot once and signs in with Plex — there are no Seerr or Plex usernames to type:
+Each user DMs the bot once and signs in with Plex, so there are no Seerr or Plex usernames to type:
 
 ```
 /link
 ```
 
-The bot walks them through a Plex authorization (desktop opens the auth page; mobile copies an auth link to paste into a browser, with a `plex.tv/link` code fallback). Once approved, Usher signs the user into Seerr with their Plex token and stores the (encrypted) mapping in `/data/mappings.sqlite`. After that, `/issue` and `/tickets` work in DM or any group the bot is in.
+The bot walks them through a Plex authorization (desktop opens the auth page; mobile copies an auth link to paste into a browser, with a `plex.tv/link` code fallback). Once approved, Usher signs the user into Seerr with their Plex token and stores the encrypted Link in `/data/mappings.sqlite`. After that, `/request`, `/issue` and `/tickets` work in DM or any group the bot is in.
 
-The user's Plex account must be shared into your Seerr instance. If it isn't, the bot says so and asks them to have the admin invite them. `/unlink` removes the stored token at any time.
+The user's Plex account must be shared into your Seerr instance. If it isn't, the bot says so and asks them to have the Admin invite them. Unlinking from the Account Hub (or `/unlink`) removes the stored token at any time.
 
 ## Example conversation
 
@@ -118,7 +138,7 @@ bot:  ⚠️ This will delete the current file from disk and trigger a new downl
       [⚠️ Yes, delete & re-search] [No, just report]
 user: (taps Yes)
 bot:  ✅ Reported as ticket #14
-        🔊 Audio — Solo: A Star Wars Story (2018)
+        🔊 Audio - Solo: A Star Wars Story (2018)
       🔧 Auto-fix: Deleted file (if any) and triggered re-search for 'Solo: A Star Wars Story'.
       🔔 I'll DM you when the new file finishes downloading (or after 6h timeout).
 
@@ -127,17 +147,17 @@ bot:  ✅ Reported as ticket #14
 
 ## Webhook setup
 
-Usher receives events from Seerr so issue comments and resolutions reach the user in Telegram.
+Usher receives events from Seerr so Ticket comments and resolutions, and Request updates, reach the user in Telegram.
 
-1. In `/admin` → **Webhook** tab, copy the webhook URL and the secret (use **Show**/**Copy**; **Generate** rolls a new one). A secret is mandatory and auto-generated on first run — Usher rejects unauthenticated webhook POSTs.
-2. In Seerr → Settings → Notifications → **Webhook**: set the URL, paste the secret into the **Authorization Header** field, and enable the **Issue Reported**, **Issue Comment**, and **Issue Resolved** events (Usher handles all three; enabling only one silently drops the other notification types).
+1. In `/admin` → **Webhook** tab, copy the webhook URL and the secret (use **Show**/**Copy**; **Generate** rolls a new one). A secret is mandatory and auto-generated on first run, and Usher rejects unauthenticated webhook POSTs.
+2. In Seerr → Settings → Notifications → **Webhook**: set the URL, paste the secret into the **Authorization Header** field, and enable the **Issue Reported**, **Issue Comment**, and **Issue Resolved** events, plus the Request events (Usher handles all of them; leaving one off silently drops that notification type).
 3. Use the Webhook tab's **Test** button to confirm the round-trip.
 
-Seerr reaches Usher on its LAN address and port — no public URL is required, but Seerr must be able to reach the Usher port.
+Seerr reaches Usher on its LAN address and port. No public URL is required, but Seerr must be able to reach the Usher port.
 
 ## Configuration
 
-Configuration is managed in the `/admin` web UI and persisted to `/data/settings.json`. Environment variables only **seed the first run** (and migrate legacy installs); after that the web UI wins.
+Configuration is managed in the `/admin` web admin panel and persisted to `/data/settings.json`. Environment variables only **seed the first run** (and migrate legacy installs); after that the web admin panel wins.
 
 | Setting (env seed) | Required? | Description |
 |---|---|---|
@@ -157,38 +177,38 @@ Runtime/path overrides: `DATA_DIR` (default `/data`), `STORE_PATH` (mappings DB)
 
 ## How user attribution works
 
-Because users sign in with Plex, Usher authenticates to Seerr **as the user** (via their Plex token) when creating issues, posting comments, and listing tickets. Issues are therefore attributed to the real reporter in Seerr's UI — no admin-account workaround or message prefixing. The encrypted Plex token never leaves your stack.
+Because users sign in with Plex, Usher authenticates to Seerr **as the user** (via their Plex token) when making Requests, creating Tickets, posting comments, and listing Tickets. Requests and Tickets are therefore attributed to the real Requester or Reporter in Seerr's UI, with no admin-account workaround or message prefixing. The encrypted Plex token never leaves your stack.
 
 ## Auto-fix details
 
-- Offered only for issue types **Video / Audio / Subtitles** (where a re-download might help).
+- Offered only for Issue types **Video / Audio / Subtitles** (where a re-download might help).
 - Offered only to Telegram IDs in the allowlist (defaults to just the admin).
-- **Per-user daily limit** (default 3 per 24h), configurable in the Auto-fix tab. The admin bypasses it.
+- **Per-user daily limit** (default 3 per 24h), configurable in the Auto-fix tab. The Admin bypasses it.
 - Explicit confirmation required before deletion.
-- For TV: **per-episode only**. Whole-season and whole-show tickets are reported to Seerr but never auto-fixed (the season-wide delete workflow was removed in 0.12.0).
+- For TV: **per-episode only**. Whole-season and whole-show Tickets are reported to Seerr but never auto-fixed (the season-wide delete workflow was removed in 0.12.0).
 - Usher polls the *arr after triggering and DMs the user when the new file lands (or on timeout).
-- If the media isn't managed by Radarr/Sonarr, Usher reports "not in Radarr/Sonarr" without touching the issue.
+- If the media isn't managed by Radarr/Sonarr, Usher reports "not in Radarr/Sonarr" without touching the Ticket.
 - All auto-fix events are recorded in the `autofix_events` SQLite table.
 
 ## Files
 
-- `bot/` — the Telegram application package (entry point `python -m bot`): app wiring, issue/link/resolve flows, ticket management, webhook handlers, auto-fix poller.
-- `webui.py` — aiohttp admin web UI (`/admin`): setup, settings tabs, connection tests, backup/restore.
-- `webhook.py` — Seerr webhook receiver (`/webhook/seerr`).
-- `seerr.py`, `radarr.py`, `sonarr.py`, `plex.py` — API clients.
-- `store.py` — SQLite store (encrypted Plex tokens, user mappings, auto-fix audit).
-- `settings.py`, `const.py` — settings model/persistence and named constants.
-- `http_util.py`, `fix_result.py` — API error contracts + retry, auto-fix result types.
-- `auth_util.py`, `backup_crypto.py` — admin auth/CSRF/throttle, passphrase-wrapped backups.
+- `bot/`: the Telegram application package (entry point `python -m bot`): app wiring, Hubs, Request/Ticket/Link flows, Ticket management, webhook handlers, auto-fix poller.
+- `webui.py`: aiohttp web admin panel (`/admin`): setup, settings tabs, connection tests, backup/restore.
+- `webhook.py`: Seerr webhook receiver (`/webhook/seerr`).
+- `seerr.py`, `radarr.py`, `sonarr.py`, `sabnzbd.py`, `plex.py`: API clients.
+- `store.py`: SQLite store (encrypted Plex tokens, Links, Subscriptions, auto-fix audit).
+- `settings.py`, `const.py`: settings model/persistence and named constants.
+- `http_util.py`, `fix_result.py`: API error contracts and retry, auto-fix result types.
+- `auth_util.py`, `backup_crypto.py`: admin auth/CSRF/throttle, passphrase-wrapped backups.
 - `Dockerfile`, `docker-compose.yml`, `.env.example`, `unraid-template.xml`
-- `.github/workflows/` — tests gate releases; images publish to GHCR and Docker Hub on tag.
+- `.github/workflows/`: tests gate releases; images publish to GHCR and Docker Hub on tag.
 
 ## Privacy
 
-- The Telegram side uses long-polling — no public URL required.
+- The Telegram side uses long-polling, so no public URL is required.
 - Seerr reaches Usher over your LAN for webhooks; nothing needs to be exposed publicly.
 - Plex tokens are encrypted at rest (Fernet) in the local SQLite DB.
-- Usher talks only to the Telegram API, your Seerr, your *arr stack, and Plex's auth API — nothing else.
+- Usher talks only to the Telegram API, your Seerr, your *arr stack, SABnzbd if you connect it, and Plex's auth API. Nothing else.
 
 ## Securing the admin UI
 
@@ -198,7 +218,7 @@ segment, and Usher logs a startup warning saying so. Recommended setups:
 
 - **Reverse proxy with TLS** (Nginx Proxy Manager, Caddy, Traefik): terminate
   HTTPS at the proxy and set `TRUSTED_PROXIES` to the proxy's IP or CIDR.
-  Usher then trusts `X-Forwarded-For`/`X-Forwarded-Proto` from that proxy —
+  Usher then trusts `X-Forwarded-For`/`X-Forwarded-Proto` from that proxy, so
   login throttling keys on the real client IP and cookies get the `Secure`
   flag. Without `TRUSTED_PROXIES`, those headers are ignored (they're
   client-forgeable) and every request behind the proxy shares one throttle
@@ -212,10 +232,10 @@ segment, and Usher logs a startup warning saying so. Recommended setups:
 |---|---|
 | Can't reach `/admin` | Check the container is up and port `8765` is mapped/reachable; first run prints a setup token in the logs |
 | Bot doesn't respond in groups | `@BotFather` → `/setprivacy` → select bot → **Disable** |
-| `/link` fails after Plex approval | The user's Plex account isn't shared in Seerr — invite them in Seerr first |
+| `/link` fails after Plex approval | The user's Plex account isn't shared in Seerr: invite them in Seerr first |
 | Webhook events not arriving | Secret mismatch (copy it from the Webhook tab into Seerr's Authorization header), or Seerr can't reach the Usher port; use the Webhook **Test** button |
-| Auto-fix not offered | Telegram ID not in the allowlist, issue type is "Other", or today's limit is hit |
-| Auto-fix says "not in Radarr/Sonarr" | The media isn't managed by *arr — add it there first |
+| Auto-fix not offered | Telegram ID not in the allowlist, Issue type is "Other", or today's limit is hit |
+| Auto-fix says "not in Radarr/Sonarr" | The media isn't managed by *arr: add it there first |
 | `/status` shows ❌ for a service | Check the URL is reachable from inside the container (use an IP, not `localhost`) |
 
 ## License
