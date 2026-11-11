@@ -15,17 +15,17 @@ def test_title_and_year():
 
 
 def test_title_year_season():
-    assert format_media_label("Mating Season", "2026", season=1) == "Mating Season (2026) — S01"
+    assert format_media_label("Mating Season", "2026", season=1) == "Mating Season (2026) - S01"
 
 
 def test_title_year_season_episode():
     assert format_media_label("Mating Season", "2026", season=1, episode=8) == \
-        "Mating Season (2026) — S01E08"
+        "Mating Season (2026) - S01E08"
 
 
 def test_title_only_season_no_year():
     """Year-less but seasoned: still produces the canonical layout."""
-    assert format_media_label("Foo", "", season=2) == "Foo — S02"
+    assert format_media_label("Foo", "", season=2) == "Foo - S02"
 
 
 def test_empty_title_falls_back():
@@ -33,13 +33,13 @@ def test_empty_title_falls_back():
 
 
 def test_zero_pads_two_digit_season_and_episode():
-    assert format_media_label("X", "", season=12, episode=34) == "X — S12E34"
+    assert format_media_label("X", "", season=12, episode=34) == "X - S12E34"
 
 
 def test_season_zero_with_episode_renders_specials_episode():
     # Season 0 + an episode is a picked specials episode: render S00Exx so
     # confirmations and ticket lists keep the selected scope.
-    assert format_media_label("Foo", "", season=0, episode=1) == "Foo — S00E01"
+    assert format_media_label("Foo", "", season=0, episode=1) == "Foo - S00E01"
 
 
 def test_season_zero_without_episode_renders_nothing():
@@ -49,9 +49,9 @@ def test_season_zero_without_episode_renders_nothing():
 
 
 @pytest.mark.parametrize("season,episode,expected_suffix", [
-    (1, None, " — S01"),
-    (1, 0, " — S01"),  # episode 0 is falsy: same as no episode
-    (1, 1, " — S01E01"),
+    (1, None, " - S01"),
+    (1, 0, " - S01"),  # episode 0 is falsy: same as no episode
+    (1, 1, " - S01E01"),
 ])
 def test_episode_falsy_handling(season, episode, expected_suffix):
     out = format_media_label("Foo", "", season=season, episode=episode)

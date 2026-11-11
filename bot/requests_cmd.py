@@ -116,15 +116,15 @@ async def _render_requests(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             title, year = tr
             media_label = f"{title} ({year})" if year else title
         if req.seasons:
-            media_label += f" — {_summarize_seasons(req.seasons)}"
+            media_label += f" - {_summarize_seasons(req.seasons)}"
         emoji, status_label = _STATUS_LABELS.get(req.status, ("❓", "unknown"))
         type_emoji = "🎬" if req.media_type == "movie" else "📺"
-        line = f"#{req.id} {type_emoji} {html.escape(media_label)} — {emoji} {status_label}"
+        line = f"#{req.id} {type_emoji} {html.escape(media_label)} - {emoji} {status_label}"
         age = format_age(req.created_at)
         if age:
-            line += f" — {age}"
+            line += f" - {age}"
         if is_admin and req.requested_by != "?":
-            line += f" — {html.escape(req.requested_by)}"
+            line += f" - {html.escape(req.requested_by)}"
         lines.append(line)
         if req.status == REQUEST_STATUS_PENDING:
             cancelable.append(req.id)

@@ -315,13 +315,13 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
 # later and deserve a DM. MEDIA_PENDING is the admin's action item.
 _MEDIA_EVENTS = {
     #                (requester_line,                              admin_line)
-    "MEDIA_PENDING": (None, "📥 New request — approve it in Seerr"),
-    "MEDIA_APPROVED": ("✅ Your request was approved — it's being grabbed.", None),
+    "MEDIA_PENDING": (None, "📥 New request, approve it in Seerr"),
+    "MEDIA_APPROVED": ("✅ Your request was approved. It's being grabbed.", None),
     "MEDIA_AUTO_APPROVED": (None, "📥 New request (auto-approved)"),
     "MEDIA_DECLINED": ("🚫 Your request was declined.", None),
     "MEDIA_AVAILABLE": ("🎉 Your request is available in Plex!", None),
     "MEDIA_FAILED": ("⚠️ Your request failed to download. The admin has been notified.",
-                     "⚠️ Request FAILED — check Radarr/Sonarr"),
+                     "⚠️ Request FAILED: check Radarr/Sonarr"),
     # Watchlist auto-requests: log-only for now (the user opted into
     # watchlist syncing in Seerr; a DM per synced item would be noise).
     "MEDIA_AUTO_REQUESTED": (None, None),

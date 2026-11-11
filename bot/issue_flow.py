@@ -131,7 +131,7 @@ async def _issue_expect_text_title(update: Update, ctx: ContextTypes.DEFAULT_TYP
     """Non-text (photo/sticker/voice) sent where a title is expected. Without
     this the message vanished with no response at all."""
     await update.effective_message.reply_text(
-        "I can only read text here — type the title, or /cancel to stop.")
+        "I can only read text here: type the title, or /cancel to stop.")
     return TITLE
 
 
@@ -139,7 +139,7 @@ async def _issue_expect_text_description(update: Update, ctx: ContextTypes.DEFAU
     """Non-text sent where the description is expected (screenshots are the
     common case)."""
     await update.effective_message.reply_text(
-        "I can only read text here — describe the problem in words "
+        "I can only read text here: describe the problem in words "
         "(screenshots don't reach Seerr), or /cancel to stop.")
     return DESCRIPTION
 
@@ -288,7 +288,7 @@ async def _show_search_results(
     if not results:
         await reply_method(
             f'No matches for "{query}". TMDB search is strict about '
-            "spelling — try fewer words or a corrected title, or /cancel.")
+            "spelling: try fewer words or a corrected title, or /cancel.")
         return TITLE
 
     # Build the message: numbered list with full titles, since Telegram can't
@@ -569,7 +569,7 @@ async def _show_episode_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     q = update.callback_query
     season_label = "Specials" if season == 0 else f"Season {season}"
     sent = await q.edit_message_text(
-        f"{season_label} — which episode?",
+        f"{season_label} - which episode?",
         reply_markup=_episode_page_keyboard(season, ep_count, page),
     )
     record_btn(ctx.application, update.effective_user.id, sent)
@@ -628,11 +628,11 @@ async def _show_type_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
         ep = ctx.user_data.get("episode")
         season_label = "Specials" if season == 0 else f"S{int(season or 0):02d}"
         if ep is None:
-            label += f" — {season_label} (whole season)"
+            label += f" - {season_label} (whole season)"
         else:
             # Zero-padded like format_media_label so the same selection
             # doesn't change format between consecutive screens.
-            label += f" — S{int(season or 0):02d}E{int(ep):02d}"
+            label += f" - S{int(season or 0):02d}E{int(ep):02d}"
     # HTML + escape for the same reason as the season screen: raw titles
     # break Markdown entity parsing and kill the flow mid-edit.
     sent = await q.edit_message_text(
@@ -859,7 +859,7 @@ async def _submit_issue_inner(
 
     lines = [
         f"✅ Reported as ticket #{created.id}",
-        f"  {emoji} {name} — {label}",
+        f"  {emoji} {name} - {label}",
     ]
 
     # 2. If auto-fix requested, run it. Serialized per title:

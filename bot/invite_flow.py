@@ -71,7 +71,7 @@ from const import INVITE_FLOW_TIMEOUT_S
 
 logger = logging.getLogger("usher")
 
-_STALE_INVITE_TOAST = "That invite menu is stale — /invite to start over."
+_STALE_INVITE_TOAST = "That invite menu is stale: /invite to start over."
 
 # inv_version is deliberately NOT here: the stale-menu guard depends on the
 # counter surviving every reset (same lesson as rq_search_version).
@@ -89,7 +89,7 @@ def _current_version(ctx: ContextTypes.DEFAULT_TYPE) -> int:
     return ctx.user_data.get("inv_version") or 0
 
 
-_NOT_LINKED = ("I need your Plex sign-in for this — run /link first. Sharing "
+_NOT_LINKED = ("I need your Plex sign-in for this: run /link first. Sharing "
                "changes are made from YOUR Plex account.")
 
 
@@ -116,7 +116,7 @@ async def _admin_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
 async def _invite_expect_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Contact cards, photos, and voice notes can't be read here."""
     await update.effective_message.reply_text(
-        "I can only read text here — type the email or username, or /cancel.")
+        "I can only read text here: type the email or username, or /cancel.")
     return INV_EMAIL
 
 
@@ -230,7 +230,7 @@ async def _accept_email(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         sections = await plex.get_library_sections(mapping.plex_token, machine_id)
     except LookupError:
         await end_flow(update, ctx,
-                       "Your linked Plex account doesn't own a server — sharing needs "
+                       "Your linked Plex account doesn't own a server: sharing needs "
                        "the server owner's account. /link with the owner account first.",
                        _admin_origin(ctx))
         _clear(ctx)
@@ -257,7 +257,7 @@ async def _accept_email(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     sent = await update.effective_message.reply_text(
         f"Inviting <b>{html.escape(email)}</b> to "
         f"<b>{html.escape(server_name)}</b>.\n\n"
-        "Which libraries? All are selected — tap to exclude, then ▶️ Done.",
+        "Which libraries? All are selected: tap to exclude, then ▶️ Done.",
         reply_markup=_lib_keyboard(sections, ctx.user_data["inv_selected"],
                                    version),
         parse_mode="HTML",
@@ -498,7 +498,7 @@ async def invite_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # of a typed /uninvite, kept in user_data so its match pages can refilter.
 
 SHARES_PER_PAGE = 8
-_NO_SERVER = ("Your linked Plex account doesn't own a server — sharing needs "
+_NO_SERVER = ("Your linked Plex account doesn't own a server: sharing needs "
               "the server owner's account.")
 # user_data key holding the search text of the last typed /uninvite.
 _SHARE_QUERY_KEY = "share_query"
@@ -735,7 +735,7 @@ async def cmd_uninvite(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     query = " ".join(ctx.args or ()).strip().lower()
     if not query:
         await update.effective_message.reply_text(
-            "Usage: /uninvite <email or username> — removes their access "
+            "Usage: /uninvite <email or username> - removes their access "
             "(or cancels a pending invite).")
         return
     await send_typing(update, ctx)
@@ -827,4 +827,4 @@ async def uninvite_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         await q.answer("Admin only.", show_alert=True)
         return
     await q.answer("Cancelled")
-    await end_flow(update, ctx, "Cancelled — nothing changed.", ADMIN_HUB)
+    await end_flow(update, ctx, "Cancelled, nothing changed.", ADMIN_HUB)

@@ -55,7 +55,7 @@ async def _resolve_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def _resolve_expect_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     await update.effective_message.reply_text(
-        "I can only read text here — type your comment, or /cancel to stop.")
+        "I can only read text here: type your comment, or /cancel to stop.")
     return AWAIT_COMMENT
 
 

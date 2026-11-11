@@ -105,7 +105,7 @@ def test_setup_token_empty_file_regenerates(tmp_path):
 # --- format_media_label: specials episode vs all-seasons --------------------
 
 def test_specials_episode_renders_s00exx():
-    assert format_media_label("Foo", "", season=0, episode=3) == "Foo — S00E03"
+    assert format_media_label("Foo", "", season=0, episode=3) == "Foo - S00E03"
 
 
 def test_bare_season_zero_renders_nothing():

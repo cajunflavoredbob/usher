@@ -197,9 +197,9 @@ async def tickets_hub_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
                 episode=issue.problem_episode,
             )
         age = format_age(issue.created_at)
-        line = f"#{issue.id} {emoji} {media_label} — {age}"
+        line = f"#{issue.id} {emoji} {media_label} - {age}"
         if is_admin and issue.created_by:
-            line += f" — {issue.created_by}"
+            line += f" - {issue.created_by}"
         lines.append(line)
     lines.append("")
     lines.append("Tap a ticket number below to manage it.")
@@ -369,7 +369,7 @@ async def _build_ticket_detail(
     lines = [f"<b>Ticket #{issue_id}</b>"]
     if media_label:
         lines.append(html.escape(media_label))
-    lines.append(f"<b>Issue:</b> {type_emoji} {type_name}")
+    lines.append(f"<b>Issue type:</b> {type_emoji} {type_name}")
     if reporter:
         lines.append(f"<b>Reported by:</b> {html.escape(reporter)}")
     if age:
@@ -482,7 +482,7 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         [InlineKeyboardButton("⬅️ Back", callback_data=f"{_back_prefix(q)}:{issue_id}")],
     ])
     await q.edit_message_text(
-        f"🔧 Fix #{issue_id} — how?\n"
+        f"🔧 Fix #{issue_id} - how?\n"
         "⚠️ Both options delete the current file from disk before searching "
         "for a replacement.",
         reply_markup=kb,
@@ -541,7 +541,7 @@ async def _resolve_fix_context(
     # filter (= every episode in the series) ahead of a delete workflow.
     if media_type == "tv" and (season is None or not episode):
         return None, (
-            f"{action_name} only works on individual episodes or movies — not "
+            f"{action_name} only works on individual episodes or movies, not "
             f"whole seasons or shows. For #{issue_id}, fix it in Sonarr directly."
         )
 
@@ -950,7 +950,7 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if ctx.user_data.get("tk_reply_id") != issue_id:
         await update.effective_message.reply_text(
             f"💬 Reply posted on #{issue_id}. "
-            "(You've started a new reply since then — that one's still active.)"
+            "(You've started a new reply since then. That one's still active.)"
         )
         # Return None, not END: the shared (chat,user) conversation now belongs
         # to the NEW reply flow; ending it here would kill the flow the user
@@ -1034,7 +1034,7 @@ async def _tk_reply_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def _tk_reply_expect_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     await update.effective_message.reply_text(
-        "I can only read text here — type your reply, or /cancel to stop.")
+        "I can only read text here: type your reply, or /cancel to stop.")
     return AWAIT_TICKET_REPLY
 
 

@@ -286,7 +286,7 @@ async def test_submit_result_has_back_and_progress_card_is_new_message():
     assert _flat(edit["reply_markup"]) == [BACK]
     kwargs = ctx.bot.send_message.call_args.kwargs
     assert kwargs["chat_id"] == 100 and kwargs["parse_mode"] == "HTML"
-    assert kwargs["text"] == ("<b>New Movie (2026)</b>\n✅ Approved — grabbing…"
+    assert kwargs["text"] == ("<b>New Movie (2026)</b>\n✅ Approved, grabbing…"
                               "\n\nUse /requests to check on it.")
     watch = ctx.bot_data["store"].add_request_watch.call_args.kwargs
     assert watch["message_id"] == 777
@@ -342,7 +342,7 @@ def test_typed_list_commands_still_registered():
     assert {"requests", "trending", "subscriptions"} <= registered
 
 
-NEW_START_LINE = "  /request — new request, your requests, trending, subscriptions"
+NEW_START_LINE = "  /request - new request, your requests, trending, subscriptions"
 NEW_START_NOTE = ("(/link, /unlink, /issue, /requests, /trending and "
                   "/subscriptions still work when typed.)")
 
@@ -350,8 +350,8 @@ NEW_START_NOTE = ("(/link, /unlink, /issue, /requests, /trending and "
 def _assert_start_text(text):
     assert NEW_START_LINE in text
     assert NEW_START_NOTE in text
-    for old in ("/requests —", "/trending —", "/subscriptions —",
-                "/request — request a movie or TV show"):
+    for old in ("/requests -", "/trending -", "/subscriptions -",
+                "/request - request a movie or TV show"):
         assert old not in text
 
 

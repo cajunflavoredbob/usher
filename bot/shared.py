@@ -134,8 +134,8 @@ def format_media_label(
     Examples:
       Inception                            -> "Inception"
       Inception (2010)                     -> "Inception (2010)"
-      Mating Season (2026) — S01           -> "Mating Season (2026) — S01"
-      Mating Season (2026) — S01E08        -> "Mating Season (2026) — S01E08"
+      Mating Season (2026) - S01           -> "Mating Season (2026) - S01"
+      Mating Season (2026) - S01E08        -> "Mating Season (2026) - S01E08"
 
     Used by /tickets list, ticket-detail header, /issue summary, and the
     auto-fix completion / abandoned DMs so the format never drifts.
@@ -148,9 +148,9 @@ def format_media_label(
     # must render nothing extra. A truthiness test alone dropped picked
     # specials episodes from confirmations and ticket lists.
     if season is not None and episode:
-        base += f" — S{int(season):02d}E{int(episode):02d}"
+        base += f" - S{int(season):02d}E{int(episode):02d}"
     elif season:
-        base += f" — S{int(season):02d}"
+        base += f" - S{int(season):02d}"
     return base
 
 
@@ -276,7 +276,7 @@ async def format_media_title_line(
     problem_season=None,
     problem_episode=None,
 ) -> str:
-    """Build "🎬 Movie Title (Year)" or "📺 Show Title (Year) — S01E02" from a
+    """Build "🎬 Movie Title (Year)" or "📺 Show Title (Year) - S01E02" from a
     Seerr webhook payload's media block. Returns "" if seerr is unavailable
     or the lookup fails. Caller is responsible for HTML-escaping when emitting.
     """
@@ -302,7 +302,7 @@ async def format_media_title_line(
         line += f" ({year})"
     se = format_se_suffix(problem_season, problem_episode)
     if se:
-        line += f" — {se}"
+        line += f" - {se}"
     return line
 
 
@@ -322,7 +322,7 @@ async def require_seerr(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             text = (f"Usher isn't configured yet. Fill in Seerr settings at "
                     f"http://<host>:{port}/admin")
         else:
-            text = "Usher isn't set up yet — ask the admin to finish configuration."
+            text = "Usher isn't set up yet: ask the admin to finish configuration."
         if reply_markup is None:
             await update.effective_message.reply_text(text)
         else:
@@ -586,7 +586,7 @@ async def run_relink_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> b
         # The prompt promised "I'll pick up where you left off"; when the
         # marker aged out, honesty beats silence.
         await update.effective_message.reply_text(
-            "That was a while ago, so I didn't repeat your earlier action — "
+            "That was a while ago, so I didn't repeat your earlier action, "
             "start it again with /issue or /tickets if you still need it."
         )
         return False

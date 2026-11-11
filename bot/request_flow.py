@@ -146,7 +146,7 @@ _STATUS_NOTES = {
 _COVERED_STATUSES = (MEDIA_STATUS_PENDING, MEDIA_STATUS_PROCESSING,
                      MEDIA_STATUS_AVAILABLE)
 
-_STALE_MENU_TOAST = "That menu is from an older search — use the newest one."
+_STALE_MENU_TOAST = "That menu is from an older search: use the newest one."
 
 def _current_version(ctx: ContextTypes.DEFAULT_TYPE) -> int:
     return ctx.user_data.get("rq_search_version") or 0
@@ -176,7 +176,7 @@ async def _request_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def _request_expect_text_title(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     await update.effective_message.reply_text(
-        "I can only read text here — type the title, or /cancel to stop.")
+        "I can only read text here: type the title, or /cancel to stop.")
     return RQ_TITLE
 
 
@@ -377,7 +377,7 @@ async def _run_search(
     if not results:
         await reply_method(
             f'No matches for "{query}". TMDB search is strict about '
-            "spelling — try fewer words or a corrected title, or /cancel.")
+            "spelling: try fewer words or a corrected title, or /cancel.")
         return RQ_TITLE
 
     version = _current_version(ctx) + 1
@@ -398,7 +398,7 @@ def _result_line(index: int, r: MediaResult) -> str:
         line += f" ({r.year})"
     note = _STATUS_NOTES.get(r.status or 0)
     if note:
-        line += f" — {note}"
+        line += f" - {note}"
     return line
 
 
@@ -585,7 +585,7 @@ async def request_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
             await q.answer(msg, show_alert=True)
             return RQ_PICK_MEDIA
         else:
-            await q.answer("Already requested — it's on its way ⏳",
+            await q.answer("Already requested. It's on its way ⏳",
                            show_alert=True)
             return RQ_PICK_MEDIA
 
@@ -844,7 +844,7 @@ async def _quota_line(ctx: ContextTypes.DEFAULT_TYPE, tg_id: int,
         unit = "requests" if media_type == "movie" else "seasons"
         if bucket.remaining <= 0:
             return (f"\n🙅 Your quota ({bucket.limit} {unit} per "
-                    f"{bucket.days} days) is used up — Seerr will reject "
+                    f"{bucket.days} days) is used up, Seerr will reject "
                     "this until older requests age out of the window.")
         return (f"\nQuota: {bucket.remaining} of {bucket.limit} {unit} left "
                 f"in the current {bucket.days}-day window.")
@@ -859,7 +859,7 @@ async def _show_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     media = ctx.user_data["rq_media"]
     label = _media_label(media)
     if media["type"] == "tv":
-        label += f" — {_summarize_seasons(sorted(ctx.user_data.get('rq_selected') or ()))}"
+        label += f" - {_summarize_seasons(sorted(ctx.user_data.get('rq_selected') or ()))}"
     quota_note = await _quota_line(ctx, update.effective_user.id, media["type"])
     perms = ctx.user_data.get("rq_perms", 0)
     offer_4k = can_request_4k(perms, media["type"])
@@ -872,9 +872,9 @@ async def _show_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         # Word the standard-track coverage honestly: available vs merely
         # requested/downloading.
         if media.get("std_status") == MEDIA_STATUS_AVAILABLE:
-            text += "\nAlready available in standard quality — request the 4K copy?"
+            text += "\nAlready available in standard quality: request the 4K copy?"
         else:
-            text += ("\nAlready requested in standard quality — request the "
+            text += ("\nAlready requested in standard quality: request the "
                      "4K copy too?")
         buttons.append(InlineKeyboardButton(
             "✨ Request in 4K", callback_data=f"{RQ_GO_4K}:{version}"))
@@ -953,7 +953,7 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
 
     label = _media_label(media)
     if seasons:
-        label += f" — {_summarize_seasons(seasons)}"
+        label += f" - {_summarize_seasons(seasons)}"
     if is4k:
         label += " [4K]"
 
@@ -996,8 +996,8 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             update, ctx,
             f"<b>{html.escape(label)}</b> is already requested and on its way.",
             hub, parse_mode="HTML",
-            typed_text=f"<b>{html.escape(label)}</b> is already requested — "
-                       "it's on its way. See /requests for status.",
+            typed_text=f"<b>{html.escape(label)}</b> is already requested. "
+                       "It's on its way. See /requests for status.",
         )
         _clear_rq_state(ctx)
         return ConversationHandler.END
@@ -1033,7 +1033,7 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     if seasons and created.seasons:
         granted = sorted(created.seasons)
         if set(granted) != set(seasons):
-            label = _media_label(media) + f" — {_summarize_seasons(granted)}"
+            label = _media_label(media) + f" - {_summarize_seasons(granted)}"
             if is4k:
                 label += " [4K]"
             dropped = sorted(set(seasons) - set(granted))

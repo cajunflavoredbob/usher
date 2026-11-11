@@ -578,7 +578,7 @@ async def test_uninvite_keep_offers_admin_back():
     upd = make_update(callback_data=UNINV_KEEP, user_id=ADMIN_ID)
     await uninvite_cancel(upd, ctx)
     edit = upd.callback_query.edits[0]
-    assert edit["text"] == "Cancelled — nothing changed."
+    assert edit["text"] == "Cancelled, nothing changed."
     assert _flat(edit["reply_markup"]) == [BACK]
 
 
@@ -700,14 +700,14 @@ async def test_start_lists_admin_line_for_admin_only(monkeypatch):
     import bot.app as app_mod
     monkeypatch.setattr(app_mod, "_check_connections", AsyncMock(return_value={}))
     monkeypatch.setattr(app_mod, "format_status", lambda s: "ok")
-    line = "  /admin — invite someone, see and remove Shares, connection status"
+    line = "  /admin - invite someone, see and remove Shares, connection status"
     note = "(/invite, /uninvite and /status still work when typed.)"
     ctx = make_ctx(admin_id=ADMIN_ID)
     upd = make_update(text="/start", user_id=ADMIN_ID)
     await app_mod.cmd_start(upd, ctx)
     text = upd.effective_message.reply_calls[0]["text"]
     assert line in text and note in text
-    for old in ("/invite —", "/uninvite —", "/status —"):
+    for old in ("/invite -", "/uninvite -", "/status -"):
         assert old not in text
     user = make_update(text="/start", user_id=USER_ID)
     await app_mod.cmd_start(user, make_ctx(admin_id=ADMIN_ID))

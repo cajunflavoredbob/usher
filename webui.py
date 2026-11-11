@@ -641,7 +641,7 @@ def _settings_page(
   <label class="inline-check"><input type="checkbox" name="tg_notify_requester"{req_chk}> Request updates to requesters</label>
   <label class="inline-check"><input type="checkbox" name="tg_notify_admin_requests"{adm_chk}> New-request notices to the admin</label>
   <label class="inline-check"><input type="checkbox" name="tg_notify_admin_failed"{fail_chk}> Failed-download alarm to the admin</label>
-  <label class="inline-check"><input type="checkbox" name="tg_notify_issues"{iss_chk}> Issue DMs</label>
+  <label class="inline-check"><input type="checkbox" name="tg_notify_issues"{iss_chk}> Ticket DMs</label>
   <label class="inline-check"><input type="checkbox" name="tg_notify_subscriptions"{subs_chk}> Availability-watch notifications</label>
 
   <div class="btn-row divided">

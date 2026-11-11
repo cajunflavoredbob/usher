@@ -53,7 +53,7 @@ CATEGORY_LABELS = {
     "uptv": "🗓 Soon (Shows)",
 }
 
-_STALE_BROWSE_TOAST = "That browse list is stale — run /trending again."
+_STALE_BROWSE_TOAST = "That browse list is stale: run /trending again."
 
 
 def _current_version(ctx: ContextTypes.DEFAULT_TYPE) -> int:
@@ -67,7 +67,7 @@ def _result_line(index: int, r: MediaResult) -> str:
         line += f" ({r.year})"
     note = STATUS_NOTES.get(r.status or 0)
     if note:
-        line += f" — {note}"
+        line += f" - {note}"
     return line
 
 
@@ -82,7 +82,7 @@ def _render(ctx: ContextTypes.DEFAULT_TYPE,
     start = screen * REQUEST_RESULTS_PER_PAGE
     chunk = results[start:start + REQUEST_RESULTS_PER_PAGE]
 
-    lines = [f"{CATEGORY_LABELS[category]} — tap a number to request:", ""]
+    lines = [f"{CATEGORY_LABELS[category]} - tap a number to request:", ""]
     for offset, r in enumerate(chunk):
         lines.append(_result_line(start + offset + 1, r))
     lines.append("")

@@ -241,12 +241,12 @@ def user_friendly_message(exc: BaseException) -> str:
     if isinstance(exc, TransientAPIError):
         return f"({exc.service} isn't responding right now; try again in a minute.)"
     if isinstance(exc, NotFoundAPIError):
-        return f"({exc.service} doesn't know about this item — it may have been deleted.)"
+        return f"({exc.service} doesn't know about this item. It may have been deleted.)"
     if isinstance(exc, PermanentAPIError):
         return f"({exc.service}: {exc.user_message})"
     if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException,
                         httpx.RemoteProtocolError)):
-        return "(connection problem — try again in a moment.)"
+        return "(connection problem. Try again in a moment.)"
     # Regular users can't read the logs, so keep the advice actionable for
     # them; the full exception is already in the logs for the admin.
-    return "(unexpected error — try again in a moment. If it keeps happening, tell the admin.)"
+    return "(unexpected error. Try again in a moment. If it keeps happening, tell the admin.)"

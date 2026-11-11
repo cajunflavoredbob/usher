@@ -472,7 +472,7 @@ def test_typed_issue_still_registered():
     assert "issue" in commands
 
 
-NEW_TICKETS_LINE = "  /tickets — report a problem or check on your tickets"
+NEW_TICKETS_LINE = "  /tickets - report a problem or check on your tickets"
 NEW_NOTE = ("(/link, /unlink, /issue, /requests, /trending and /subscriptions "
             "still work when typed.)")
 
@@ -490,7 +490,7 @@ async def test_start_lists_tickets_hub_and_typed_note():
             text = upd.effective_message.reply_calls[0]["text"]
             assert NEW_TICKETS_LINE in text
             assert NEW_NOTE in text
-            assert "/issue —" not in text
+            assert "/issue -" not in text
     finally:
         app_mod._check_connections = app_mod_check
 

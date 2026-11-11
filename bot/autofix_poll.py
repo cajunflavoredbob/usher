@@ -84,7 +84,7 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     continue
                 await _paint_progress(
                     ctx, store, fix,
-                    final=f"⏱️ Timed out after {AUTOFIX_TIMEOUT_HOURS}h — no new file imported.")
+                    final=f"⏱️ Timed out after {AUTOFIX_TIMEOUT_HOURS}h, no new file imported.")
                 await _notify_timeout(ctx, fix)
                 continue
 

@@ -414,10 +414,10 @@ async def test_start_lists_account_and_notes_typed_commands_for_user():
     upd = make_update(text="/start", user_id=42)
     await cmd_start(upd, ctx)
     text = upd.effective_message.reply_calls[0]["text"]
-    assert "/account — link or unlink your Plex account" in text
+    assert "/account - link or unlink your Plex account" in text
     assert ("(/link, /unlink, /issue, /requests, /trending and "
             "/subscriptions still work when typed.)") in text
-    assert "/link —" not in text and "/unlink —" not in text
+    assert "/link -" not in text and "/unlink -" not in text
 
 
 async def test_start_lists_account_and_notes_typed_commands_for_admin(monkeypatch):
@@ -429,10 +429,10 @@ async def test_start_lists_account_and_notes_typed_commands_for_admin(monkeypatc
     upd = make_update(text="/start", user_id=999)
     await app_mod.cmd_start(upd, ctx)
     text = upd.effective_message.reply_calls[0]["text"]
-    assert "/account — link or unlink your Plex account" in text
+    assert "/account - link or unlink your Plex account" in text
     assert ("(/link, /unlink, /issue, /requests, /trending and "
             "/subscriptions still work when typed.)") in text
-    assert "/link —" not in text and "/unlink —" not in text
+    assert "/link -" not in text and "/unlink -" not in text
 
 
 def test_hub_origin_key_listed_in_conversation_cleanup_keys():

@@ -74,7 +74,7 @@ async def resolve_progress_line(ctx, progress, *, verb: str = "Downloading",
             if downloading:
                 percent = round(sum(s[1] for s in downloading) / len(downloading))
                 slowest = min(downloading, key=lambda s: s[1])
-                line = f"⬇️ {verb} — {percent}%"
+                line = f"⬇️ {verb} - {percent}%"
                 timeleft = html.escape((slowest[2] or "").strip())
                 if timeleft and timeleft != "0:00:00":
                     line += f" · ~{timeleft} left"
@@ -90,13 +90,13 @@ async def resolve_progress_line(ctx, progress, *, verb: str = "Downloading",
             if any(s[0] == "completed" for s in known):
                 return "📥 Importing…"
             if known and all(s[0] == "failed" for s in known):
-                return "⚠️ Download failed — waiting for another release…"
+                return "⚠️ Download failed: waiting for another release…"
         elif statuses is None and fallback_line:
             # Transient SAB error: keep the last painted line instead of
             # flashing the arr's lagging percent backwards for one tick.
             return fallback_line
     # Fallback: the arr queue's own numbers.
-    line = f"⬇️ {verb} — {progress.percent}%"
+    line = f"⬇️ {verb} - {progress.percent}%"
     timeleft = html.escape((progress.timeleft or "").strip())
     if timeleft and timeleft != "00:00:00":
         line += f" · ~{timeleft} left"
@@ -143,7 +143,7 @@ def _card_text(label: str, body_line: str, *, footer: bool = True) -> str:
 
 # Card line for an approved Request; also the Progress card's first line
 # when Seerr approves on submit (bot.request_flow).
-APPROVED_LINE = "✅ Approved — grabbing…"
+APPROVED_LINE = "✅ Approved, grabbing…"
 
 
 async def _edit_card(ctx, watch: dict, body_line: str, *,
@@ -246,7 +246,7 @@ async def _poll_one(ctx, store: UserStore, watch: dict) -> None:
     if timed_out:
         await _edit_card(
             ctx, watch,
-            f"⏳ Still processing after {REQUEST_WATCH_TIMEOUT_HOURS}h — "
+            f"⏳ Still processing after {REQUEST_WATCH_TIMEOUT_HOURS}h, "
             "I'll DM you when Seerr reports it available.")
         await store.delete_request_watch(watch["id"])
         return
@@ -307,9 +307,9 @@ async def _poll_one(ctx, store: UserStore, watch: dict) -> None:
 # --- Webhook-driven state changes --------------------------------------------
 
 _FINAL_LINES = {
-    "MEDIA_AVAILABLE": "✅ Available in Plex — enjoy!",
+    "MEDIA_AVAILABLE": "✅ Available in Plex. Enjoy!",
     "MEDIA_DECLINED": "🚫 Declined by the admin.",
-    "MEDIA_FAILED": "⚠️ Download failed — the admin has been notified.",
+    "MEDIA_FAILED": "⚠️ Download failed. The admin has been notified.",
 }
 
 # "The admin has been notified" must not survive on the card when the

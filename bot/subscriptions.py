@@ -64,7 +64,7 @@ async def sub_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if added:
         await q.answer(f"🔔 You'll be DMed when it's available.")
     else:
-        await q.answer("Already on your list — see /subscriptions.")
+        await q.answer("Already on your list. See /subscriptions.")
 
 
 async def cmd_subscriptions(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:

@@ -100,7 +100,7 @@ async def test_search_list_annotates_availability():
     text = upd.effective_message.reply_calls[0]["text"]
     assert "✅ available" in text
     assert "Fresh Show (2026)" in text
-    assert "Fresh Show (2026) —" not in text  # no annotation when unknown
+    assert "Fresh Show (2026) -" not in text  # no annotation when unknown
 
 
 async def test_pick_available_movie_toasts_and_stays():
@@ -856,5 +856,5 @@ async def test_submit_reports_seasons_seerr_actually_granted():
     upd = make_update(callback_data="rqgo:1", user_id=USER_ID)
     await request_submit(upd, ctx)
     text = upd.callback_query.edits[-1]["text"]
-    assert "S2" in text and "Show — S1-S2" not in text
+    assert "S2" in text and "Show - S1-S2" not in text
     assert "skipped" in text

@@ -275,7 +275,7 @@ async def test_failed_strand_recovers_to_searching_line():
     contradicts it."""
     ctx = make_ctx()
     ctx.bot_data["store"].list_request_watches.return_value = [
-        _watch(last_progress="⚠️ Download failed — waiting for another release…")]
+        _watch(last_progress="⚠️ Download failed, waiting for another release…")]
     ctx.bot_data["store"].update_request_watch.return_value = True
     ctx.bot_data["radarr"].get_queue_progress.return_value = None
     await poll_request_watches(ctx)

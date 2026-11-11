@@ -224,7 +224,7 @@ async def _check_connections(app: Application) -> dict[str, str]:
                        ("sonarr", "Sonarr"), ("sabnzbd", "SABnzbd")):
         client = app.bot_data.get(key)
         if client is None:
-            out[label] = "— not configured"
+            out[label] = "not configured"
             continue
         try:
             version = await client.ping()
@@ -241,8 +241,8 @@ async def _check_connections(app: Application) -> dict[str, str]:
         try:
             enabled, types = await seerr.get_webhook_notification_settings()
             if not enabled:
-                out["Seerr webhook"] = ("❌ webhook agent disabled in Seerr — "
-                                        "no issue/request DMs will arrive")
+                out["Seerr webhook"] = ("❌ webhook agent disabled in Seerr, "
+                                        "no ticket/request DMs will arrive")
             else:
                 missing = [label for bit, label in
                            REQUIRED_WEBHOOK_TYPES.items() if not types & bit]
@@ -266,12 +266,12 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         # Non-admins see ONLY greeting + commands. No connection diagnostics,
         # no inline "DM me /link" directive (/account is listed below).
         await update.effective_message.reply_text(
-            "Hi! I take movie/TV requests and forward issue reports to Seerr.\n\n"
+            "Hi! I take movie/TV requests and file tickets in Seerr.\n\n"
             "*Commands*\n"
-            "  /account — link or unlink your Plex account\n"
-            "  /request — new request, your requests, trending, subscriptions\n"
-            "  /tickets — report a problem or check on your tickets\n"
-            "  /help — show this\n\n"
+            "  /account - link or unlink your Plex account\n"
+            "  /request - new request, your requests, trending, subscriptions\n"
+            "  /tickets - report a problem or check on your tickets\n"
+            "  /help - show this\n\n"
             "(/link, /unlink, /issue, /requests, /trending and /subscriptions "
             "still work when typed.)",
             parse_mode="Markdown",
@@ -283,17 +283,17 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     # HTML + escape: format_status interpolates upstream error text (see
     # the startup DM note in _post_init).
     lines = [
-        "Hi! I take movie/TV requests and forward issue reports to Seerr.",
+        "Hi! I take movie/TV requests and file tickets in Seerr.",
         "",
         "<b>Connection status:</b>",
         format_status(summary),
         "",
         "<b>Commands</b>",
-        "  /account — link or unlink your Plex account",
-        "  /request — new request, your requests, trending, subscriptions",
-        "  /tickets — report a problem or check on your tickets",
-        "  /admin — invite someone, see and remove Shares, connection status",
-        "  /help — show this",
+        "  /account - link or unlink your Plex account",
+        "  /request - new request, your requests, trending, subscriptions",
+        "  /tickets - report a problem or check on your tickets",
+        "  /admin - invite someone, see and remove Shares, connection status",
+        "  /help - show this",
         "",
         "(/link, /unlink, /issue, /requests, /trending and /subscriptions "
         "still work when typed.)",
@@ -631,7 +631,7 @@ async def _post_init(app: Application) -> None:
         f"👋 Bot is online (v{html.escape(USHER_VERSION)}).\n\n"
         f"{format_status(summary)}\n\n"
         f"Admin UI: {html.escape(admin_url)}\n"
-        "Run /link to authorize with Plex (per-user issue attribution)."
+        "Run /link to authorize with Plex (per-user ticket attribution)."
     )
     try:
         await app.bot.send_message(chat_id=admin_id, text=msg, parse_mode="HTML")
@@ -764,7 +764,7 @@ async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 and ctx.error is not None):
             await ctx.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text="⚠️ Something went wrong on my end — please run the "
+                text="⚠️ Something went wrong on my end. Please run the "
                      "command again.",
             )
     except Exception:

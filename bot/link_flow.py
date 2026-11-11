@@ -109,7 +109,7 @@ def _consent_prompt() -> tuple[str, InlineKeyboardMarkup]:
         InlineKeyboardButton("🛑 Cancel", callback_data=f"{LINK_CONSENT}:no"),
     ]]
     return (
-        "Sign in with Plex so issues you submit are tagged as you.\n\n"
+        "Sign in with Plex so tickets you submit are tagged as you.\n\n"
         "You can use /unlink anytime to remove access.\n\n"
         "Continue?",
         InlineKeyboardMarkup(rows),
@@ -235,7 +235,7 @@ async def _poll_with_cancel(plex: PlexClient, pin_id: int, max_iters: int,
                 try:
                     await ctx.bot.send_message(
                         chat_id=chat_id,
-                        text=("⚠️ Plex's API isn't responding right now. Still trying — "
+                        text=("⚠️ Plex's API isn't responding right now. Still trying, "
                               "I'll let you know if a token comes through. If you've "
                               "already approved in Plex, sit tight."),
                     )
@@ -497,7 +497,7 @@ async def render_account(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> HubV
     mapping = await store.get(update.effective_user.id)
     if mapping is None:
         return HubView(
-            "Not linked. Link your Plex account so your requests and issues "
+            "Not linked. Link your Plex account so your requests and tickets "
             "are tagged as you.",
             [InlineKeyboardButton("🔗 Link", callback_data=ACCOUNT_LINK)],
         )
