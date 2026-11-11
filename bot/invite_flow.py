@@ -438,13 +438,15 @@ async def _invite_send_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     except Exception as exc:
         logger.exception("plex invite failed")
         if _is_already_sharing(exc):
+            retry: Optional[str] = None  # a refusal a retry can't fix
             text = (f"{email} already has a Share on your server, pending or "
                     "accepted. Run /uninvite for that address. If /uninvite "
                     "doesn't list it, remove the pending Invite in the Plex "
                     "web app's sharing settings, then invite again.")
         else:
+            retry = ADMIN_INVITE
             text = f"Couldn't send the invite. {user_friendly_message(exc)}"
-        await end_flow(update, ctx, text, hub, ADMIN_INVITE)
+        await end_flow(update, ctx, text, hub, retry)
         _clear(ctx)
         return ConversationHandler.END
 

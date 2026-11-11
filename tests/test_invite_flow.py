@@ -391,6 +391,17 @@ async def test_invite_already_sharing_400_names_uninvite():
     assert not any(k in ctx.user_data for k in _INV_KEYS)
 
 
+async def test_hub_invite_already_sharing_offers_back_only():
+    ctx = _draft_ctx()
+    ctx.bot_data["plex"].invite_to_server.side_effect = PermanentAPIError(
+        "You're already sharing this server", status_code=400, service="plex")
+    upd = make_update(callback_data="invgo:1", user_id=ADMIN_ID)
+    await invite_send(upd, ctx)
+    edit = upd.callback_query.edits[-1]
+    assert "already has a Share" in edit["text"]
+    assert _flat(edit["reply_markup"]) == [BACK]
+
+
 async def test_invite_other_400_keeps_generic_reply():
     ctx = _draft_ctx()
     ctx.bot_data["plex"].invite_to_server.side_effect = PermanentAPIError(
