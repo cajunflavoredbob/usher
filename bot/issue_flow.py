@@ -44,7 +44,8 @@ from bot.callback_prefixes import (
     RQ_FROM_ISSUE,
     TICKETS_REPORT,
 )
-from bot.hub import back_button, end_markup, hub_origin, set_hub_origin
+from bot.hub import (back_button, end_flow, end_markup, hub_origin,
+                     set_hub_origin)
 from bot.tickets_hub import TICKETS_HUB
 from bot.shared import (
     DECRYPT_FAILED_MSG,
@@ -93,30 +94,6 @@ def _tickets_origin(ctx) -> Optional[str]:
     """The Tickets Hub when this report was started from it, else None.
     Another Hub's mark (left by a flow such as the relink) never counts."""
     return TICKETS_HUB if hub_origin(ctx) == TICKETS_HUB else None
-
-
-async def _end(update, ctx: ContextTypes.DEFAULT_TYPE, text: str,
-               hub: Optional[str], retry: Optional[str] = None, *,
-               typed_text: Optional[str] = None, edit: bool = True) -> None:
-    """Say how a report step ended. Without a Hub (`hub` None) the message is
-    `typed_text or text` with no buttons, as for a typed /issue. With one it
-    is `text` carrying the back button (plus Try again when `retry` is set).
-    Callback updates edit the tapped message unless `edit` is False; message
-    updates reply."""
-    q = update.callback_query
-    if hub is None:
-        shown = typed_text or text
-        if q is not None and edit:
-            await q.edit_message_text(shown)
-        else:
-            await update.effective_message.reply_text(shown)
-        return
-    markup = end_markup(hub, retry)
-    if q is not None and edit:
-        sent = await edit_or_send(q, text, reply_markup=markup)
-    else:
-        sent = await update.effective_message.reply_text(text, reply_markup=markup)
-    record_btn(ctx.application, update.effective_user.id, sent)
 
 
 async def _issue_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
@@ -256,12 +233,12 @@ async def issue_hub_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
     mapping = await store.get(update.effective_user.id)
     if mapping is None or (not mapping.plex_token
                            and not mapping.plex_token_decrypt_failed):
-        await _end(update, ctx,
-                   "DM me /link first so reports are filed as you. It's a quick "
-                   "Plex sign-in - no username needed.", TICKETS_HUB)
+        await end_flow(update, ctx,
+                       "DM me /link first so reports are filed as you. It's a quick "
+                       "Plex sign-in - no username needed.", TICKETS_HUB)
         return ConversationHandler.END
     if mapping.plex_token_decrypt_failed:
-        await _end(update, ctx, DECRYPT_FAILED_MSG, TICKETS_HUB)
+        await end_flow(update, ctx, DECRYPT_FAILED_MSG, TICKETS_HUB)
         return ConversationHandler.END
     await edit_or_send(q, "What movie or show is the issue with? (Reply with the title.)")
     return TITLE
@@ -401,8 +378,8 @@ async def issue_research_parent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) 
     await q.answer()
     parent = ctx.user_data.get("research_parent")
     if not parent:
-        await _end(update, ctx, "Lost search context.", _tickets_origin(ctx), TICKETS_REPORT,
-                   typed_text="Lost search context. /issue to start over.")
+        await end_flow(update, ctx, "Lost search context.", _tickets_origin(ctx), TICKETS_REPORT,
+                       typed_text="Lost search context. /issue to start over.")
         return ConversationHandler.END
     return await _show_search_results(
         q.edit_message_text, ctx, parent,
@@ -418,8 +395,8 @@ async def issue_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
         version = int(version_s)
         tmdb_id = int(tmdb_id_s)
     except (ValueError, AttributeError):
-        await _end(update, ctx, "Couldn't parse selection.", _tickets_origin(ctx), TICKETS_REPORT,
-                   typed_text="Couldn't parse selection. /issue to start over.")
+        await end_flow(update, ctx, "Couldn't parse selection.", _tickets_origin(ctx), TICKETS_REPORT,
+                       typed_text="Couldn't parse selection. /issue to start over.")
         return ConversationHandler.END
     # Verify the embedded search version matches the current one. If the user
     # kicked off a new /issue search since this keyboard was built (allow_reentry
@@ -427,7 +404,7 @@ async def issue_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
     # search_results dict.
     current = ctx.user_data.get("search_results") or {}
     if current.get("version") != version:
-        await _end(
+        await end_flow(
             update, ctx, "Search context changed since this keyboard appeared.",
             _tickets_origin(ctx), TICKETS_REPORT,
             typed_text=("Search context changed (you started a new /issue search "
@@ -499,11 +476,11 @@ async def _show_season_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         seasons, tvdb_id = await seerr.get_tv_seasons(tmdb_id)
     except Exception as exc:
         logger.exception("get_tv_seasons failed")
-        await _end(update, ctx, f"Couldn't fetch seasons. {user_friendly_message(exc)}",
-                   _tickets_origin(ctx), TICKETS_REPORT)
+        await end_flow(update, ctx, f"Couldn't fetch seasons. {user_friendly_message(exc)}",
+                       _tickets_origin(ctx), TICKETS_REPORT)
         return ConversationHandler.END
     if not seasons:
-        await _end(update, ctx, "No seasons found for this show.", _tickets_origin(ctx))
+        await end_flow(update, ctx, "No seasons found for this show.", _tickets_origin(ctx))
         return ConversationHandler.END
     ctx.user_data["media"]["tvdb_id"] = tvdb_id
     ctx.user_data["seasons"] = {s.season_number: s for s in seasons}
@@ -541,8 +518,8 @@ async def issue_pick_season(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     try:
         season = int(q.data.split(":")[1])
     except (ValueError, IndexError):
-        await _end(update, ctx, "Couldn't parse season.", _tickets_origin(ctx), TICKETS_REPORT,
-                   typed_text="Couldn't parse season. /issue to start over.")
+        await end_flow(update, ctx, "Couldn't parse season.", _tickets_origin(ctx), TICKETS_REPORT,
+                       typed_text="Couldn't parse season. /issue to start over.")
         return ConversationHandler.END
     ctx.user_data["season"] = season
     season_obj = ctx.user_data["seasons"].get(season)
@@ -605,14 +582,14 @@ async def issue_episode_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     try:
         page = int(q.data.split(":")[1])
     except (ValueError, IndexError):
-        await _end(update, ctx, "Couldn't parse selection.", _tickets_origin(ctx), TICKETS_REPORT,
-                   typed_text="Couldn't parse selection. /issue to start over.")
+        await end_flow(update, ctx, "Couldn't parse selection.", _tickets_origin(ctx), TICKETS_REPORT,
+                       typed_text="Couldn't parse selection. /issue to start over.")
         return ConversationHandler.END
     season = ctx.user_data.get("season")
     if season is None:
         # State evaporated (error-handler cleanup, restart) between pages.
-        await _end(update, ctx, "That selection expired.", _tickets_origin(ctx), TICKETS_REPORT,
-                   typed_text="That selection expired. /issue to start over.")
+        await end_flow(update, ctx, "That selection expired.", _tickets_origin(ctx), TICKETS_REPORT,
+                       typed_text="That selection expired. /issue to start over.")
         return ConversationHandler.END
     season_obj = (ctx.user_data.get("seasons") or {}).get(season)
     ep_count = season_obj.episode_count if season_obj else 0
@@ -625,8 +602,8 @@ async def issue_pick_episode(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     try:
         ep = int(q.data.split(":")[1])
     except (ValueError, IndexError):
-        await _end(update, ctx, "Couldn't parse episode.", _tickets_origin(ctx), TICKETS_REPORT,
-                   typed_text="Couldn't parse episode. /issue to start over.")
+        await end_flow(update, ctx, "Couldn't parse episode.", _tickets_origin(ctx), TICKETS_REPORT,
+                       typed_text="Couldn't parse episode. /issue to start over.")
         return ConversationHandler.END
     # ep=0 means whole season
     ctx.user_data["episode"] = ep if ep > 0 else None
@@ -673,12 +650,12 @@ async def issue_pick_type(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     try:
         issue_type = int(q.data.split(":")[1])
     except (ValueError, IndexError):
-        await _end(update, ctx, "Couldn't parse selection.", _tickets_origin(ctx), TICKETS_REPORT,
-                   typed_text="Couldn't parse selection. /issue to start over.")
+        await end_flow(update, ctx, "Couldn't parse selection.", _tickets_origin(ctx), TICKETS_REPORT,
+                       typed_text="Couldn't parse selection. /issue to start over.")
         return ConversationHandler.END
     if issue_type not in ISSUE_TYPES:
-        await _end(update, ctx, "Unknown issue type.", _tickets_origin(ctx), TICKETS_REPORT,
-                   typed_text="Unknown issue type. /issue to start over.")
+        await end_flow(update, ctx, "Unknown issue type.", _tickets_origin(ctx), TICKETS_REPORT,
+                       typed_text="Unknown issue type. /issue to start over.")
         return ConversationHandler.END
     ctx.user_data["issue_type"] = issue_type
     emoji, name = ISSUE_TYPES[issue_type]
@@ -830,7 +807,7 @@ async def _submit_issue_inner(
     hub = _tickets_origin(ctx)
     mapping = await store.get(update.effective_user.id)
     if not (mapping and mapping.plex_token and issue_type and media):
-        await _end(
+        await end_flow(
             update, ctx, "Lost conversation state or your Plex link is incomplete.",
             hub, TICKETS_REPORT, edit=False,
             typed_text=("Lost conversation state or your /link is incomplete. "
@@ -865,8 +842,8 @@ async def _submit_issue_inner(
         return ConversationHandler.END
     except Exception as exc:
         logger.exception("create_issue failed")
-        await _end(update, ctx, f"Couldn't submit the ticket. {user_friendly_message(exc)}",
-                   hub, TICKETS_REPORT, edit=False)
+        await end_flow(update, ctx, f"Couldn't submit the ticket. {user_friendly_message(exc)}",
+                       hub, TICKETS_REPORT, edit=False)
         return ConversationHandler.END
 
     emoji, name = ISSUE_TYPES[issue_type]
@@ -1003,8 +980,8 @@ RELINK_RESUME_EXECUTORS["submit_issue"] = _resume_submit_issue
 async def issue_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if update.callback_query:
         await update.callback_query.answer("Cancelled")
-    await _end(update, ctx, "Cancelled.", _tickets_origin(ctx),
-               typed_text="Cancelled. /issue to start over.")
+    await end_flow(update, ctx, "Cancelled.", _tickets_origin(ctx),
+                   typed_text="Cancelled. /issue to start over.")
     ctx.user_data.clear()
     return ConversationHandler.END
 

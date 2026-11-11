@@ -39,6 +39,7 @@ from bot.callback_prefixes import (
 )
 from bot.hub import (
     HubView,
+    end_flow,
     end_markup,
     hub_origin,
     register_hub,
@@ -151,21 +152,6 @@ async def account_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     return AWAIT_LINK_CONSENT
 
 
-async def _end_step(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: str,
-                    hub: Optional[str], retry: Optional[str] = None, *,
-                    typed_text: Optional[str] = None) -> None:
-    """Final edit of the tapped message. Typed flows keep a plain edit (of
-    `typed_text` when given, else `text`); a flow started from a Hub gets
-    `text` with that Hub's back button (and Try again when `retry` is given),
-    recorded with the button gate."""
-    q = update.callback_query
-    if hub is None:
-        await q.edit_message_text(text if typed_text is None else typed_text)
-        return
-    sent = await edit_or_send(q, text, reply_markup=end_markup(hub, retry))
-    record_btn(ctx.application, update.effective_user.id, sent)
-
-
 async def cmd_relink(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """'Unlink & sign in again' tap (revoked-token recovery): clear the dead
     token and drop straight into the platform-choice step. The consent step
@@ -195,8 +181,8 @@ async def cmd_link_consent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
     await q.answer()
     choice = q.data.split(":")[1]
     if choice == "no":
-        await _end_step(update, ctx, "Cancelled.", hub_origin(ctx),
-                        typed_text="Cancelled. /link to try again later.")
+        await end_flow(update, ctx, "Cancelled.", hub_origin(ctx),
+                       typed_text="Cancelled. /link to try again later.")
         return ConversationHandler.END
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("💻 Desktop", callback_data=f"{LINK_PLATFORM}:desktop"),
@@ -356,9 +342,9 @@ async def _start_plex_auth(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         pin = await plex.request_pin(strong=True)
     except Exception as exc:
         logger.exception("plex request_pin failed")
-        await _end_step(update, ctx,
-                        f"Couldn't start Plex auth. {user_friendly_message(exc)}",
-                        hub, retry)
+        await end_flow(update, ctx,
+                       f"Couldn't start Plex auth. {user_friendly_message(exc)}",
+                       hub, retry)
         return ConversationHandler.END
 
     loop_id = secrets.token_hex(8)
@@ -393,8 +379,8 @@ async def _start_plex_auth(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         if ctx.user_data.get("link_active_loop") != loop_id:
             # A newer loop (didnt_work fallback) has taken ownership; exit silently
             return ConversationHandler.END
-        await _end_step(update, ctx, "⏱️ Plex auth timed out.", hub, retry,
-                        typed_text="⏱️ Plex auth timed out. /link to try again.")
+        await end_flow(update, ctx, "⏱️ Plex auth timed out.", hub, retry,
+                       typed_text="⏱️ Plex auth timed out. /link to try again.")
         return ConversationHandler.END
 
     await _finalize_link(update, ctx, auth_token, hub=hub)
@@ -419,7 +405,7 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     except Exception as exc:
         logger.exception("plex request_pin failed (fallback)")
         text = f"Couldn't get a fresh code. {user_friendly_message(exc)}"
-        await _end_step(update, ctx, text, hub, LINK_HELP)
+        await end_flow(update, ctx, text, hub, LINK_HELP)
         return
 
     # Claim a new loop ID -- any prior poll will see this and exit on its
@@ -455,8 +441,8 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         # Clear the loop key explicitly so the parent /link conversation
         # doesn't think it's still polling.
         ctx.user_data.pop("link_active_loop", None)
-        await _end_step(update, ctx, "⏱️ Plex auth timed out.", hub, LINK_HELP,
-                        typed_text="⏱️ Plex auth timed out. /link to try again.")
+        await end_flow(update, ctx, "⏱️ Plex auth timed out.", hub, LINK_HELP,
+                       typed_text="⏱️ Plex auth timed out. /link to try again.")
         return
 
     await _finalize_link(update, ctx, auth_token, hub=hub)

@@ -55,7 +55,8 @@ from bot.callback_prefixes import (
     UNINV_GO,
     UNINV_KEEP,
 )
-from bot.hub import back_button, end_markup, hub_origin, set_hub_origin
+from bot.hub import (back_button, end_flow, end_markup, hub_origin,
+                     set_hub_origin)
 from bot.shared import (
     INV_CONFIRM,
     INV_EMAIL,
@@ -97,33 +98,6 @@ def _admin_origin(ctx: ContextTypes.DEFAULT_TYPE) -> Optional[str]:
     return ADMIN_HUB if hub_origin(ctx) == ADMIN_HUB else None
 
 
-async def _end(update, ctx: ContextTypes.DEFAULT_TYPE, text: str,
-               hub: Optional[str], retry: Optional[str] = None, *,
-               typed_text: Optional[str] = None,
-               parse_mode: Optional[str] = None) -> None:
-    """Say how an admin step ended. Without a Hub (`hub` None) the message is
-    `typed_text or text` with no buttons, as for typed /invite. With one it
-    is `text` carrying the back button (plus Try again when `retry` is set).
-    Callback updates edit the tapped message; message updates reply."""
-    q = update.callback_query
-    if hub is None:
-        shown = typed_text or text
-        if q is not None:
-            await q.edit_message_text(shown, parse_mode=parse_mode)
-        else:
-            await update.effective_message.reply_text(shown,
-                                                      parse_mode=parse_mode)
-        return
-    markup = end_markup(hub, retry)
-    if q is not None:
-        sent = await edit_or_send(q, text, reply_markup=markup,
-                                  parse_mode=parse_mode)
-    else:
-        sent = await update.effective_message.reply_text(
-            text, reply_markup=markup, parse_mode=parse_mode)
-    record_btn(ctx.application, update.effective_user.id, sent)
-
-
 async def _admin_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                       hub: Optional[str] = None) -> Optional[str]:
     """Admin + DM + linked. Returns the admin's Plex token or None (after
@@ -133,7 +107,7 @@ async def _admin_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     store: UserStore = ctx.bot_data["store"]
     mapping = await store.get(update.effective_user.id)
     if mapping is None or not mapping.plex_token:
-        await _end(update, ctx, _NOT_LINKED, hub)
+        await end_flow(update, ctx, _NOT_LINKED, hub)
         return None
     return mapping.plex_token
 
@@ -254,23 +228,23 @@ async def _accept_email(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         machine_id, server_name = await plex.get_owned_server(mapping.plex_token)
         sections = await plex.get_library_sections(mapping.plex_token, machine_id)
     except LookupError:
-        await _end(update, ctx,
-                   "Your linked Plex account doesn't own a server — sharing needs "
-                   "the server owner's account. /link with the owner account first.",
-                   _admin_origin(ctx))
+        await end_flow(update, ctx,
+                       "Your linked Plex account doesn't own a server — sharing needs "
+                       "the server owner's account. /link with the owner account first.",
+                       _admin_origin(ctx))
         _clear(ctx)
         return ConversationHandler.END
     except Exception as exc:
         logger.exception("plex server/section lookup failed")
-        await _end(update, ctx,
-                   f"Couldn't read your Plex server. {user_friendly_message(exc)}",
-                   _admin_origin(ctx), ADMIN_INVITE)
+        await end_flow(update, ctx,
+                       f"Couldn't read your Plex server. {user_friendly_message(exc)}",
+                       _admin_origin(ctx), ADMIN_INVITE)
         _clear(ctx)
         return ConversationHandler.END
     if not sections:
-        await _end(update, ctx,
-                   "Your Plex server reports no libraries; nothing to share.",
-                   _admin_origin(ctx))
+        await end_flow(update, ctx,
+                       "Your Plex server reports no libraries; nothing to share.",
+                       _admin_origin(ctx))
         _clear(ctx)
         return ConversationHandler.END
     ctx.user_data["inv_machine"] = machine_id
@@ -435,15 +409,15 @@ async def _invite_send_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     selected = ctx.user_data.get("inv_selected") or set()
     hub = _admin_origin(ctx)
     if not (email and machine and selected):
-        await _end(update, ctx, "Lost the invite draft.", hub, ADMIN_INVITE,
-                   typed_text="Lost the invite draft. /invite to start over.")
+        await end_flow(update, ctx, "Lost the invite draft.", hub, ADMIN_INVITE,
+                       typed_text="Lost the invite draft. /invite to start over.")
         _clear(ctx)
         return ConversationHandler.END
     store: UserStore = ctx.bot_data["store"]
     mapping = await store.get(update.effective_user.id)
     if mapping is None or not mapping.plex_token:
-        await _end(update, ctx, "Your /link is no longer usable; /link first.",
-                   hub, typed_text=("Your /link is no longer usable. /link "
+        await end_flow(update, ctx, "Your /link is no longer usable; /link first.",
+                       hub, typed_text=("Your /link is no longer usable. /link "
                                     "then /invite again."))
         _clear(ctx)
         return ConversationHandler.END
@@ -462,19 +436,19 @@ async def _invite_send_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
                                     sorted(selected))
     except Exception as exc:
         logger.exception("plex invite failed")
-        await _end(update, ctx,
-                   f"Couldn't send the invite. {user_friendly_message(exc)}",
-                   hub, ADMIN_INVITE)
+        await end_flow(update, ctx,
+                       f"Couldn't send the invite. {user_friendly_message(exc)}",
+                       hub, ADMIN_INVITE)
         _clear(ctx)
         return ConversationHandler.END
 
     lib_word = "library" if len(selected) == 1 else "libraries"
-    await _end(update, ctx,
-               f"📨 Invite sent to <b>{html.escape(email)}</b> "
-               f"({len(selected)} {lib_word}).\n"
-               "They'll get an email from Plex; once they accept and sign in, "
-               "Seerr picks them up and /link works for them.",
-               hub, parse_mode="HTML")
+    await end_flow(update, ctx,
+                   f"📨 Invite sent to <b>{html.escape(email)}</b> "
+                   f"({len(selected)} {lib_word}).\n"
+                   "They'll get an email from Plex; once they accept and sign in, "
+                   "Seerr picks them up and /link works for them.",
+                   hub, parse_mode="HTML")
     _clear(ctx)
     return ConversationHandler.END
 
@@ -496,8 +470,8 @@ async def invite_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.answer(_STALE_INVITE_TOAST, show_alert=True)
             return None
         await q.answer("Cancelled")
-    await _end(update, ctx, "Cancelled.", _admin_origin(ctx),
-               typed_text="Cancelled. /invite to start over.")
+    await end_flow(update, ctx, "Cancelled.", _admin_origin(ctx),
+                   typed_text="Cancelled. /invite to start over.")
     _clear(ctx)
     return ConversationHandler.END
 
@@ -634,7 +608,7 @@ async def _load_shares(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     store: UserStore = ctx.bot_data["store"]
     mapping = await store.get(update.effective_user.id)
     if mapping is None or not mapping.plex_token:
-        await _end(update, ctx, _NOT_LINKED, ADMIN_HUB)
+        await end_flow(update, ctx, _NOT_LINKED, ADMIN_HUB)
         return None
     await send_typing(update, ctx)
     plex: PlexClient = ctx.bot_data["plex"]
@@ -642,13 +616,13 @@ async def _load_shares(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         machine_id, _ = await plex.get_owned_server(mapping.plex_token)
         shares = await plex.list_shares(mapping.plex_token, machine_id)
     except LookupError:
-        await _end(update, ctx, _NO_SERVER, ADMIN_HUB)
+        await end_flow(update, ctx, _NO_SERVER, ADMIN_HUB)
         return None
     except Exception as exc:
         logger.exception("share listing failed")
-        await _end(update, ctx,
-                   f"Couldn't list Shares. {user_friendly_message(exc)}",
-                   ADMIN_HUB, retry)
+        await end_flow(update, ctx,
+                       f"Couldn't list Shares. {user_friendly_message(exc)}",
+                       ADMIN_HUB, retry)
         return None
     return _sorted_shares(shares)
 
@@ -665,9 +639,9 @@ async def admin_shares(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if shares is None:
         return
     if not shares:
-        await _end(update, ctx,
-                   "👥 <b>Shares</b>\nNo one has a Share on your server yet.",
-                   ADMIN_HUB, parse_mode="HTML")
+        await end_flow(update, ctx,
+                       "👥 <b>Shares</b>\nNo one has a Share on your server yet.",
+                       ADMIN_HUB, parse_mode="HTML")
         return
     await _edit_recorded(update, ctx, *_share_page(
         shares, _page_of(q.data), ADMIN_SHARES,
@@ -683,17 +657,17 @@ async def share_matches(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await q.answer()
     query = ctx.user_data.get(_SHARE_QUERY_KEY)
     if not query:
-        await _end(update, ctx, "That search expired. Type /uninvite again.",
-                   ADMIN_HUB)
+        await end_flow(update, ctx, "That search expired. Type /uninvite again.",
+                       ADMIN_HUB)
         return
     shares = await _load_shares(update, ctx, q.data)
     if shares is None:
         return
     matches = _matching(shares, query)
     if not matches:
-        await _end(update, ctx,
-                   f'No share matches "{html.escape(query)}" any more.',
-                   ADMIN_HUB, parse_mode="HTML")
+        await end_flow(update, ctx,
+                       f'No share matches "{html.escape(query)}" any more.',
+                       ADMIN_HUB, parse_mode="HTML")
         return
     await _edit_recorded(update, ctx, *_share_page(
         matches, _page_of(q.data), SHARE_MATCHES,
@@ -718,9 +692,9 @@ async def _tapped_share(update: Update,
     for share in shares:
         if share.id == share_id:
             return share
-    await _end(update, ctx,
-               "That Share is gone. It may have been removed elsewhere.",
-               ADMIN_HUB)
+    await end_flow(update, ctx,
+                   "That Share is gone. It may have been removed elsewhere.",
+                   ADMIN_HUB)
     return None
 
 
@@ -808,8 +782,8 @@ async def _uninvite_go_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     store: UserStore = ctx.bot_data["store"]
     mapping = await store.get(update.effective_user.id)
     if mapping is None or not mapping.plex_token:
-        await _end(update, ctx, "Your /link is no longer usable; /link first.",
-                   ADMIN_HUB)
+        await end_flow(update, ctx, "Your /link is no longer usable; /link first.",
+                       ADMIN_HUB)
         return
     plex: PlexClient = ctx.bot_data["plex"]
     try:
@@ -817,16 +791,16 @@ async def _uninvite_go_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     except NotFoundAPIError:
         # Already gone (removed elsewhere, or a racing duplicate tap):
         # the desired end state holds, so report it as done.
-        await _end(update, ctx, "✅ Already removed.", ADMIN_HUB)
+        await end_flow(update, ctx, "✅ Already removed.", ADMIN_HUB)
         return
     except Exception as exc:
         logger.exception("share removal failed")
-        await _end(update, ctx,
-                   f"Couldn't remove the share. {user_friendly_message(exc)}",
-                   ADMIN_HUB, q.data)
+        await end_flow(update, ctx,
+                       f"Couldn't remove the share. {user_friendly_message(exc)}",
+                       ADMIN_HUB, q.data)
         return
-    await _end(update, ctx, "✅ Invite cancelled." if was_pending
-               else "✅ Access removed.", ADMIN_HUB)
+    await end_flow(update, ctx, "✅ Invite cancelled." if was_pending
+                   else "✅ Access removed.", ADMIN_HUB)
 
 
 async def uninvite_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -838,4 +812,4 @@ async def uninvite_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         await q.answer("Admin only.", show_alert=True)
         return
     await q.answer("Cancelled")
-    await _end(update, ctx, "Cancelled — nothing changed.", ADMIN_HUB)
+    await end_flow(update, ctx, "Cancelled — nothing changed.", ADMIN_HUB)

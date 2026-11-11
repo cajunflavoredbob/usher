@@ -52,8 +52,8 @@ from bot.callback_prefixes import (
     TK_REPLY,
 )
 from const import TICKET_BUTTONS_PER_ROW, TICKET_REPLY_TIMEOUT_S
-from bot.hub import (back_button, came_from_hub, end_markup, send_hub,
-                     try_again_button)
+from bot.hub import (back_button, came_from_hub, end_markup,
+                     keyboard_callbacks, send_hub, try_again_button)
 from bot.tickets_hub import TICKETS_HUB, list_back_button
 from bot.shared import (
     truncate_message,
@@ -219,27 +219,12 @@ async def tickets_hub_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
     await show(text, InlineKeyboardMarkup(button_rows))
 
 
-def _has_list_back(message) -> bool:
-    """True when `message`'s keyboard holds a button with the list callback
-    (the detail card's "⬅️ Tickets")."""
-    markup = getattr(message, "reply_markup", None)
-    return any(
-        getattr(btn, "callback_data", None) == TICKETS_LIST
-        for row in getattr(markup, "inline_keyboard", ()) or ()
-        for btn in row
-    )
-
-
 def _opened_from_list(message) -> bool:
     """True when `message` belongs to a detail card opened from the list: the
     card or a Reply, Close or Fix result carries "⬅️ Tickets" (`TICKETS_LIST`),
     and a Close or Fix sub-menu carries a `TK_BACK_LIST` Back."""
-    markup = getattr(message, "reply_markup", None)
-    return _has_list_back(message) or any(
-        str(getattr(btn, "callback_data", "")).startswith(f"{TK_BACK_LIST}:")
-        for row in getattr(markup, "inline_keyboard", ()) or ()
-        for btn in row
-    )
+    return any(cb == TICKETS_LIST or cb.startswith(f"{TK_BACK_LIST}:")
+               for cb in keyboard_callbacks(message))
 
 
 def _result_markup(from_list: bool,
@@ -313,7 +298,7 @@ async def tk_open(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     from_list = (came_from_hub(q.message, TICKETS_HUB)
-                 or _has_list_back(q.message))
+                 or TICKETS_LIST in keyboard_callbacks(q.message))
     try:
         text, kb = await _build_ticket_detail(ctx, issue_id, is_admin, token)
     except PlexTokenInvalidError:
@@ -452,7 +437,7 @@ async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 def _back_prefix(q) -> str:
     """The sub-menu Back callback: keep the list-back row when the detail card
     it was opened from carries it."""
-    return TK_BACK_LIST if _has_list_back(q.message) else TK_BACK
+    return TK_BACK_LIST if TICKETS_LIST in keyboard_callbacks(q.message) else TK_BACK
 
 
 async def tk_close_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:

@@ -110,11 +110,44 @@ async def hub_open_callback(update, ctx) -> None:
     await show_hub(update, ctx, hub)
 
 
-def came_from_hub(message, hub: str) -> bool:
-    """True when `message`'s inline keyboard holds the back button to `hub`."""
+def keyboard_callbacks(message) -> list[str]:
+    """The callback_data of every button in `message`'s inline keyboard."""
     markup = getattr(message, "reply_markup", None)
-    return any(
-        getattr(btn, "callback_data", None) == f"{HUB_OPEN}:{hub}"
+    return [
+        btn.callback_data
         for row in getattr(markup, "inline_keyboard", ()) or ()
         for btn in row
-    )
+        if isinstance(getattr(btn, "callback_data", None), str)
+    ]
+
+
+def came_from_hub(message, hub: str) -> bool:
+    """True when `message`'s inline keyboard holds the back button to `hub`."""
+    return f"{HUB_OPEN}:{hub}" in keyboard_callbacks(message)
+
+
+async def end_flow(update, ctx, text: str, hub: Optional[str],
+                   retry: Optional[str] = None, *,
+                   typed_text: Optional[str] = None,
+                   parse_mode: Optional[str] = None, edit: bool = True) -> None:
+    """Say how a flow step ended. Without a Hub (`hub` None) the message is
+    `typed_text or text` with no buttons, as for a typed command. With one it
+    is `text` carrying the back button (plus Try again when `retry` is set),
+    recorded with the button gate. Callback updates edit the tapped message
+    unless `edit` is False; message updates reply."""
+    q = update.callback_query
+    kwargs = {"parse_mode": parse_mode} if parse_mode else {}
+    if hub is None:
+        shown = typed_text or text
+        if q is not None and edit:
+            await q.edit_message_text(shown, **kwargs)
+        else:
+            await update.effective_message.reply_text(shown, **kwargs)
+        return
+    markup = end_markup(hub, retry)
+    if q is not None and edit:
+        sent = await edit_or_send(q, text, reply_markup=markup, **kwargs)
+    else:
+        sent = await update.effective_message.reply_text(
+            text, reply_markup=markup, **kwargs)
+    record_btn(ctx.application, update.effective_user.id, sent)
