@@ -159,7 +159,7 @@ async def tickets_hub_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
             as_plex_token=None if is_admin else mapping.plex_token,
         )
     except PlexTokenInvalidError:
-        await prompt_plex_relink(update, ctx)
+        await prompt_plex_relink(update, ctx, back=back_button(TICKETS_HUB))
         return
     except Exception as exc:
         logger.exception("list_issues failed")
@@ -274,7 +274,8 @@ async def tk_open(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         text, kb = await _build_ticket_detail(ctx, issue_id, is_admin, token)
     except PlexTokenInvalidError:
-        await prompt_plex_relink(update, ctx)
+        await prompt_plex_relink(
+            update, ctx, back=list_back_button() if from_list else None)
         return
     if from_list:
         msg = await edit_or_send(
@@ -391,7 +392,8 @@ async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         text, kb = await _build_ticket_detail(ctx, issue_id, is_admin, token)
     except PlexTokenInvalidError:
-        await prompt_plex_relink(update, ctx)
+        await prompt_plex_relink(
+            update, ctx, back=list_back_button() if from_list else None)
         return
     if from_list:
         kb = _with_list_back(kb, issue_id, retry=False)

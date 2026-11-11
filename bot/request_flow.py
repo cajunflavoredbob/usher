@@ -84,6 +84,7 @@ from bot.callback_prefixes import (
     REQUESTS_NEW,
 )
 from bot.hub import (
+    back_button,
     came_from_hub,
     end_markup,
     hub_origin,
@@ -1004,7 +1005,8 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     except PlexTokenInvalidError:
         # The draft stays in user_data for the post-relink resume.
         await prompt_plex_relink(update, ctx, resume_kind="submit_request",
-                                 resume_payload={})
+                                 resume_payload={},
+                                 back=back_button(hub) if hub else None)
         return ConversationHandler.END
     except NothingToRequestError:
         await _end(

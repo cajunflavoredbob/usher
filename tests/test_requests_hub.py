@@ -599,3 +599,41 @@ def test_request_hub_list_buttons_registered():
             + prefix + r'\}\$"\)', src)
         assert found, handler
         assert found.start() < last
+
+
+# --- the relink prompt (revoked Plex token) ---------------------------------------
+
+RELINK = ("🔗 Unlink & sign in again", "relink")
+
+
+async def test_hub_submit_relink_prompt_has_back():
+    from seerr import PlexTokenInvalidError
+    ctx = _confirm_ctx(REQUESTS_HUB)
+    ctx.bot_data["seerr"].create_request.side_effect = PlexTokenInvalidError()
+    upd = make_update(callback_data="rqgo:1", user_id=USER_ID)
+    await request_submit(upd, ctx)
+    edit = upd.callback_query.edits[-1]
+    assert edit["text"].startswith("⚠️ Plex says your sign-in is no longer valid.")
+    assert _flat(edit["reply_markup"]) == [RELINK, BACK]
+
+
+async def test_typed_submit_relink_prompt_has_relink_only():
+    from seerr import PlexTokenInvalidError
+    ctx = _confirm_ctx()
+    ctx.bot_data["seerr"].create_request.side_effect = PlexTokenInvalidError()
+    upd = make_update(callback_data="rqgo:1", user_id=USER_ID)
+    await request_submit(upd, ctx)
+    assert _flat(upd.callback_query.edits[-1]["reply_markup"]) == [RELINK]
+
+
+async def test_hub_my_requests_relink_prompt_has_back():
+    from seerr import PlexTokenInvalidError
+    ctx = _linked_ctx()
+    ctx.bot_data["seerr"].list_requests.side_effect = PlexTokenInvalidError()
+    upd = make_update(callback_data=REQUESTS_MINE, user_id=USER_ID)
+    await requests_hub_mine(upd, ctx)
+    assert _flat(upd.callback_query.edits[-1]["reply_markup"]) == [RELINK, BACK]
+    upd = _from_hub(make_update(callback_data="rqlc:12", user_id=USER_ID))
+    ctx.bot_data["seerr"].delete_request.side_effect = PlexTokenInvalidError()
+    await rq_list_cancel(upd, ctx)
+    assert _flat(upd.callback_query.edits[-1]["reply_markup"]) == [RELINK, BACK]

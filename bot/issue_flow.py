@@ -860,7 +860,8 @@ async def _submit_issue_inner(
         # The draft (media, type, description) stays in user_data; only the
         # autofix choice needs carrying for the post-relink resume.
         await prompt_plex_relink(update, ctx, resume_kind="submit_issue",
-                                 resume_payload={"autofix": autofix})
+                                 resume_payload={"autofix": autofix},
+                                 back=back_button(hub) if hub else None)
         return ConversationHandler.END
     except Exception as exc:
         logger.exception("create_issue failed")

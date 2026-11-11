@@ -537,10 +537,13 @@ async def unmatched_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
 
 async def prompt_plex_relink(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *,
                              resume_kind: Optional[str] = None,
-                             resume_payload: Optional[dict] = None) -> None:
+                             resume_payload: Optional[dict] = None,
+                             back: Optional[InlineKeyboardButton] = None) -> None:
     """Recovery prompt for a revoked Plex token (PlexTokenInvalidError): one
     tap unlinks the dead session and drops the user into the sign-in flow
     (link_flow.cmd_relink). Works from both callback and message contexts.
+    `back` (a flow started from a Hub) goes on its own row below the relink
+    button.
 
     resume_kind/resume_payload (optional) stash what the user was doing so
     _finalize_link can pick it back up after the re-link succeeds. NEVER put
@@ -551,9 +554,11 @@ async def prompt_plex_relink(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *,
             "payload": resume_payload or {},
             "saved_at": time.time(),
         }
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔗 Unlink & sign in again", callback_data=RELINK),
-    ]])
+    rows = [[InlineKeyboardButton("🔗 Unlink & sign in again",
+                                  callback_data=RELINK)]]
+    if back is not None:
+        rows.append([back])
+    kb = InlineKeyboardMarkup(rows)
     text = (
         "⚠️ Plex says your sign-in is no longer valid. This usually happens "
         "after a password change or signing out of all devices.\n\n"

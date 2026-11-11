@@ -487,3 +487,58 @@ async def test_start_lists_tickets_hub_and_typed_note():
             assert "/issue —" not in text
     finally:
         app_mod._check_connections = app_mod_check
+
+
+# --- the relink prompt (revoked Plex token) ---------------------------------------
+
+RELINK = ("🔗 Unlink & sign in again", "relink")
+
+
+async def test_hub_report_relink_prompt_has_back():
+    from seerr import PlexTokenInvalidError
+    ctx = _submit_ctx(TICKETS_HUB)
+    ctx.bot_data["seerr"].create_issue = _async_return(exc=PlexTokenInvalidError())
+    upd = make_update(text="no sound", user_id=USER_ID)
+    await _submit_issue(upd, ctx, autofix=False)
+    reply = upd.effective_message.reply_calls[0]
+    assert reply["text"].startswith("⚠️ Plex says your sign-in is no longer valid.")
+    assert _flat(reply["reply_markup"]) == [RELINK, BACK]
+
+
+async def test_typed_report_relink_prompt_has_relink_only():
+    from seerr import PlexTokenInvalidError
+    ctx = _submit_ctx()
+    ctx.bot_data["seerr"].create_issue = _async_return(exc=PlexTokenInvalidError())
+    upd = make_update(text="no sound", user_id=USER_ID)
+    await _submit_issue(upd, ctx, autofix=False)
+    assert _flat(upd.effective_message.reply_calls[0]["reply_markup"]) == [RELINK]
+
+
+async def test_hub_list_relink_prompt_has_back():
+    from seerr import PlexTokenInvalidError
+    ctx = _linked_ctx()
+    ctx.bot_data["seerr"].list_issues.side_effect = PlexTokenInvalidError()
+    upd = make_update(callback_data=TICKETS_LIST, user_id=USER_ID)
+    await tickets_hub_list(upd, ctx)
+    assert _flat(upd.callback_query.edits[-1]["reply_markup"]) == [RELINK, BACK]
+
+
+async def test_detail_from_list_relink_prompt_has_list_back():
+    from seerr import PlexTokenInvalidError
+    ctx = _linked_ctx()
+    ctx.bot_data["seerr"].get_issue.side_effect = PlexTokenInvalidError()
+    upd = _from_hub(make_update(callback_data=f"{TK_OPEN}:5", user_id=USER_ID))
+    await tk_open(upd, ctx)
+    assert _flat(upd.callback_query.edits[-1]["reply_markup"]) == [RELINK, LIST_BACK]
+    upd = make_update(callback_data=f"{TK_BACK_LIST}:5", user_id=USER_ID)
+    await tk_back(upd, ctx)
+    assert _flat(upd.callback_query.edits[-1]["reply_markup"]) == [RELINK, LIST_BACK]
+
+
+async def test_detail_from_dm_relink_prompt_has_relink_only():
+    from seerr import PlexTokenInvalidError
+    ctx = _linked_ctx()
+    ctx.bot_data["seerr"].get_issue.side_effect = PlexTokenInvalidError()
+    upd = make_update(callback_data=f"{TK_OPEN}:5", user_id=USER_ID)
+    await tk_open(upd, ctx)
+    assert _flat(upd.callback_query.edits[-1]["reply_markup"]) == [RELINK]

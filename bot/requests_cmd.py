@@ -73,7 +73,8 @@ async def _render_requests(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             as_plex_token=None if is_admin else mapping.plex_token,
         )
     except PlexTokenInvalidError:
-        await prompt_plex_relink(update, ctx)
+        await prompt_plex_relink(update, ctx,
+                                 back=back_button(hub) if hub else None)
         return
     except Exception as exc:
         logger.exception("list_requests failed")
@@ -246,7 +247,8 @@ async def rq_list_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         # from the user's point of view.
         pass
     except PlexTokenInvalidError:
-        await prompt_plex_relink(update, ctx)
+        await prompt_plex_relink(update, ctx,
+                                 back=back_button(hub) if hub else None)
         return
     except Exception as exc:
         logger.exception("delete_request failed")
