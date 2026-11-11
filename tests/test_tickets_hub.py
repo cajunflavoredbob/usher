@@ -2,7 +2,6 @@
 started from the Hub), the ticket list, and the detail card opened from it."""
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
@@ -31,6 +30,7 @@ USER_ID = 42
 ADMIN_ID = 999
 BACK = ("⬅️ Tickets", f"{HUB_OPEN}:tickets")
 LIST_BACK = ("⬅️ Tickets", TICKETS_LIST)
+LIST_TICKET_BACK = ("⬅️ Ticket", f"{TK_BACK_LIST}:5")
 RETRY_REPORT = ("🔁 Try again", TICKETS_REPORT)
 FIX_FAILED = FixResult.failed("No grab to mark failed.")
 
@@ -586,7 +586,7 @@ async def test_close_from_dm_has_no_buttons():
     assert upd.callback_query.edits[-1].get("reply_markup") is None
 
 
-async def test_fix_from_list_ends_with_tickets_back():
+async def test_fix_from_list_restores_tickets_back_row():
     ctx = make_ctx(admin_id=ADMIN_ID)
     ctx.bot_data["seerr"].get_issue.return_value = _issue(id=5)
     ctx.bot_data["radarr"].auto_fix.return_value = FixResult.success(
@@ -595,11 +595,11 @@ async def test_fix_from_list_ends_with_tickets_back():
     upd = _from_list_submenu(make_update(callback_data="tkfd:5", user_id=ADMIN_ID))
     await _apply_fix(upd, ctx, strategy="redownload")
     edit = upd.callback_query.edits[-1]
-    assert edit["text"].startswith("🔧 Redownload for #5.")
-    assert _flat(edit["reply_markup"]) == [LIST_BACK]
+    assert edit["text"].startswith("<b>Ticket #5</b>")
+    assert _flat(edit["reply_markup"])[-1] == LIST_BACK
 
 
-async def test_fix_from_list_that_did_not_run_offers_try_again_and_tickets_back():
+async def test_fix_from_list_that_did_not_run_offers_try_again_and_ticket_back():
     ctx = make_ctx(admin_id=ADMIN_ID)
     ctx.bot_data["seerr"].get_issue.return_value = _issue(id=5)
     ctx.bot_data["radarr"].mark_failed.return_value = FIX_FAILED
@@ -607,20 +607,20 @@ async def test_fix_from_list_that_did_not_run_offers_try_again_and_tickets_back(
     await _apply_fix(upd, ctx, strategy="mark_failed")
     edit = upd.callback_query.edits[-1]
     assert edit["text"].startswith("⚠️ Mark Failed for #5 didn't run")
-    assert _flat(edit["reply_markup"]) == [("🔁 Try again", "tkfm:5"), LIST_BACK]
+    assert _flat(edit["reply_markup"]) == [("🔁 Try again", "tkfm:5"), LIST_TICKET_BACK]
 
 
-async def test_fix_from_list_fetch_failure_offers_try_again_and_tickets_back():
+async def test_fix_from_list_fetch_failure_offers_try_again_and_ticket_back():
     ctx = make_ctx(admin_id=ADMIN_ID)
     ctx.bot_data["seerr"].get_issue.side_effect = RuntimeError("boom")
     upd = _from_list_submenu(make_update(callback_data="tkfd:5", user_id=ADMIN_ID))
     await _apply_fix(upd, ctx, strategy="redownload")
     edit = upd.callback_query.edits[-1]
     assert edit["text"].startswith("Couldn't fetch ticket #5.")
-    assert _flat(edit["reply_markup"]) == [("🔁 Try again", "tkfd:5"), LIST_BACK]
+    assert _flat(edit["reply_markup"]) == [("🔁 Try again", "tkfd:5"), LIST_TICKET_BACK]
 
 
-async def test_fix_from_list_on_a_whole_season_ends_with_tickets_back_only():
+async def test_fix_from_list_on_a_whole_season_ends_with_ticket_back_only():
     ctx = make_ctx(admin_id=ADMIN_ID)
     ctx.bot_data["seerr"].get_issue.return_value = _issue(
         id=5, media_type="tv", problem_season=1, problem_episode=None)
@@ -628,15 +628,16 @@ async def test_fix_from_list_on_a_whole_season_ends_with_tickets_back_only():
     await _apply_fix(upd, ctx, strategy="redownload")
     edit = upd.callback_query.edits[-1]
     assert "only works on individual episodes or movies" in edit["text"]
-    assert _flat(edit["reply_markup"]) == [LIST_BACK]
+    assert _flat(edit["reply_markup"]) == [LIST_TICKET_BACK]
 
 
-async def test_fix_failure_from_dm_has_no_buttons():
+async def test_fix_failure_from_dm_has_ticket_back_only():
     ctx = make_ctx(admin_id=ADMIN_ID)
     ctx.bot_data["seerr"].get_issue.side_effect = RuntimeError("boom")
     upd = make_update(callback_data="tkfd:5", user_id=ADMIN_ID)
     await _apply_fix(upd, ctx, strategy="redownload")
-    assert upd.callback_query.edits[-1].get("reply_markup") is None
+    assert _flat(upd.callback_query.edits[-1]["reply_markup"]) == [
+        ("⬅️ Ticket", f"{TK_BACK}:5")]
 
 
 async def test_try_again_on_a_result_keeps_tickets_back():
@@ -763,7 +764,7 @@ async def test_typed_report_progress_card_stores_no_keyboard():
     assert store.set_autofix_message.call_args.kwargs.get("reply_markup", "") == ""
 
 
-async def test_fix_from_list_progress_card_stores_its_keyboard():
+async def test_fix_from_list_progress_card_stores_no_keyboard():
     ctx = make_ctx(admin_id=ADMIN_ID)
     ctx.bot_data["seerr"].get_issue.return_value = _issue(id=5)
     ctx.bot_data["radarr"].auto_fix.return_value = FixResult.success(
@@ -772,4 +773,4 @@ async def test_fix_from_list_progress_card_stores_its_keyboard():
     upd = _from_list_submenu(make_update(callback_data="tkfd:5", user_id=ADMIN_ID))
     await _apply_fix(upd, ctx, strategy="redownload")
     stored = ctx.bot_data["store"].set_autofix_message.call_args.kwargs["reply_markup"]
-    assert _flat(InlineKeyboardMarkup.de_json(json.loads(stored), None)) == [LIST_BACK]
+    assert stored == ""

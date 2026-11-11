@@ -221,15 +221,16 @@ async def tickets_hub_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
 
 def _opened_from_list(message) -> bool:
     """True when `message` belongs to a detail card opened from the list: the
-    card or a Reply, Close or Fix result carries "⬅️ Tickets" (`TICKETS_LIST`),
-    and a Close or Fix sub-menu carries a `TK_BACK_LIST` Back."""
+    card or a Reply or Close result carries "⬅️ Tickets" (`TICKETS_LIST`),
+    and a Close or Fix sub-menu, or a Fix that couldn't start or didn't run,
+    carries a `TK_BACK_LIST` button."""
     return any(cb == TICKETS_LIST or cb.startswith(f"{TK_BACK_LIST}:")
                for cb in keyboard_callbacks(message))
 
 
 def _result_markup(from_list: bool,
                    retry: Optional[str] = None) -> Optional[InlineKeyboardMarkup]:
-    """Keyboard for a Reply, Close or Fix result: none unless the detail card
+    """Keyboard for a Reply or Close result: none unless the detail card
     was opened from the list, else "⬅️ Tickets" back to the list, with Try
     again (callback `retry`) before it when the step failed."""
     if not from_list:
@@ -572,9 +573,8 @@ async def _enqueue_fix_completion(
     chat_id: int, user_id: int, issue_url: str,
 ) -> int:
     """Build the pending_autofix row from result.poll_info; returns the row
-    id so the caller can attach the outcome message as the morphing
-    progress card. Raises on enqueue failure -- caller decides what to
-    tell the user."""
+    id so the caller can attach the Fix's Progress card to it. Raises on
+    enqueue failure -- caller decides what to tell the user."""
     poll_info = result.poll_info or {}
     kwargs: dict = {
         "chat_id": chat_id,
@@ -595,8 +595,86 @@ async def _enqueue_fix_completion(
     return await store.add_pending_autofix(**kwargs)
 
 
+def _ticket_back_button(issue_id: int, from_list: bool) -> InlineKeyboardButton:
+    """"⬅️ Ticket": shows the Ticket again with its buttons (through
+    `tk_back`), keeping the "⬅️ Tickets" row when it was opened from the list."""
+    prefix = TK_BACK_LIST if from_list else TK_BACK
+    return InlineKeyboardButton("⬅️ Ticket", callback_data=f"{prefix}:{issue_id}")
+
+
+def _fix_end_markup(issue_id: int, from_list: bool,
+                    retry: Optional[str] = None) -> InlineKeyboardMarkup:
+    """Keyboard for a Fix that couldn't start or didn't run: "⬅️ Ticket",
+    with Try again (callback `retry`) before it when the card was opened from
+    the list and the step failed."""
+    row = [_ticket_back_button(issue_id, from_list)]
+    if from_list and retry is not None:
+        row.insert(0, try_again_button(retry))
+    return InlineKeyboardMarkup([row])
+
+
+async def _restore_ticket_card(q, ctx, issue_id: int, from_list: bool) -> None:
+    """Edit the Ticket card back into the Ticket with its buttons, the same
+    view its Back shows (plus "⬅️ Tickets" when opened from the list)."""
+    try:
+        text, kb = await _build_ticket_detail(ctx, issue_id, True, None)
+    except Exception:
+        logger.exception("couldn't rebuild ticket #%d after a fix started", issue_id)
+        text, kb = f"<b>Ticket #{issue_id}</b>", None
+    if from_list:
+        kb = _with_list_back(kb, issue_id, retry=False)
+    elif kb is None:
+        kb = InlineKeyboardMarkup([[_ticket_back_button(issue_id, False)]])
+    try:
+        sent = await edit_or_send(q, text, parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        logger.exception("couldn't restore ticket card #%d", issue_id)
+        return
+    record_btn(ctx.application, q.from_user.id, sent)
+
+
+class _ProgressCard:
+    """The Fix's Progress card: a new message in the chat that shows the
+    working state, then the result. If the first send fails, the next show()
+    sends a new message, which becomes the card."""
+
+    def __init__(self, ctx, chat_id: int):
+        self._ctx = ctx
+        self._chat_id = chat_id
+        self.message_id: Optional[int] = None
+
+    async def show(self, text: str) -> None:
+        bot = self._ctx.bot
+        try:
+            if self.message_id is None:
+                sent = await bot.send_message(chat_id=self._chat_id, text=text)
+                self.message_id = sent.message_id
+            else:
+                await bot.edit_message_text(chat_id=self._chat_id,
+                                            message_id=self.message_id, text=text)
+        except Exception:
+            logger.exception("couldn't show the fix progress card")
+
+    async def delete(self) -> None:
+        if self.message_id is None:
+            return
+        try:
+            await self._ctx.bot.delete_message(chat_id=self._chat_id,
+                                               message_id=self.message_id)
+        except Exception:
+            logger.exception("couldn't delete the fix progress card")
+        self.message_id = None
+
+
 async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy: str) -> None:
-    """Shared admin-fix path. strategy is 'redownload' or 'mark_failed'."""
+    """Shared admin-fix path. strategy is 'redownload' or 'mark_failed'.
+
+    Once the Fix starts (the ticket resolved and no other fix runs on the
+    title), the Ticket card shows the Ticket again with its buttons and the
+    working state, result and download progress go on a new Progress card.
+    A Fix that can't start leaves its reason and "⬅️ Ticket" on the Ticket
+    card; one that starts but whose Arr call didn't run does the same and
+    deletes the Progress card."""
     q = update.callback_query
     await q.answer()
     try:
@@ -606,7 +684,7 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
         return
     if not await _require_admin(q, ctx, action_label=f"_apply_fix:{strategy}"):
         return
-    # Read before the working-state edit below strips the keyboard.
+    # Read before the first edit below strips the keyboard.
     from_list = _opened_from_list(q.message)
     retry = q.data
     seerr: SeerrClient = ctx.bot_data["seerr"]
@@ -615,15 +693,15 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
     store: UserStore = ctx.bot_data["store"]
     action_name = "Redownload" if strategy == "redownload" else "Mark Failed"
 
-    # Working-state edit BEFORE any network call: strips the Fix
-    # submenu so it can't be tapped again while the Seerr+Arr calls run.
-    await edit_or_send(q, f"⏳ {action_name} for #{issue_id} - working...")
+    # Edit BEFORE any network call: strips the Fix choices so they can't be
+    # tapped again while the Seerr calls run.
+    await edit_or_send(q, f"⏳ Starting {action_name} for #{issue_id}...")
 
     fix, err = await _resolve_fix_context(seerr, issue_id, action_name=action_name)
     if err is not None:
         fetch_failed = err.startswith(_FETCH_FAILED)
-        await _edit_result(q, ctx, err, _result_markup(
-            from_list, retry if fetch_failed else None))
+        await _edit_result(q, ctx, err, _fix_end_markup(
+            issue_id, from_list, retry if fetch_failed else None))
         return
     assert fix is not None
 
@@ -635,19 +713,26 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
         await _edit_result(q, ctx,
             f"⏳ Another fix for {fix.label or f'#{issue_id}'} is already "
             "running. Wait for its result before retrying.",
-            _result_markup(from_list),
+            _fix_end_markup(issue_id, from_list),
         )
         return
     try:
+        # The Fix has started: its progress goes on a new Progress card and
+        # the Ticket card shows the Ticket again.
+        card = _ProgressCard(ctx, q.message.chat_id)
+        await card.show(f"⏳ {action_name} for #{issue_id} - working...")
+        await _restore_ticket_card(q, ctx, issue_id, from_list)
+
         action: FixAction = "fix" if strategy == "redownload" else "mark_failed"
         result = await _run_arr_action(
             fix.media, fix.season, fix.episode, radarr, sonarr, action=action,
         )
 
         if result.status == "failed":
+            await card.delete()
             await _edit_result(
                 q, ctx, f"⚠️ {action_name} for #{issue_id} didn't run: {result.message}",
-                _result_markup(from_list, retry))
+                _fix_end_markup(issue_id, from_list, retry))
             return
 
         # ok or partial: always log the autofix event (mirrors _submit_issue,
@@ -668,28 +753,22 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
             except Exception:
                 logger.exception("failed to enqueue pending autofix for #%d", issue_id)
                 prefix = "🔧" if result.ok else "⚠️"
-                await _edit_result(q, ctx,
+                await card.show(
                     f"{prefix} {action_name} for #{issue_id} ({result.message}), "
-                    "but couldn't enqueue completion notification.",
-                    _result_markup(from_list),
-                )
+                    "but couldn't enqueue completion notification.")
                 return
 
         prefix = "🔧" if result.ok else "⚠️"
         tail = "\n\n🔔 I'll DM when the new file finishes downloading." if result.should_poll else ""
-        markup = _result_markup(from_list)
-        outcome = await _edit_result(q, ctx,
-            f"{prefix} {action_name} for #{issue_id}.\n{fix.label}\n\n{result.message}{tail}",
-            markup,
-        )
-        # Attach the outcome message as the morphing progress card (the
-        # /issue flow does the same with its confirmation; without this,
-        # admin-triggered fixes never showed live replacement progress).
-        if pending_id and getattr(outcome, "message_id", None):
+        await card.show(
+            f"{prefix} {action_name} for #{issue_id}.\n{fix.label}\n\n{result.message}{tail}")
+        # The poller paints download progress onto the Progress card. It has
+        # no keyboard: the Ticket card keeps its buttons, and its "⬅️ Tickets"
+        # row when it was opened from the list.
+        if pending_id and card.message_id is not None:
             try:
-                await store.set_autofix_message(
-                    pending_id, outcome.message_id,
-                    reply_markup=markup.to_json() if markup is not None else "")
+                await store.set_autofix_message(pending_id, card.message_id,
+                                                reply_markup="")
             except Exception:
                 logger.exception("couldn't attach autofix card for #%d", issue_id)
         return

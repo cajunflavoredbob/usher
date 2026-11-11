@@ -112,7 +112,8 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _paint_progress(ctx: ContextTypes.DEFAULT_TYPE, store: UserStore,
                           fix, final: str = "") -> None:
-    """Morph the /issue confirmation message through the replacement: live
+    """Paint a fix's Progress card (the /issue confirmation, or the new
+    message an admin Fix sends) through the replacement: live
     queue percent/ETA while downloading, a final line on completion or
     timeout. Each edit keeps the card's stored keyboard. Legacy rows (no
     message_id) keep the send-only behavior. All
@@ -148,7 +149,8 @@ async def _paint_progress(ctx: ContextTypes.DEFAULT_TYPE, store: UserStore,
         if line == fix.last_progress:
             return
         # An edit without reply_markup drops the keyboard, so pass back the
-        # one the card was sent with (a Hub's back button).
+        # one the card was sent with (a Hub /issue card's back button; a
+        # typed /issue card and an admin Fix's card store none).
         markup = (InlineKeyboardMarkup.de_json(json.loads(fix.reply_markup),
                                                ctx.bot)
                   if fix.reply_markup else None)

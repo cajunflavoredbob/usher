@@ -52,8 +52,7 @@ def test_try_begin_action_claims_once():
 
 
 async def test_apply_fix_strips_buttons_before_network_calls():
-    """The FIRST edit must be the working state (no keyboard), before any
-    Seerr/Arr call resolves."""
+    """The first edit is the Starting state with no keyboard."""
     upd = make_update(callback_data="tkfd:42", user_id=999)
     ctx = make_ctx(admin_id=999)
     ctx.bot_data["seerr"].get_issue.return_value = _issue()
@@ -61,7 +60,7 @@ async def test_apply_fix_strips_buttons_before_network_calls():
         "ok", steps_done=["delete", "search"], poll_info={"movie_id": 5})
     await _apply_fix(upd, ctx, strategy="redownload")
     first = upd.callback_query.edits[0]
-    assert "working" in first["text"]
+    assert "Starting" in first["text"]
     assert first.get("reply_markup") is None
 
 

@@ -14,6 +14,14 @@ from seerr import IssueListItem
 from tests._handler_harness import make_ctx, make_update
 
 
+def _card_text(ctx) -> str:
+    """The Progress card's latest text: its last edit, else its first send."""
+    edits = ctx.bot.edit_message_text.call_args_list
+    if edits:
+        return edits[-1].kwargs["text"]
+    return ctx.bot.send_message.call_args.kwargs["text"]
+
+
 def _issue(*, media_type: str = "movie", tmdb_id: int = 12345,
            season=None, episode=None) -> IssueListItem:
     return IssueListItem(
@@ -71,9 +79,8 @@ async def test_movie_redownload_happy_path_enqueues_poller():
     # log_autofix called
     ctx.bot_data["store"].log_autofix.assert_called_once()
 
-    # Success message edited in
-    assert upd.callback_query.edits
-    text = upd.callback_query.edits[-1]["text"]
+    # Success message on the Progress card
+    text = _card_text(ctx)
     assert "🔧 Redownload for #42" in text
     assert "Inception (2010)" in text
     assert "I'll DM when the new file finishes" in text
@@ -94,7 +101,7 @@ async def test_movie_mark_failed_happy_path():
     await _apply_fix(upd, ctx, strategy="mark_failed")
     ctx.bot_data["radarr"].mark_failed.assert_called_once()
     ctx.bot_data["store"].add_pending_autofix.assert_called_once()
-    assert "🔧 Mark Failed for #42" in upd.callback_query.edits[-1]["text"]
+    assert "🔧 Mark Failed for #42" in _card_text(ctx)
 
 
 # --- failed path: get_issue fails ---
@@ -152,7 +159,7 @@ async def test_partial_success_still_enqueues_poller():
     # Poller IS enqueued (should_poll is True because 'search' is in steps_done)
     ctx.bot_data["store"].add_pending_autofix.assert_called_once()
     # Message uses the partial prefix
-    text = upd.callback_query.edits[-1]["text"]
+    text = _card_text(ctx)
     assert "⚠️ Mark Failed for #42" in text
 
 
@@ -191,9 +198,9 @@ async def test_arr_failure_no_enqueue():
 
 
 async def test_apply_fix_attaches_progress_card_message():
-    """Admin-triggered fixes must attach their outcome message as the
-    morphing progress card (0.16.0 only did this on the /issue path, so
-    ticket-menu fixes never morphed)."""
+    """Admin-triggered fixes must attach their Progress card (the new
+    message sent when the Fix starts) to the enqueued row, so the poller
+    paints progress onto it."""
     from fix_result import FixResult
     from bot import tickets as tickets_mod
     from bot.tickets import _apply_fix
@@ -204,6 +211,7 @@ async def test_apply_fix_attaches_progress_card_message():
     ctx.bot_data["seerr"].get_media_title.return_value = ("Show", "2026")
     ctx.bot_data["seerr"].get_tv_seasons.return_value = ([], 777)
     upd = make_update(callback_data="tkfd:12", user_id=999)
+    ctx.bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=88))
     result = FixResult(status="ok", message="deleted + search started",
                        steps_done=["delete", "search"],
                        poll_info={"series_id": 5, "episode_id": 9})
@@ -218,4 +226,4 @@ async def test_apply_fix_attaches_progress_card_message():
         await _apply_fix(upd, ctx, strategy="redownload")
     ctx.bot_data["store"].set_autofix_message.assert_awaited_once()
     args = ctx.bot_data["store"].set_autofix_message.call_args.args
-    assert args[0] == 41  # the enqueued row gets the outcome message
+    assert args[:2] == (41, 88)  # the enqueued row gets the Progress card

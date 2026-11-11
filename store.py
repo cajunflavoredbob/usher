@@ -110,9 +110,10 @@ class PendingAutofix:
     issue_url: str
     started_at: str
     timeout_at: str
-    message_id: Optional[int] = None    # the confirmation message that morphs
-                                        # into a progress card (None = legacy
-                                        # row / send-only behavior)
+    message_id: Optional[int] = None    # the fix's Progress card (the /issue
+                                        # confirmation or an admin Fix's new
+                                        # message; None = legacy row /
+                                        # send-only behavior)
     last_progress: str = ""             # last rendered progress line (edit
                                         # dedupe)
     bumped: int = 0                     # SABnzbd priority boost applied
@@ -828,7 +829,7 @@ class UserStore:
 
     async def set_autofix_message(self, pending_id: int, message_id: int,
                                   reply_markup: str = "") -> None:
-        """Attach the confirmation message a fix's progress card lives on,
+        """Attach the message a fix's Progress card lives on,
         with its keyboard as JSON ("" for none) so progress edits keep it."""
 
         def _do():
