@@ -68,7 +68,7 @@ DV_INFO: Final = "dvi"                # dvi:<version>:<media_type>:<tmdb_id>
 SUB_ADD: Final = "subadd"             # subadd:<media_type>:<tmdb_id>
 SUB_DEL: Final = "subdel"             # subdel:<sub_id> from /subscriptions
 
-# --- Admin provisioning (/invite, /uninvite) --------------------------------
+# --- Admin provisioning (/invite, /uninvite, the Admin Hub's Shares) ---------
 INV_LIB: Final = "invl"               # invl:<version>:<section_id> toggle
 INV_ALL: Final = "inva"               # inva:<version> select all libraries
 INV_DONE: Final = "invd"              # invd:<version> proceed to confirm
@@ -76,6 +76,8 @@ INV_GO: Final = "invgo"               # invgo:<version> send the invite
 INV_CANCEL: Final = "invx"            # invx:<version> cancel the invite flow
 UNINV_GO: Final = "uninv"             # uninv:<share_id>:<a|p> confirmed removal
 UNINV_KEEP: Final = "uninvk"          # dismiss the /uninvite confirm card
+SHARE_VIEW: Final = "shv"             # shv:<share_id> one Share's view
+SHARE_REMOVE: Final = "shrm"          # shrm:<share_id> Remove -> confirm card
 
 # --- Post-autofix resolve follow-up ----------------------------------------
 RESOLVE: Final = "resolve"            # resolve:<issue_id>:yes|no|skip
@@ -98,3 +100,8 @@ TICKETS_REPORT: Final = "tkhr"        # Tickets Hub "Report a problem" (issue
                                       # conversation entry point)
 TICKETS_LIST: Final = "tkhl"          # Tickets Hub list button and a detail
                                       # card's "⬅️ Tickets": show the list
+ADMIN_INVITE: Final = "admi"          # Admin Hub "Invite" (invite conversation
+                                      # entry point)
+ADMIN_SHARES: Final = "adms"          # adms:<page> Admin Hub "Shares" (page 0),
+                                      # Prev/Next and "⬅️ Shares"
+ADMIN_STATUS: Final = "admt"          # Admin Hub "Status" (global handler)

@@ -52,6 +52,10 @@ class PlexShare:
     username: str
     accepted: bool   # False = invite still pending
     all_libraries: bool
+    # Titles of the shared Libraries when the listing names them (it nests
+    # a <Section> per Library, with shared="1" on the shared ones); empty
+    # when it names none.
+    libraries: tuple[str, ...] = ()
 
 
 @dataclass
@@ -190,6 +194,10 @@ class PlexClient:
                     username=share.get("username") or "",
                     accepted=bool((share.get("acceptedAt") or "").strip()),
                     all_libraries=share.get("allLibraries") == "1",
+                    libraries=tuple(
+                        sec.get("title") or "?"
+                        for sec in share.findall("Section")
+                        if sec.get("shared") == "1"),
                 ))
             except (TypeError, ValueError):
                 continue

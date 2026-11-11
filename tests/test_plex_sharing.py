@@ -100,6 +100,26 @@ async def test_list_shares_parses_pending_and_accepted(tmp_path):
     await c.close()
 
 
+async def test_list_shares_reads_shared_library_titles(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="""<?xml version="1.0"?>
+<MediaContainer>
+  <SharedServer id="71" username="friend" email="friend@example.com"
+                acceptedAt="1700000000" allLibraries="0">
+    <Section id="1" key="1" title="Movies" type="movie" shared="1"/>
+    <Section id="2" key="2" title="Music" type="artist" shared="0"/>
+    <Section id="3" key="3" title="TV Shows" type="show" shared="1"/>
+  </SharedServer>
+  <SharedServer id="72" username="" email="new@example.com"
+                acceptedAt="" allLibraries="1"/>
+</MediaContainer>""")
+
+    c = _client(handler, tmp_path)
+    shares = await c.list_shares("tok", "mid-1")
+    assert [s.libraries for s in shares] == [("Movies", "TV Shows"), ()]
+    await c.close()
+
+
 async def test_remove_share_deletes_v2(tmp_path):
     captured = {}
 

@@ -14,7 +14,7 @@ A Telegram bot that lets your users report media issues to [Seerr](https://seerr
   - **Explicit confirmation** before any destructive action
 - **Admin web UI** at `/admin`: first-run setup wizard, settings tabs (Telegram / Seerr / Auto-fix / Webhook / Account), connection **Test** buttons, encrypted backups, and restore.
 - Works in DMs or any Telegram group the bot is added to (per-user conversation state).
-- Admin gets `/status` for connection diagnostics and a startup health DM.
+- Admin gets `/admin`, a DM-only Hub to invite someone to the Plex server, see and remove Shares, and check connections, plus a startup health DM.
 
 ## How it works
 

@@ -35,6 +35,8 @@ from bot.autofix_poll import poll_pending_autofixes
 from bot.request_watch import poll_request_watches
 from bot.callback_prefixes import (
     ACCOUNT_UNLINK,
+    ADMIN_SHARES,
+    ADMIN_STATUS,
     HUB_OPEN,
     REQUESTS_MINE,
     REQUESTS_SUBS,
@@ -50,6 +52,8 @@ from bot.callback_prefixes import (
     RQ_INFO_DISMISS,
     RQ_LIST_CANCEL,
     LINK_HELP,
+    SHARE_REMOVE,
+    SHARE_VIEW,
     TK_BACK,
     TK_BACK_LIST,
     TK_CLOSE,
@@ -60,12 +64,14 @@ from bot.callback_prefixes import (
     TK_OPEN,
 )
 from bot.issue_flow import _issue_conversation
-from bot.hub import hub_open_callback
+from bot.admin_hub import ADMIN_HUB, cmd_admin, refuse_outside_admin_dm
+from bot.hub import end_markup, hub_open_callback
 from bot.link_flow import (_link_conversation, account_unlink, cmd_account,
                            cmd_link_didnt_work, cmd_unlink)
 from bot.discover_cmd import (cmd_trending, dv_category, dv_info, dv_page,
                               trending_hub)
-from bot.invite_flow import (_INV_KEYS, _invite_conversation, cmd_uninvite,
+from bot.invite_flow import (_INV_KEYS, _invite_conversation, admin_shares,
+                             cmd_uninvite, share_remove, share_view,
                              uninvite_cancel, uninvite_go)
 from bot.subscriptions import (cmd_subscriptions, sub_add, sub_del,
                                subscriptions_hub)
@@ -74,8 +80,11 @@ from bot.request_flow import (_RQ_KEYS, _request_conversation,
 from bot.requests_cmd import cmd_requests, requests_hub_mine, rq_list_cancel
 from bot.resolve_flow import _resolve_conversation
 from bot.shared import (
+    edit_or_send,
+    force_end_flow_conversations,
     format_status,
     global_btn_gate,
+    record_btn,
     reset_stale_flows,
     schedule_clean_exit,
     unmatched_callback,
@@ -268,7 +277,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    # Admin path: keeps the connection-status block + the admin-only /status hint.
+    # Admin path: keeps the connection-status block + the /admin line.
     summary = await _check_connections(ctx.application)
     # HTML + escape: format_status interpolates upstream error text (see
     # the startup DM note in _post_init).
@@ -282,13 +291,12 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "  /account — link or unlink your Plex account",
         "  /request — new request, your requests, trending, subscriptions",
         "  /tickets — report a problem or check on your tickets",
-        "  /invite — share the Plex server with someone (admin only)",
-        "  /uninvite — revoke someone's access (admin only)",
-        "  /status — connection diagnostics (admin only)",
+        "  /admin — invite someone, see and remove Shares, connection status",
         "  /help — show this",
         "",
         "(/link, /unlink, /issue, /requests, /trending and /subscriptions "
         "still work when typed.)",
+        "(/invite, /uninvite and /status still work when typed.)",
     ]
     await update.effective_message.reply_text(
         "\n".join(lines), parse_mode="HTML"
@@ -300,14 +308,30 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user.id != ctx.bot_data.get("admin_id"):
-        await update.effective_message.reply_text("Admin only.")
+    if await refuse_outside_admin_dm(update, ctx):
         return
     summary = await _check_connections(ctx.application)
     await update.effective_message.reply_text(
         f"<b>Connection status:</b>\n{format_status(summary)}",
         parse_mode="HTML",
     )
+
+
+async def admin_hub_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin Hub "Status": the /status message, edited into the tapped Hub
+    message with "⬅️ Admin". The probes can take a while with a service
+    down, so the message says it is checking first."""
+    if await refuse_outside_admin_dm(update, ctx):
+        return
+    q = update.callback_query
+    await q.answer()
+    force_end_flow_conversations(ctx, update)
+    await edit_or_send(q, "📶 Checking connections…")
+    summary = await _check_connections(ctx.application)
+    sent = await edit_or_send(
+        q, f"<b>Connection status:</b>\n{format_status(summary)}",
+        parse_mode="HTML", reply_markup=end_markup(ADMIN_HUB))
+    record_btn(ctx.application, update.effective_user.id, sent)
 
 
 def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store: UserStore,
@@ -373,6 +397,7 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CommandHandler("unlink", cmd_unlink))
     app.add_handler(CommandHandler("account", cmd_account))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CommandHandler("tickets", cmd_tickets))
     app.add_handler(CommandHandler("requests", cmd_requests))
     app.add_handler(CommandHandler("trending", cmd_trending))
@@ -427,6 +452,16 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     # problem is an issue-conversation entry).
     app.add_handler(CallbackQueryHandler(tickets_hub_list,
                                          pattern=fr"^{TICKETS_LIST}$"))
+    # Admin Hub: Shares (list pages, a Share's view, its Remove) and Status
+    # (Invite is an invite-conversation entry).
+    app.add_handler(CallbackQueryHandler(admin_shares,
+                                         pattern=fr"^{ADMIN_SHARES}:\d+$"))
+    app.add_handler(CallbackQueryHandler(share_view,
+                                         pattern=fr"^{SHARE_VIEW}:\d+$"))
+    app.add_handler(CallbackQueryHandler(share_remove,
+                                         pattern=fr"^{SHARE_REMOVE}:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_hub_status,
+                                         pattern=fr"^{ADMIN_STATUS}$"))
     # MUST stay the last callback handler in the default group:
     # catches taps on keyboards whose conversation has timed out or ended.
     app.add_handler(CallbackQueryHandler(unmatched_callback))
@@ -477,15 +512,13 @@ _BOT_COMMANDS = [
     ("help", "show commands and status"),
 ]
 _ADMIN_BOT_COMMANDS = _BOT_COMMANDS + [
-    ("invite", "share the Plex server with someone"),
-    ("uninvite", "revoke someone's Plex access"),
-    ("status", "connection diagnostics"),
+    ("admin", "invite someone, Shares, connection status"),
 ]
 
 
 async def _register_commands(app: Application) -> None:
     """Publish the command menu: the default scope for everyone, plus an
-    admin-chat scope that appends /status. Failure is non-fatal (the menu
+    admin-chat scope that appends /admin. Failure is non-fatal (the menu
     is cosmetic; commands work regardless)."""
     from telegram import BotCommand, BotCommandScopeChat
     try:
