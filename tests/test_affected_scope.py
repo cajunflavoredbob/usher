@@ -60,7 +60,7 @@ def test_extract_tolerates_garbage_values():
     (1, 5, "Season 1, Episode 5"),
     (2, None, "Season 2"),
     (None, None, "All seasons"),
-    (0, None, "All seasons"),   # Seerr uses season 0 for whole-series issues
+    (0, None, "All seasons"),   # Seerr uses season 0 for whole-series Tickets
 ])
 def test_scope_label_tv(season, episode, expected):
     assert format_scope_label("tv", season, episode) == expected
@@ -82,9 +82,9 @@ def test_scope_label_unknown_media_empty():
 
 
 def _seerr(*, season=None, episode=None, fail=False):
-    issue = SimpleNamespace(problem_season=season, problem_episode=episode)
+    ticket = SimpleNamespace(problem_season=season, problem_episode=episode)
     get_issue = AsyncMock(side_effect=RuntimeError("seerr down")) if fail \
-        else AsyncMock(return_value=issue)
+        else AsyncMock(return_value=ticket)
     return SimpleNamespace(get_issue=get_issue)
 
 

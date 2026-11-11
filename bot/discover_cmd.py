@@ -24,7 +24,7 @@ from bot.callback_prefixes import (
     DV_INFO,
     DV_PAGE,
     REQUESTS_TRENDING,
-    RQ_FROM_ISSUE,
+    RQ_FROM_TICKET,
 )
 from bot.hub import back_button, came_from_hub, end_markup
 from bot.media_card import STATUS_NOTES, send_detail_card
@@ -98,7 +98,7 @@ def _render(ctx: ContextTypes.DEFAULT_TYPE,
         # all come along for free.
         btn_row.append(InlineKeyboardButton(
             keycap,
-            callback_data=f"{RQ_FROM_ISSUE}:{r.media_type}:{r.tmdb_id}"))
+            callback_data=f"{RQ_FROM_TICKET}:{r.media_type}:{r.tmdb_id}"))
         if len(btn_row) == KB_BUTTONS_PER_ROW:
             rows.append(btn_row)
             btn_row = []

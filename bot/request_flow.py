@@ -1,7 +1,7 @@
 """/request conversation: search, pick media, pick seasons (TV), confirm,
 submit to Seerr as the linked user. Bare /request opens the Requests Hub; the
 Hub's "New request" button (request_hub_new) and a pick from a Hub-opened list
-(request_from_issue) start the conversation with the Hub as its origin, so its
+(request_from_ticket) start the conversation with the Hub as its origin, so its
 ends carry a back button (and Try again on failures). A typed /request <title>
 keeps its old error and cancel texts with no buttons; a successful submit ends
 with the back button and a Progress card, the same as from the Hub.
@@ -70,7 +70,7 @@ from store import UserStore
 
 from bot.callback_prefixes import (
     RQ_CANCEL,
-    RQ_FROM_ISSUE,
+    RQ_FROM_TICKET,
     RQ_GO,
     RQ_GO_4K,
     RQ_INFO,
@@ -187,7 +187,7 @@ def _request_conversation() -> ConversationHandler:
             # Requests Hub "New request" button.
             CallbackQueryHandler(request_hub_new, pattern=fr"^{REQUESTS_NEW}$"),
             # Jump-in from the /issue not-in-library dead-end.
-            CallbackQueryHandler(request_from_issue, pattern=fr"^{RQ_FROM_ISSUE}:"),
+            CallbackQueryHandler(request_from_ticket, pattern=fr"^{RQ_FROM_TICKET}:"),
         ],
         states={
             RQ_TITLE: [
@@ -298,7 +298,7 @@ async def request_hub_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     return RQ_TITLE
 
 
-async def request_from_issue(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Entry via the /issue dead-end button. The tapped media is already
     known, so this drops straight into the season picker / confirm."""
     q = update.callback_query
@@ -321,7 +321,7 @@ async def request_from_issue(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
         await end_flow(update, ctx, "Couldn't parse selection.", hub, REQUESTS_NEW,
                        typed_text="Couldn't parse selection. /request to start over.")
         return ConversationHandler.END
-    # Title travels via user_data (stashed by issue_flow when it renders the
+    # Title travels via user_data (stashed by ticket_flow when it renders the
     # button); fall back to a TMDb lookup if it got clobbered.
     stash = ctx.user_data.pop("rq_jump_media", None) or {}
     title = stash.get("title")
@@ -333,7 +333,7 @@ async def request_from_issue(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
         except Exception:
             title, year = f"TMDb {tmdb_id}", ""
     # Bump the version even though this entry runs no search: two
-    # consecutive from-issue jumps must not share a version, or the first
+    # consecutive from-ticket jumps must not share a version, or the first
     # jump's still-gated season/confirm buttons would pass the version
     # check and act on the second flow's draft.
     ctx.user_data["rq_search_version"] = _current_version(ctx) + 1
@@ -651,7 +651,7 @@ async def _show_season_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                               *, keep_list: bool = False) -> int:
     """keep_list=True (the pick-list path): dead ends reply as a NEW message
     and stay in RQ_PICK_MEDIA so the list survives -- symmetric with the
-    movie toasts. keep_list=False (the from-issue jump, no list exists):
+    movie toasts. keep_list=False (the from-ticket jump, no list exists):
     dead ends edit in place and END."""
     q = update.callback_query
     seerr: SeerrClient = ctx.bot_data["seerr"]

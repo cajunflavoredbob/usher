@@ -24,7 +24,7 @@ def _flat(markup):
             for row in markup.inline_keyboard for b in row]
 
 
-def _issue(**kwargs) -> IssueListItem:
+def _ticket(**kwargs) -> IssueListItem:
     defaults = dict(
         id=5, issue_type=1, status=1, created_at="2026-05-29T12:00:00Z",
         tmdb_id=12345, media_type="movie", problem_season=None,
@@ -34,9 +34,9 @@ def _issue(**kwargs) -> IssueListItem:
     return IssueListItem(**defaults)
 
 
-def _ctx(result=None, *, mark_failed=False, **issue_kwargs):
+def _ctx(result=None, *, mark_failed=False, **ticket_kwargs):
     ctx = make_ctx(admin_id=ADMIN_ID)
-    ctx.bot_data["seerr"].get_issue.return_value = _issue(**issue_kwargs)
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket(**ticket_kwargs)
     ctx.bot.send_message = AsyncMock(
         return_value=SimpleNamespace(message_id=CARD_ID))
     ctx.bot.delete_message = AsyncMock()

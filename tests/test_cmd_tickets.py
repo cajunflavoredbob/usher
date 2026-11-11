@@ -12,7 +12,7 @@ from seerr import IssueListItem
 from tests._handler_harness import make_ctx, make_link, make_update
 
 
-def _issue(id: int = 1, **kwargs) -> IssueListItem:
+def _ticket(id: int = 1, **kwargs) -> IssueListItem:
     defaults = dict(
         id=id,
         issue_type=1,
@@ -31,10 +31,10 @@ def _issue(id: int = 1, **kwargs) -> IssueListItem:
 # --- happy paths ---
 
 
-async def test_admin_lists_all_issues():
+async def test_admin_lists_all_tickets():
     upd = make_update(callback_data="tkhl", user_id=999)
     ctx = make_ctx(admin_id=999)
-    ctx.bot_data["seerr"].list_issues.return_value = ([_issue(id=1), _issue(id=2)], 2)
+    ctx.bot_data["seerr"].list_issues.return_value = ([_ticket(id=1), _ticket(id=2)], 2)
     await tickets_hub_list(upd, ctx)
     # Admin sees "All open tickets" framing.
     text = upd.callback_query.edits[0]["text"]
@@ -45,11 +45,11 @@ async def test_admin_lists_all_issues():
     assert kwargs["as_plex_token"] is None
 
 
-async def test_user_lists_only_their_issues():
+async def test_user_lists_only_their_tickets():
     link = make_link(telegram_id=42, plex_token="user-token")
     upd = make_update(callback_data="tkhl", user_id=42)
     ctx = make_ctx(admin_id=999, link=link)
-    ctx.bot_data["seerr"].list_issues.return_value = ([_issue(id=7)], 1)
+    ctx.bot_data["seerr"].list_issues.return_value = ([_ticket(id=7)], 1)
     await tickets_hub_list(upd, ctx)
     text = upd.callback_query.edits[0]["text"]
     assert "Your open tickets" in text

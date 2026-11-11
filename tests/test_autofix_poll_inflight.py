@@ -23,7 +23,7 @@ def _make_fix(fix_id: int = 1) -> PendingAutofix:
         media_type="movie", radarr_movie_id=555,
         sonarr_series_id=None, sonarr_episode_id=None,
         sonarr_season=None, expected_episode_ids=[],
-        label="Test Movie", issue_id=fix_id, issue_url="http://x/issues/1",
+        label="Test Movie", ticket_id=fix_id, ticket_url="http://x/issues/1",
         started_at=now.strftime("%Y-%m-%d %H:%M:%S"),
         timeout_at=(now + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S"),
     )

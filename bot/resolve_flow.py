@@ -1,4 +1,4 @@
-"""Post-autofix resolve follow-up conversation: ask if it fixed the issue,
+"""Post-autofix resolve follow-up conversation: ask if it fixed the Ticket's problem,
 optionally add a comment, optionally close the ticket."""
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ logger = logging.getLogger("usher")
 async def _resolve_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Conversation_timeout handler. Clears awaiting_comment_for so an
     abandoned 'add a comment' prompt can't swallow a later unrelated DM
-    as a comment on a long-stale issue, and tells the user (the prompt
+    as a comment on a long-stale Ticket, and tells the user (the prompt
     solicited text, so silence would lose their later message)."""
     awaiting = ctx.user_data.pop("awaiting_comment_for", None)
     try:
@@ -86,8 +86,8 @@ async def resolve_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
     try:
-        _, issue_id_s, choice = q.data.split(":")
-        issue_id = int(issue_id_s)
+        _, ticket_id_s, choice = q.data.split(":")
+        ticket_id = int(ticket_id_s)
     except (ValueError, AttributeError):
         await q.edit_message_text(
             "Couldn't parse selection. Manage the ticket with /tickets.")
@@ -111,31 +111,31 @@ async def resolve_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         # Double-tap guard + immediate working state, mirroring
         # tk_close_direct: with concurrent_updates a second tap raced the
         # first (the keyboard stayed live until the post-call edit) and
-        # could re-resolve an already-resolved issue.
-        if not try_begin_action(ctx, f"close:{issue_id}"):
+        # could re-resolve an already-resolved Ticket.
+        if not try_begin_action(ctx, f"close:{ticket_id}"):
             # q was already answered at the top of resolve_start, so a second
             # answer() would be a no-op; just drop the duplicate tap.
             return ConversationHandler.END
         try:
-            await q.edit_message_text(f"⏳ Closing ticket #{issue_id}...")
+            await q.edit_message_text(f"⏳ Closing ticket #{ticket_id}...")
             seerr: SeerrClient = ctx.bot_data["seerr"]
             try:
-                await seerr.resolve_issue(issue_id, as_plex_token=token)
+                await seerr.resolve_issue(ticket_id, as_plex_token=token)
             except PlexTokenInvalidError:
                 await prompt_plex_relink(update, ctx, resume_kind="resolve_close",
-                                         resume_payload={"issue_id": issue_id})
+                                         resume_payload={"ticket_id": ticket_id})
                 return ConversationHandler.END
             except Exception as exc:
                 logger.exception("resolve_issue failed")
-                await q.edit_message_text(f"Couldn't close ticket #{issue_id}. {user_friendly_message(exc)}")
+                await q.edit_message_text(f"Couldn't close ticket #{ticket_id}. {user_friendly_message(exc)}")
                 return ConversationHandler.END
-            await q.edit_message_text(f"✅ Ticket #{issue_id} closed. Thanks!")
+            await q.edit_message_text(f"✅ Ticket #{ticket_id} closed. Thanks!")
             return ConversationHandler.END
         finally:
-            end_action(ctx, f"close:{issue_id}")
+            end_action(ctx, f"close:{ticket_id}")
     # "no" -> ask for comment. Refuse while another text-awaiting flow is
     # active: both conversations would await the next message
-    # and the issue flow, registered first, would swallow this comment as
+    # and the new-Ticket flow, registered first, would swallow this comment as
     # its description. Reply in a NEW message so the buttons stay usable.
     if user_in_conversation(ctx, update, "issue", "ticket_reply"):
         await q.message.reply_text(
@@ -145,7 +145,7 @@ async def resolve_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
     # Copy differs by audience: telling the admin "admin will see it" reads
     # wrong when they ARE the admin.
-    ctx.user_data["awaiting_comment_for"] = issue_id
+    ctx.user_data["awaiting_comment_for"] = ticket_id
     if is_admin:
         await q.edit_message_text(
             "Sorry it's still broken. What's still wrong? "
@@ -160,8 +160,8 @@ async def resolve_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    issue_id = ctx.user_data.get("awaiting_comment_for")
-    if not issue_id:
+    ticket_id = ctx.user_data.get("awaiting_comment_for")
+    if not ticket_id:
         return ConversationHandler.END
     comment = update.effective_message.text.strip()
     if not comment:
@@ -180,11 +180,11 @@ async def resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
         ctx.user_data.pop("awaiting_comment_for", None)
         return ConversationHandler.END
     try:
-        await seerr.add_issue_comment(issue_id, comment, as_plex_token=token)
+        await seerr.add_issue_comment(ticket_id, comment, as_plex_token=token)
     except PlexTokenInvalidError:
         # Carry the typed comment so the resume posts what they already wrote.
         await prompt_plex_relink(update, ctx, resume_kind="resolve_comment",
-                                 resume_payload={"issue_id": issue_id,
+                                 resume_payload={"ticket_id": ticket_id,
                                                  "comment": comment})
         ctx.user_data.pop("awaiting_comment_for", None)
         return ConversationHandler.END
@@ -195,7 +195,7 @@ async def resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
         return ConversationHandler.END
     followup = "" if is_admin else " Admin will follow up."
     await update.effective_message.reply_text(
-        f"💬 Added your comment to ticket #{issue_id}.{followup}"
+        f"💬 Added your comment to ticket #{ticket_id}.{followup}"
     )
     ctx.user_data.pop("awaiting_comment_for", None)
     return ConversationHandler.END
@@ -203,42 +203,42 @@ async def resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
 
 async def _resume_resolve_close(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                                 payload: dict) -> None:
-    """Relink-resume executor: close the issue the revoked token blocked.
+    """Relink-resume executor: close the Ticket the revoked token blocked.
     The fresh token comes from the just-stored link, never the payload."""
-    issue_id = payload["issue_id"]
+    ticket_id = payload["ticket_id"]
     is_admin, token, _ = await token_for(ctx, update.effective_user.id)
     if not is_admin and token is None:
         return  # can't happen right after a successful link; guard anyway
     seerr: SeerrClient = ctx.bot_data["seerr"]
     try:
-        await seerr.resolve_issue(issue_id, as_plex_token=token)
+        await seerr.resolve_issue(ticket_id, as_plex_token=token)
     except Exception as exc:
-        logger.exception("resumed resolve_issue failed for #%d", issue_id)
+        logger.exception("resumed resolve_issue failed for #%d", ticket_id)
         await update.effective_message.reply_text(
-            f"Couldn't close ticket #{issue_id}. {user_friendly_message(exc)}")
+            f"Couldn't close ticket #{ticket_id}. {user_friendly_message(exc)}")
         return
-    await update.effective_message.reply_text(f"✅ Ticket #{issue_id} closed. Thanks!")
+    await update.effective_message.reply_text(f"✅ Ticket #{ticket_id} closed. Thanks!")
 
 
 async def _resume_resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                                   payload: dict) -> None:
     """Relink-resume executor: post the comment the user had already typed."""
-    issue_id = payload["issue_id"]
+    ticket_id = payload["ticket_id"]
     comment = payload["comment"]
     is_admin, token, _ = await token_for(ctx, update.effective_user.id)
     if not is_admin and token is None:
         return
     seerr: SeerrClient = ctx.bot_data["seerr"]
     try:
-        await seerr.add_issue_comment(issue_id, comment, as_plex_token=token)
+        await seerr.add_issue_comment(ticket_id, comment, as_plex_token=token)
     except Exception as exc:
-        logger.exception("resumed add_issue_comment failed for #%d", issue_id)
+        logger.exception("resumed add_issue_comment failed for #%d", ticket_id)
         await update.effective_message.reply_text(
             f"Couldn't add comment. {user_friendly_message(exc)}")
         return
     followup = "" if is_admin else " Admin will follow up."
     await update.effective_message.reply_text(
-        f"💬 Added your comment to ticket #{issue_id}.{followup}"
+        f"💬 Added your comment to ticket #{ticket_id}.{followup}"
     )
 
 

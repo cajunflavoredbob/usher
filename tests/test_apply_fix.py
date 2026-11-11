@@ -22,8 +22,8 @@ def _card_text(ctx) -> str:
     return ctx.bot.send_message.call_args.kwargs["text"]
 
 
-def _issue(*, media_type: str = "movie", tmdb_id: int = 12345,
-           season=None, episode=None) -> IssueListItem:
+def _ticket(*, media_type: str = "movie", tmdb_id: int = 12345,
+            season=None, episode=None) -> IssueListItem:
     return IssueListItem(
         id=42, issue_type=1, status=1, created_at="2026-05-29T12:00:00Z",
         tmdb_id=tmdb_id, media_type=media_type,
@@ -57,7 +57,7 @@ async def test_non_admin_blocked_with_toast_and_audit(caplog):
 async def test_movie_redownload_happy_path_enqueues_poller():
     upd = make_update(callback_data="tkfd:42", user_id=999)
     ctx = make_ctx(admin_id=999)
-    ctx.bot_data["seerr"].get_issue.return_value = _issue(media_type="movie")
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket(media_type="movie")
     ctx.bot_data["seerr"].get_media_title.return_value = ("Inception", "2010")
     ctx.bot_data["radarr"].auto_fix.return_value = FixResult.success(
         "Deleted file and triggered re-search.",
@@ -72,9 +72,9 @@ async def test_movie_redownload_happy_path_enqueues_poller():
     kwargs = ctx.bot_data["store"].add_pending_autofix.call_args.kwargs
     assert kwargs["media_type"] == "movie"
     assert kwargs["radarr_movie_id"] == 555
-    assert kwargs["issue_id"] == 42
-    # issue_url populated (the poller DMs render "Original issue: <url>")
-    assert kwargs["issue_url"] == "http://seerr.example/issues/42"
+    assert kwargs["ticket_id"] == 42
+    # ticket_url populated (the poller DMs render "Original issue: <url>")
+    assert kwargs["ticket_url"] == "http://seerr.example/issues/42"
 
     # log_autofix called
     ctx.bot_data["store"].log_autofix.assert_called_once()
@@ -92,7 +92,7 @@ async def test_movie_redownload_happy_path_enqueues_poller():
 async def test_movie_mark_failed_happy_path():
     upd = make_update(callback_data="tkfm:42", user_id=999)
     ctx = make_ctx(admin_id=999)
-    ctx.bot_data["seerr"].get_issue.return_value = _issue(media_type="movie")
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket(media_type="movie")
     ctx.bot_data["radarr"].mark_failed.return_value = FixResult.success(
         "Blocklisted current release, deleted 'M' file, and triggered re-search.",
         steps_done=["blocklist", "delete", "search"],
@@ -127,7 +127,7 @@ async def test_get_issue_failure_surfaces_friendly_message():
 async def test_whole_season_tv_rejected():
     upd = make_update(callback_data="tkfd:42", user_id=999)
     ctx = make_ctx(admin_id=999)
-    ctx.bot_data["seerr"].get_issue.return_value = _issue(
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket(
         media_type="tv", season=1, episode=None,
     )
     await _apply_fix(upd, ctx, strategy="redownload")
@@ -147,7 +147,7 @@ async def test_partial_success_still_enqueues_poller():
     be enqueued (the new file is incoming) but message reflects the partial."""
     upd = make_update(callback_data="tkfm:42", user_id=999)
     ctx = make_ctx(admin_id=999)
-    ctx.bot_data["seerr"].get_issue.return_value = _issue(media_type="movie")
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket(media_type="movie")
     ctx.bot_data["radarr"].mark_failed.return_value = FixResult.partial(
         "Blocklisted release but couldn't delete file: <permanent>",
         steps_done=["blocklist", "search"],
@@ -168,10 +168,10 @@ async def test_partial_success_still_enqueues_poller():
 
 async def test_partial_without_search_logs_but_does_not_enqueue():
     """The autofix event is logged for every ok/partial result (mirrors
-    _submit_issue); the poller is only enqueued when a search ran."""
+    _submit_ticket); the poller is only enqueued when a search ran."""
     upd = make_update(callback_data="tkfm:42", user_id=999)
     ctx = make_ctx(admin_id=999)
-    ctx.bot_data["seerr"].get_issue.return_value = _issue(media_type="movie")
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket(media_type="movie")
     ctx.bot_data["radarr"].mark_failed.return_value = FixResult.partial(
         "Blocklisted release but search failed: <transient>",
         steps_done=["blocklist", "delete"],
@@ -187,7 +187,7 @@ async def test_partial_without_search_logs_but_does_not_enqueue():
 async def test_arr_failure_no_enqueue():
     upd = make_update(callback_data="tkfd:42", user_id=999)
     ctx = make_ctx(admin_id=999)
-    ctx.bot_data["seerr"].get_issue.return_value = _issue(media_type="movie")
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket(media_type="movie")
     ctx.bot_data["radarr"].auto_fix.return_value = FixResult.failed(
         "Movie isn't in Radarr (not monitored)."
     )
@@ -215,14 +215,14 @@ async def test_apply_fix_attaches_progress_card_message():
     result = FixResult(status="ok", message="deleted + search started",
                        steps_done=["delete", "search"],
                        poll_info={"series_id": 5, "episode_id": 9})
-    issue = SimpleNamespace(id=12, media_type="tv", tmdb_id=1399,
-                            problem_season=1, problem_episode=2)
+    ticket = SimpleNamespace(id=12, media_type="tv", tmdb_id=1399,
+                             problem_season=1, problem_episode=2)
     with patch.object(tickets_mod, "_run_arr_action",
                       AsyncMock(return_value=result)), \
-         patch.object(tickets_mod, "_issue_for_fix",
-                      AsyncMock(return_value=(issue, None)), create=True):
-        # _resolve_fix_context reads the issue via seerr.get_issue
-        ctx.bot_data["seerr"].get_issue.return_value = issue
+         patch.object(tickets_mod, "_ticket_for_fix",
+                      AsyncMock(return_value=(ticket, None)), create=True):
+        # _resolve_fix_context reads the Ticket via seerr.get_issue
+        ctx.bot_data["seerr"].get_issue.return_value = ticket
         await _apply_fix(upd, ctx, strategy="redownload")
     ctx.bot_data["store"].set_autofix_message.assert_awaited_once()
     args = ctx.bot_data["store"].set_autofix_message.call_args.args

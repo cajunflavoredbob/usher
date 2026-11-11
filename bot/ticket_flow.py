@@ -1,4 +1,4 @@
-"""/issue conversation: search, pick media, pick season/episode, pick type,
+"""/issue (new Ticket) conversation: search, pick media, pick season/episode, pick type,
 take description, optional auto-fix offer, submit to Seerr. Entered by typed
 /issue or by the Tickets Hub's "Report a problem" button; a report started from
 the Hub ends with "⬅️ Tickets" (plus Try again on errors), except when a
@@ -32,16 +32,16 @@ from sonarr import SonarrClient
 from store import UserStore
 
 from bot.callback_prefixes import (
-    ISSUE_AUTOFIX_CONFIRM,
-    ISSUE_AUTOFIX_OFFER,
-    ISSUE_CANCEL,
-    ISSUE_EPISODE,
-    ISSUE_EPISODE_PAGE,
-    ISSUE_MEDIA,
-    ISSUE_RESEARCH_PARENT,
-    ISSUE_SEASON,
+    TICKET_AUTOFIX_CONFIRM,
+    TICKET_AUTOFIX_OFFER,
+    TICKET_CANCEL,
+    TICKET_EPISODE,
+    TICKET_EPISODE_PAGE,
+    TICKET_MEDIA,
+    TICKET_RESEARCH_PARENT,
+    TICKET_SEASON,
     ISSUE_TYPE,
-    RQ_FROM_ISSUE,
+    RQ_FROM_TICKET,
     TICKETS_REPORT,
 )
 from bot.hub import (back_button, end_flow, end_markup, hub_origin,
@@ -78,7 +78,7 @@ from const import (
     AUTOFIX_TIMEOUT_HOURS,
     EPISODE_BUTTONS_PER_ROW,
     EPISODE_PICKER_PAGE_SIZE,
-    ISSUE_FLOW_TIMEOUT_S,
+    TICKET_FLOW_TIMEOUT_S,
     KB_BUTTONS_PER_ROW,
     SEARCH_RESULT_LIMIT,
     SEASON_BUTTONS_PER_ROW,
@@ -87,7 +87,7 @@ from const import (
 
 logger = logging.getLogger("usher")
 
-# --- Issue conversation ------------------------------------------------------
+# --- New Ticket conversation ---------------------------------------------------
 
 
 def _tickets_origin(ctx) -> Optional[str]:
@@ -96,8 +96,8 @@ def _tickets_origin(ctx) -> Optional[str]:
     return TICKETS_HUB if hub_origin(ctx) == TICKETS_HUB else None
 
 
-async def _issue_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    """Conversation_timeout handler. Clears every user_data key the issue
+async def _ticket_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Conversation_timeout handler. Clears every user_data key the new-Ticket
     flow can populate so an abandoned conversation doesn't leak state for
     the life of the process (a stale research_parent otherwise resurfaces
     as a wrong search suggestion in the next /issue)."""
@@ -123,11 +123,11 @@ async def _issue_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
                 )
                 record_btn(ctx.application, update.effective_user.id, sent)
     except Exception:
-        logger.debug("issue-timeout notice failed (non-fatal)", exc_info=True)
+        logger.debug("new-Ticket timeout notice failed (non-fatal)", exc_info=True)
     return ConversationHandler.END
 
 
-async def _issue_expect_text_title(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+async def _ticket_expect_text_title(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Non-text (photo/sticker/voice) sent where a title is expected. Without
     this the message vanished with no response at all."""
     await update.effective_message.reply_text(
@@ -135,7 +135,7 @@ async def _issue_expect_text_title(update: Update, ctx: ContextTypes.DEFAULT_TYP
     return TITLE
 
 
-async def _issue_expect_text_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+async def _ticket_expect_text_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Non-text sent where the description is expected (screenshots are the
     common case)."""
     await update.effective_message.reply_text(
@@ -144,52 +144,52 @@ async def _issue_expect_text_description(update: Update, ctx: ContextTypes.DEFAU
     return DESCRIPTION
 
 
-def _issue_conversation() -> ConversationHandler:
+def _new_ticket_conversation() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[
-            CommandHandler("issue", issue_start),
-            CallbackQueryHandler(issue_hub_report, pattern=fr"^{TICKETS_REPORT}$"),
+            CommandHandler("issue", ticket_start),
+            CallbackQueryHandler(ticket_hub_report, pattern=fr"^{TICKETS_REPORT}$"),
         ],
         states={
             TITLE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, issue_title),
-                MessageHandler(~filters.COMMAND, _issue_expect_text_title),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, ticket_title),
+                MessageHandler(~filters.COMMAND, _ticket_expect_text_title),
             ],
             PICK_MEDIA: [
-                CallbackQueryHandler(issue_pick_media, pattern=fr"^{ISSUE_MEDIA}:"),
-                CallbackQueryHandler(issue_research_parent, pattern=fr"^{ISSUE_RESEARCH_PARENT}$"),
+                CallbackQueryHandler(ticket_pick_media, pattern=fr"^{TICKET_MEDIA}:"),
+                CallbackQueryHandler(ticket_research_parent, pattern=fr"^{TICKET_RESEARCH_PARENT}$"),
             ],
-            PICK_SEASON: [CallbackQueryHandler(issue_pick_season, pattern=fr"^{ISSUE_SEASON}:")],
+            PICK_SEASON: [CallbackQueryHandler(ticket_pick_season, pattern=fr"^{TICKET_SEASON}:")],
             PICK_EPISODE: [
-                CallbackQueryHandler(issue_episode_page, pattern=fr"^{ISSUE_EPISODE_PAGE}:"),
-                CallbackQueryHandler(issue_pick_episode, pattern=fr"^{ISSUE_EPISODE}:"),
+                CallbackQueryHandler(ticket_episode_page, pattern=fr"^{TICKET_EPISODE_PAGE}:"),
+                CallbackQueryHandler(ticket_pick_episode, pattern=fr"^{TICKET_EPISODE}:"),
             ],
-            PICK_TYPE: [CallbackQueryHandler(issue_pick_type, pattern=fr"^{ISSUE_TYPE}:")],
+            PICK_TYPE: [CallbackQueryHandler(ticket_pick_type, pattern=fr"^{ISSUE_TYPE}:")],
             DESCRIPTION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, issue_description),
-                MessageHandler(~filters.COMMAND, _issue_expect_text_description),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, ticket_description),
+                MessageHandler(~filters.COMMAND, _ticket_expect_text_description),
             ],
-            OFFER_AUTOFIX: [CallbackQueryHandler(issue_offer_autofix, pattern=fr"^{ISSUE_AUTOFIX_OFFER}:")],
-            CONFIRM_AUTOFIX: [CallbackQueryHandler(issue_confirm_autofix, pattern=fr"^{ISSUE_AUTOFIX_CONFIRM}:")],
+            OFFER_AUTOFIX: [CallbackQueryHandler(ticket_offer_autofix, pattern=fr"^{TICKET_AUTOFIX_OFFER}:")],
+            CONFIRM_AUTOFIX: [CallbackQueryHandler(ticket_confirm_autofix, pattern=fr"^{TICKET_AUTOFIX_CONFIRM}:")],
             # TypeHandler, not MessageHandler(filters.ALL): PTB's message filters
             # reject callback-query updates, so a MessageHandler TIMEOUT
             # never fires when the flow was abandoned at a button step.
-            ConversationHandler.TIMEOUT: [TypeHandler(Update, _issue_timeout)],
+            ConversationHandler.TIMEOUT: [TypeHandler(Update, _ticket_timeout)],
         },
         fallbacks=[
-            CommandHandler("cancel", issue_cancel),
-            CallbackQueryHandler(issue_cancel, pattern=fr"^{ISSUE_CANCEL}$"),
+            CommandHandler("cancel", ticket_cancel),
+            CallbackQueryHandler(ticket_cancel, pattern=fr"^{TICKET_CANCEL}$"),
         ],
         per_user=True,
         per_chat=True,
         allow_reentry=True,
         name="issue",
         persistent=False,
-        conversation_timeout=ISSUE_FLOW_TIMEOUT_S,
+        conversation_timeout=TICKET_FLOW_TIMEOUT_S,
     )
 
 
-async def issue_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+async def ticket_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     # A typed /issue is never a Hub flow, even if a Hub left its mark behind.
     set_hub_origin(ctx, None)
     if await require_seerr(update, ctx) is None:
@@ -218,7 +218,7 @@ async def issue_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     return TITLE
 
 
-async def issue_hub_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+async def ticket_hub_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Tickets Hub "Report a problem": the /issue title prompt, edited into
     the tapped Hub message. Same gate as typed /issue; its refusals carry the
     back button."""
@@ -315,7 +315,7 @@ async def _show_search_results(
     for i, r in enumerate(results):
         keycap = KEYCAP_DIGITS[i] if i < len(KEYCAP_DIGITS) else str(i + 1)
         btn_row.append(InlineKeyboardButton(
-            keycap, callback_data=f"{ISSUE_MEDIA}:{version}:{r.media_type}:{r.tmdb_id}",
+            keycap, callback_data=f"{TICKET_MEDIA}:{version}:{r.media_type}:{r.tmdb_id}",
         ))
         if len(btn_row) == KB_BUTTONS_PER_ROW:
             rows.append(btn_row)
@@ -331,14 +331,14 @@ async def _show_search_results(
         if parent:
             ctx.user_data["research_parent"] = parent
 
-    cancel_btn = InlineKeyboardButton("🛑 Cancel", callback_data=ISSUE_CANCEL)
+    cancel_btn = InlineKeyboardButton("🛑 Cancel", callback_data=TICKET_CANCEL)
     if parent:
         # Flush the last partial row, then parent on its own row, then Cancel.
         if last_partial_row:
             rows.append(last_partial_row)
         rows.append([InlineKeyboardButton(
             f'🔍 Search "{parent}" instead',
-            callback_data=ISSUE_RESEARCH_PARENT,
+            callback_data=TICKET_RESEARCH_PARENT,
         )])
         rows.append([cancel_btn])
     else:
@@ -363,7 +363,7 @@ async def _show_search_results(
     return PICK_MEDIA
 
 
-async def issue_title(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+async def ticket_title(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.effective_message.text.strip()
     await send_typing(update, ctx)  # search can take seconds on a big library
     return await _show_search_results(
@@ -372,7 +372,7 @@ async def issue_title(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     )
 
 
-async def issue_research_parent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+async def ticket_research_parent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Re-run the search with the parent show name derived from the prior query."""
     q = update.callback_query
     await q.answer()
@@ -387,7 +387,7 @@ async def issue_research_parent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) 
     )
 
 
-async def issue_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+async def ticket_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
     try:
@@ -422,7 +422,7 @@ async def issue_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
             )
             rows.append([InlineKeyboardButton(
                 f'🔍 Search "{parent}" instead',
-                callback_data=ISSUE_RESEARCH_PARENT,
+                callback_data=TICKET_RESEARCH_PARENT,
             )])
         # Not in the library is exactly what /request exists for: offer the
         # jump. The tap enters the request conversation (its entry point
@@ -436,7 +436,7 @@ async def issue_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
             }
             rows.append([InlineKeyboardButton(
                 "📥 Request it instead",
-                callback_data=f"{RQ_FROM_ISSUE}:{media_type}:{tmdb_id}",
+                callback_data=f"{RQ_FROM_TICKET}:{media_type}:{tmdb_id}",
             )])
         hub = _tickets_origin(ctx)
         if hub is None:
@@ -489,13 +489,13 @@ async def _show_season_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     for s in seasons:
         # Season 0 is the Specials bucket; "S0" reads like a glitch.
         btn_label = "Specials" if s.season_number == 0 else f"S{s.season_number}"
-        row.append(InlineKeyboardButton(btn_label, callback_data=f"{ISSUE_SEASON}:{s.season_number}"))
+        row.append(InlineKeyboardButton(btn_label, callback_data=f"{TICKET_SEASON}:{s.season_number}"))
         if len(row) == SEASON_BUTTONS_PER_ROW:
             rows.append(row)
             row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton("🛑 Cancel", callback_data=ISSUE_CANCEL)])
+    rows.append([InlineKeyboardButton("🛑 Cancel", callback_data=TICKET_CANCEL)])
     label = ctx.user_data["media"]["title"]
     if ctx.user_data["media"]["year"]:
         label += f" ({ctx.user_data['media']['year']})"
@@ -512,7 +512,7 @@ async def _show_season_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     return PICK_SEASON
 
 
-async def issue_pick_season(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+async def ticket_pick_season(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
     try:
@@ -544,7 +544,7 @@ def _episode_page_keyboard(season: int, ep_count: int, page: int) -> InlineKeybo
     rows: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
     for ep in range(start, end + 1):
-        row.append(InlineKeyboardButton(f"E{ep}", callback_data=f"{ISSUE_EPISODE}:{ep}"))
+        row.append(InlineKeyboardButton(f"E{ep}", callback_data=f"{TICKET_EPISODE}:{ep}"))
         if len(row) == EPISODE_BUTTONS_PER_ROW:
             rows.append(row)
             row = []
@@ -554,13 +554,13 @@ def _episode_page_keyboard(season: int, ep_count: int, page: int) -> InlineKeybo
         nav: list[InlineKeyboardButton] = []
         if page > 0:
             nav.append(InlineKeyboardButton(
-                "⬅️ Earlier", callback_data=f"{ISSUE_EPISODE_PAGE}:{page - 1}"))
+                "⬅️ Earlier", callback_data=f"{TICKET_EPISODE_PAGE}:{page - 1}"))
         if page < last_page:
             nav.append(InlineKeyboardButton(
-                "➡️ Later", callback_data=f"{ISSUE_EPISODE_PAGE}:{page + 1}"))
+                "➡️ Later", callback_data=f"{TICKET_EPISODE_PAGE}:{page + 1}"))
         rows.append(nav)
-    rows.append([InlineKeyboardButton("📦 Whole season", callback_data=f"{ISSUE_EPISODE}:0")])
-    rows.append([InlineKeyboardButton("🛑 Cancel", callback_data=ISSUE_CANCEL)])
+    rows.append([InlineKeyboardButton("📦 Whole season", callback_data=f"{TICKET_EPISODE}:0")])
+    rows.append([InlineKeyboardButton("🛑 Cancel", callback_data=TICKET_CANCEL)])
     return InlineKeyboardMarkup(rows)
 
 
@@ -576,7 +576,7 @@ async def _show_episode_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     return PICK_EPISODE
 
 
-async def issue_episode_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+async def ticket_episode_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
     try:
@@ -596,7 +596,7 @@ async def issue_episode_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     return await _show_episode_page(update, ctx, season, ep_count, page)
 
 
-async def issue_pick_episode(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+async def ticket_pick_episode(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
     try:
@@ -618,7 +618,7 @@ async def _show_type_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     ]
     rows = [type_buttons[i:i + TYPE_BUTTONS_PER_ROW]
             for i in range(0, len(type_buttons), TYPE_BUTTONS_PER_ROW)]
-    rows.append([InlineKeyboardButton("🛑 Cancel", callback_data=ISSUE_CANCEL)])
+    rows.append([InlineKeyboardButton("🛑 Cancel", callback_data=TICKET_CANCEL)])
     media = ctx.user_data["media"]
     label = media["title"]
     if media.get("year"):
@@ -644,7 +644,7 @@ async def _show_type_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     return PICK_TYPE
 
 
-async def issue_pick_type(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+async def ticket_pick_type(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
     try:
@@ -666,7 +666,7 @@ async def issue_pick_type(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     return DESCRIPTION
 
 
-async def issue_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+async def ticket_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     description = update.effective_message.text.strip()
     if not description:
         await update.effective_message.reply_text(
@@ -685,8 +685,9 @@ async def issue_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     tg_id = update.effective_user.id
     media = ctx.user_data.get("media", {})
     episode = ctx.user_data.get("episode")
-    # Whole-season / whole-show TV picks are not auto-fixable; only individual
-    # episodes or movies are.
+    # Whole-season TV picks are not auto-fixable; only individual episodes or
+    # movies are. (The bot offers one episode or a whole season, with no
+    # all-seasons button; a whole-show Ticket is made in Seerr's own UI.)
     is_whole_season = media.get("type") == "tv" and not episode
     eligible = (
         issue_type in AUTOFIX_ELIGIBLE_TYPES
@@ -695,7 +696,7 @@ async def issue_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
         and not is_whole_season
     )
     if not eligible:
-        return await _submit_issue(update, ctx, autofix=False)
+        return await _submit_ticket(update, ctx, autofix=False)
     # Admin bypasses the daily rate limit
     is_admin = tg_id == ctx.bot_data.get("admin_id")
     if not is_admin:
@@ -711,13 +712,13 @@ async def issue_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
                     f"(You've used your {daily_limit} auto-fixes today; "
                     f"submitting issue without auto-fix.)"
                 )
-                return await _submit_issue(update, ctx, autofix=False)
+                return await _submit_ticket(update, ctx, autofix=False)
             remaining_msg = f"\n(Auto-fixes remaining today: {daily_limit - used})"
     else:
         remaining_msg = ""
     rows = [[
-        InlineKeyboardButton("✅ Try auto-fix", callback_data=f"{ISSUE_AUTOFIX_OFFER}:yes"),
-        InlineKeyboardButton("📨 Just report", callback_data=f"{ISSUE_AUTOFIX_OFFER}:no"),
+        InlineKeyboardButton("✅ Try auto-fix", callback_data=f"{TICKET_AUTOFIX_OFFER}:yes"),
+        InlineKeyboardButton("📨 Just report", callback_data=f"{TICKET_AUTOFIX_OFFER}:no"),
     ]]
     sent = await update.effective_message.reply_text(
         f"Try to auto-fix? This will delete the file and trigger a new search.{remaining_msg}",
@@ -736,16 +737,16 @@ def _has_arr_for_media(ctx: ContextTypes.DEFAULT_TYPE) -> bool:
     return False
 
 
-async def issue_offer_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+async def ticket_offer_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
     choice = q.data.split(":")[1]
     if choice == "no":
         await q.edit_message_text("Got it. Submitting your report without auto-fix.")
-        return await _submit_issue(update, ctx, autofix=False)
+        return await _submit_ticket(update, ctx, autofix=False)
     rows = [[
-        InlineKeyboardButton("⚠️ Yes, delete & re-search", callback_data=f"{ISSUE_AUTOFIX_CONFIRM}:yes"),
-        InlineKeyboardButton("No, just report", callback_data=f"{ISSUE_AUTOFIX_CONFIRM}:no"),
+        InlineKeyboardButton("⚠️ Yes, delete & re-search", callback_data=f"{TICKET_AUTOFIX_CONFIRM}:yes"),
+        InlineKeyboardButton("No, just report", callback_data=f"{TICKET_AUTOFIX_CONFIRM}:no"),
     ]]
     sent = await q.edit_message_text(
         "⚠️ This will *delete the current file* from disk and trigger a new download. Confirm?",
@@ -756,18 +757,18 @@ async def issue_offer_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     return CONFIRM_AUTOFIX
 
 
-async def issue_confirm_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+async def ticket_confirm_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
     choice = q.data.split(":")[1]
     if choice == "no":
         await q.edit_message_text("Skipping auto-fix. Submitting your report.")
-        return await _submit_issue(update, ctx, autofix=False)
+        return await _submit_ticket(update, ctx, autofix=False)
     await q.edit_message_text("Submitting your report and triggering auto-fix...")
-    return await _submit_issue(update, ctx, autofix=True)
+    return await _submit_ticket(update, ctx, autofix=True)
 
 
-async def _submit_issue(
+async def _submit_ticket(
     update: Update,
     ctx: ContextTypes.DEFAULT_TYPE,
     *,
@@ -775,18 +776,18 @@ async def _submit_issue(
 ) -> int:
     """Double-tap guard around the real submit: with
     concurrent_updates(True), a second confirm tap runs in parallel and
-    would file a duplicate Seerr issue. user_data is shared across the
+    would file a duplicate Seerr Ticket. user_data is shared across the
     user's updates and there is no await between check and set."""
-    if ctx.user_data.get("submitting_issue"):
+    if ctx.user_data.get("submitting_ticket"):
         return ConversationHandler.END
-    ctx.user_data["submitting_issue"] = True
+    ctx.user_data["submitting_ticket"] = True
     try:
-        return await _submit_issue_inner(update, ctx, autofix=autofix)
+        return await _submit_ticket_inner(update, ctx, autofix=autofix)
     finally:
-        ctx.user_data.pop("submitting_issue", None)
+        ctx.user_data.pop("submitting_ticket", None)
 
 
-async def _submit_issue_inner(
+async def _submit_ticket_inner(
     update: Update,
     ctx: ContextTypes.DEFAULT_TYPE,
     *,
@@ -822,7 +823,7 @@ async def _submit_issue_inner(
             "and reappear in Plex.)"
         )
 
-    # 1. Create issue in Seerr first
+    # 1. Create the Ticket in Seerr first
     try:
         created: CreatedIssue = await seerr.create_issue(
             issue_type=issue_type,
@@ -836,7 +837,7 @@ async def _submit_issue_inner(
     except PlexTokenInvalidError:
         # The draft (media, type, description) stays in user_data; only the
         # autofix choice needs carrying for the post-relink resume.
-        await prompt_plex_relink(update, ctx, resume_kind="submit_issue",
+        await prompt_plex_relink(update, ctx, resume_kind="submit_ticket",
                                  resume_payload={"autofix": autofix},
                                  back=back_button(hub) if hub else None)
         return ConversationHandler.END
@@ -908,8 +909,8 @@ async def _submit_issue_inner(
                                 "user_id": update.effective_user.id,
                                 "media_type": media["type"],
                                 "label": label,
-                                "issue_id": created.id,
-                                "issue_url": created.url,
+                                "ticket_id": created.id,
+                                "ticket_url": created.url,
                             }
                             if media["type"] == "movie":
                                 kwargs["radarr_movie_id"] = poll_info.get("movie_id")
@@ -957,11 +958,11 @@ async def _submit_issue_inner(
     return ConversationHandler.END
 
 
-async def _resume_submit_issue(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
-                               payload: dict) -> None:
+async def _resume_submit_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
+                                payload: dict) -> None:
     """Relink-resume executor: re-run the submit that was gated by a revoked
     token. The draft is still in user_data (the gate didn't clear it), and
-    _submit_issue's own guard handles the case where it got clobbered."""
+    _submit_ticket's own guard handles the case where it got clobbered."""
     # If the user started a NEW /issue while re-linking, user_data now holds
     # that conversation's half-built draft; auto-submitting it would file a
     # partial report.
@@ -971,13 +972,13 @@ async def _resume_submit_issue(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             "the interrupted report. Finish the current one instead."
         )
         return
-    await _submit_issue(update, ctx, autofix=bool(payload.get("autofix")))
+    await _submit_ticket(update, ctx, autofix=bool(payload.get("autofix")))
 
 
-RELINK_RESUME_EXECUTORS["submit_issue"] = _resume_submit_issue
+RELINK_RESUME_EXECUTORS["submit_ticket"] = _resume_submit_ticket
 
 
-async def issue_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+async def ticket_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if update.callback_query:
         await update.callback_query.answer("Cancelled")
     await end_flow(update, ctx, "Cancelled.", _tickets_origin(ctx),

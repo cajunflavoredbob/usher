@@ -1,11 +1,11 @@
-"""Tests for pure helpers in bot.shared / bot.issue_flow: format_age, _derive_parent_name."""
+"""Tests for pure helpers in bot.shared / bot.ticket_flow: format_age, _derive_parent_name."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from bot.issue_flow import _derive_parent_name
+from bot.ticket_flow import _derive_parent_name
 from bot.shared import format_age as format_age
 
 

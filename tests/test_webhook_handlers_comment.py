@@ -54,7 +54,7 @@ async def test_reporter_followup_notifies_admin_not_reporter():
     reporter = make_link(telegram_id=111, plex_username="user2")
     app = _app(admin_id=999, admin_link=admin, reporter_link=reporter)
 
-    # User2 (the reporter) comments on his own issue.
+    # User2 (the reporter) comments on his own Ticket.
     await handle_seerr_comment(app, _payload(commenter="user2", reporter="user2"))
 
     ids = _sent_chat_ids(app)
@@ -94,7 +94,7 @@ async def test_third_party_comment_notifies_both():
 
 
 async def test_admin_is_reporter_no_double_dm():
-    # Admin filed the issue themselves; a third party comments.
+    # Admin filed the Ticket themselves; a third party comments.
     admin = make_link(telegram_id=999, plex_username="user1plex")
     app = _app(admin_id=999, admin_link=admin, reporter_link=admin)
 

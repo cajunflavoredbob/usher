@@ -1,4 +1,4 @@
-"""Handlers for Seerr webhook events: the issue lifecycle (ISSUE_COMMENT,
+"""Handlers for Seerr webhook events: the ticket lifecycle (ISSUE_COMMENT,
 ISSUE_RESOLVED, ISSUE_CREATED) and the request lifecycle (MEDIA_*)."""
 from __future__ import annotations
 
@@ -32,25 +32,25 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
     never notified about their own comment."""
     if not app.bot_data["settings_store"].settings.tg_notify_issues:
         return
-    issue = payload.get("issue") or {}
+    ticket = payload.get("issue") or {}
     comment = payload.get("comment") or {}
     media = payload.get("media") or {}
 
     try:
-        issue_id = int(issue.get("issue_id"))
+        ticket_id = int(ticket.get("issue_id"))
     except (TypeError, ValueError):
-        logger.warning("Webhook comment: missing/invalid issue_id; dropping")
+        logger.warning("Webhook comment: missing/invalid ticket_id; dropping")
         return
 
-    reporter_username = (issue.get("reportedBy_username") or "").strip()
+    reporter_username = (ticket.get("reportedBy_username") or "").strip()
     commenter_username = (comment.get("commentedBy_username") or "").strip()
     comment_text = (comment.get("comment_message") or "").strip()
 
     if not reporter_username:
-        logger.info("Webhook comment on issue #%d: no reporter username; dropping", issue_id)
+        logger.info("Webhook comment on ticket #%d: no reporter username; dropping", ticket_id)
         return
     if not comment_text:
-        logger.info("Webhook comment on issue #%d: empty comment; dropping", issue_id)
+        logger.info("Webhook comment on ticket #%d: empty comment; dropping", ticket_id)
         return
 
     store: UserStore = app.bot_data["store"]
@@ -74,14 +74,14 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
     # Comment payloads carry no affected season/episode; look it up rather
     # than letting absence render as "All seasons" on a per-episode ticket.
     scope_label = await followup_scope_label(
-        seerr, payload, issue_id, media.get("media_type"),
+        seerr, payload, ticket_id, media.get("media_type"),
     )
 
     safe_comment = html.escape(comment_text)
     safe_commenter = html.escape(commenter_username or "Seerr")
     safe_title = html.escape(title_line) if title_line else ""
 
-    lines = [f"💬 New comment on ticket #{issue_id}"]
+    lines = [f"💬 New comment on ticket #{ticket_id}"]
     if safe_title:
         lines.append(safe_title)
     if scope_label:
@@ -94,11 +94,11 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
     text = "\n".join(lines)
 
     # Always offer History (the full comment chain); add Reply while open.
-    issue_status = (issue.get("issue_status") or "").upper()
+    ticket_status = (ticket.get("issue_status") or "").upper()
     row = []
-    if issue_status == "OPEN":
-        row.append(InlineKeyboardButton("💬 Reply", callback_data=f"{TK_REPLY}:{issue_id}"))
-    row.append(InlineKeyboardButton("📜 History", callback_data=f"{TK_OPEN}:{issue_id}"))
+    if ticket_status == "OPEN":
+        row.append(InlineKeyboardButton("💬 Reply", callback_data=f"{TK_REPLY}:{ticket_id}"))
+    row.append(InlineKeyboardButton("📜 History", callback_data=f"{TK_OPEN}:{ticket_id}"))
     reply_kb = InlineKeyboardMarkup([row])
 
     async def _notify(chat_id: int, who: str) -> None:
@@ -112,13 +112,13 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
             )
             record_btn(app, chat_id, sent)
             logger.info(
-                "Notified %s telegram_id=%d of comment on issue #%d from '%s'",
-                who, chat_id, issue_id, commenter_username,
+                "Notified %s telegram_id=%d of comment on ticket #%d from '%s'",
+                who, chat_id, ticket_id, commenter_username,
             )
         except Exception:
             logger.exception(
-                "Failed to DM %s telegram_id=%d about issue #%d comment",
-                who, chat_id, issue_id,
+                "Failed to DM %s telegram_id=%d about ticket #%d comment",
+                who, chat_id, ticket_id,
             )
 
     # Notify the reporter unless they wrote the comment.
@@ -127,8 +127,8 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
         link = await store.find_by_plex_username(reporter_username)
         if link is None:
             logger.info(
-                "Webhook comment on issue #%d: reporter '%s' not linked; "
-                "skipping reporter notify", issue_id, reporter_username,
+                "Webhook comment on ticket #%d: reporter '%s' not linked; "
+                "skipping reporter notify", ticket_id, reporter_username,
             )
         else:
             reporter_tid = link.telegram_id
@@ -145,33 +145,33 @@ async def handle_seerr_resolved(app: Application, payload: dict) -> None:
     unless admin IS the reporter)."""
     if not app.bot_data["settings_store"].settings.tg_notify_issues:
         return
-    issue = payload.get("issue") or {}
+    ticket = payload.get("issue") or {}
     media = payload.get("media") or {}
 
     try:
-        issue_id = int(issue.get("issue_id"))
+        ticket_id = int(ticket.get("issue_id"))
     except (TypeError, ValueError):
-        logger.warning("Webhook resolved: missing/invalid issue_id; dropping")
+        logger.warning("Webhook resolved: missing/invalid ticket_id; dropping")
         return
 
-    reporter_username = (issue.get("reportedBy_username") or "").strip()
+    reporter_username = (ticket.get("reportedBy_username") or "").strip()
     if not reporter_username:
-        logger.info("Webhook resolved on issue #%d: no reporter username; dropping", issue_id)
+        logger.info("Webhook resolved on ticket #%d: no reporter username; dropping", ticket_id)
         return
 
     store: UserStore = app.bot_data["store"]
     link = await store.find_by_plex_username(reporter_username)
     if link is None:
         logger.info(
-            "Webhook resolved on issue #%d: reporter '%s' not linked in Usher",
-            issue_id, reporter_username,
+            "Webhook resolved on ticket #%d: reporter '%s' not linked in Usher",
+            ticket_id, reporter_username,
         )
 
     seerr: Optional[SeerrClient] = app.bot_data.get("seerr")
     title_line = await format_media_title_line(seerr, media)
     # Same as the comment path: resolved payloads don't carry the scope.
     scope_label = await followup_scope_label(
-        seerr, payload, issue_id, media.get("media_type"),
+        seerr, payload, ticket_id, media.get("media_type"),
     )
 
     safe_title = html.escape(title_line) if title_line else ""
@@ -181,7 +181,7 @@ async def handle_seerr_resolved(app: Application, payload: dict) -> None:
 
     # DM the reporter (if they're linked)
     if link is not None:
-        reporter_lines = [f"✅ Your ticket #{issue_id} was resolved."]
+        reporter_lines = [f"✅ Your ticket #{ticket_id} was resolved."]
         if safe_title:
             reporter_lines.append(safe_title)
         if safe_scope:
@@ -193,17 +193,17 @@ async def handle_seerr_resolved(app: Application, payload: dict) -> None:
                 parse_mode="HTML",
                 disable_web_page_preview=True,
             )
-            logger.info("Notified telegram_id=%d of resolved issue #%d",
-                        link.telegram_id, issue_id)
+            logger.info("Notified telegram_id=%d of resolved ticket #%d",
+                        link.telegram_id, ticket_id)
         except Exception:
             logger.exception(
-                "Failed to DM telegram_id=%d about resolved issue #%d",
-                link.telegram_id, issue_id,
+                "Failed to DM telegram_id=%d about resolved ticket #%d",
+                link.telegram_id, ticket_id,
             )
 
     # Also DM the admin (unless admin IS the reporter)
     if admin_id and (link is None or link.telegram_id != admin_id):
-        admin_lines = [f"✅ Ticket #{issue_id} resolved"]
+        admin_lines = [f"✅ Ticket #{ticket_id} resolved"]
         if safe_title:
             admin_lines.append(safe_title)
         if safe_scope:
@@ -216,30 +216,30 @@ async def handle_seerr_resolved(app: Application, payload: dict) -> None:
                 parse_mode="HTML",
                 disable_web_page_preview=True,
             )
-            logger.info("Notified admin of resolved issue #%d (reported by '%s')",
-                        issue_id, reporter_username)
+            logger.info("Notified admin of resolved ticket #%d (reported by '%s')",
+                        ticket_id, reporter_username)
         except Exception:
-            logger.exception("Failed to DM admin about resolved issue #%d", issue_id)
+            logger.exception("Failed to DM admin about resolved ticket #%d", ticket_id)
 
 
 async def handle_seerr_reported(app: Application, payload: dict) -> None:
     """Process an ISSUE_CREATED/ISSUE_REPORTED webhook and DM the admin
-    (unless admin filed the issue themselves)."""
+    (unless admin filed the ticket themselves)."""
     if not app.bot_data["settings_store"].settings.tg_notify_issues:
         return
-    issue = payload.get("issue") or {}
+    ticket = payload.get("issue") or {}
     media = payload.get("media") or {}
     description = (payload.get("message") or "").strip()
 
     try:
-        issue_id = int(issue.get("issue_id"))
+        ticket_id = int(ticket.get("issue_id"))
     except (TypeError, ValueError):
-        logger.warning("Webhook reported: missing/invalid issue_id; dropping")
+        logger.warning("Webhook reported: missing/invalid ticket_id; dropping")
         return
 
-    reporter_username = (issue.get("reportedBy_username") or "").strip()
+    reporter_username = (ticket.get("reportedBy_username") or "").strip()
     if not reporter_username:
-        logger.info("Webhook reported on issue #%d: no reporter username; dropping", issue_id)
+        logger.info("Webhook reported on ticket #%d: no reporter username; dropping", ticket_id)
         return
 
     admin_id = app.bot_data.get("admin_id")
@@ -251,7 +251,7 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
     admin_link = await store.get(admin_id)
     if (admin_link and admin_link.plex_username
             and admin_link.plex_username.lower() == reporter_username.lower()):
-        logger.info("ISSUE_REPORTED #%d filed by admin themselves; not DMing", issue_id)
+        logger.info("ISSUE_REPORTED #%d filed by admin themselves; not DMing", ticket_id)
         return
 
     seerr: Optional[SeerrClient] = app.bot_data.get("seerr")
@@ -259,7 +259,7 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
     season, episode = extract_affected_se(payload)
     scope_label = format_scope_label(media.get("media_type"), season, episode)
 
-    issue_type_str = (issue.get("issue_type") or "OTHER").upper()
+    issue_type_str = (ticket.get("issue_type") or "OTHER").upper()
     type_emoji, type_label = ISSUE_TYPE_LABELS.get(issue_type_str, ("❓", "Other"))
 
     safe_reporter = html.escape(reporter_username)
@@ -267,7 +267,7 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
     safe_title = html.escape(title_line) if title_line else "(unknown media)"
 
     lines = [
-        f"🆕 New ticket <b>#{issue_id}</b>",
+        f"🆕 New ticket <b>#{ticket_id}</b>",
         "",
         safe_title,
     ]
@@ -285,11 +285,11 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
 
     kb = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("💬 Reply", callback_data=f"{TK_REPLY}:{issue_id}"),
-            InlineKeyboardButton("🔧 Fix", callback_data=f"{TK_FIX}:{issue_id}"),
-            InlineKeyboardButton("✅ Close", callback_data=f"{TK_CLOSE}:{issue_id}"),
+            InlineKeyboardButton("💬 Reply", callback_data=f"{TK_REPLY}:{ticket_id}"),
+            InlineKeyboardButton("🔧 Fix", callback_data=f"{TK_FIX}:{ticket_id}"),
+            InlineKeyboardButton("✅ Close", callback_data=f"{TK_CLOSE}:{ticket_id}"),
         ],
-        [InlineKeyboardButton("📜 History", callback_data=f"{TK_OPEN}:{issue_id}")],
+        [InlineKeyboardButton("📜 History", callback_data=f"{TK_OPEN}:{ticket_id}")],
     ])
 
     try:
@@ -301,9 +301,9 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
             reply_markup=kb,
         )
         record_btn(app, admin_id, sent)
-        logger.info("Notified admin of new issue #%d from '%s'", issue_id, reporter_username)
+        logger.info("Notified admin of new ticket #%d from '%s'", ticket_id, reporter_username)
     except Exception:
-        logger.exception("Failed to DM admin about new issue #%d", issue_id)
+        logger.exception("Failed to DM admin about new ticket #%d", ticket_id)
 
 
 # --- Request lifecycle (MEDIA_*) --------------------------------------------

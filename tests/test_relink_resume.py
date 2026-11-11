@@ -70,7 +70,7 @@ async def test_gated_close_stashes_resume_marker():
     await resolve_start(upd, ctx)
     marker = ctx.user_data["relink_resume"]
     assert marker["kind"] == "resolve_close"
-    assert marker["payload"] == {"issue_id": 42}
+    assert marker["payload"] == {"ticket_id": 42}
     assert "pick up where you left off" in upd.callback_query.edits[-1]["text"]
 
 
@@ -82,7 +82,7 @@ async def test_gated_comment_stashes_typed_text():
     await resolve_comment(upd, ctx)
     marker = ctx.user_data["relink_resume"]
     assert marker["kind"] == "resolve_comment"
-    assert marker["payload"] == {"issue_id": 42,
+    assert marker["payload"] == {"ticket_id": 42,
                                  "comment": "the audio is still german"}
 
 
@@ -94,7 +94,7 @@ async def test_gated_ticket_reply_stashes_typed_text():
     await tk_reply_text(upd, ctx)
     marker = ctx.user_data["relink_resume"]
     assert marker["kind"] == "ticket_reply"
-    assert marker["payload"] == {"issue_id": 7, "text": "any update on this?"}
+    assert marker["payload"] == {"ticket_id": 7, "text": "any update on this?"}
 
 
 # --- executors -----------------------------------------------------------------
@@ -104,7 +104,7 @@ async def test_resume_close_uses_fresh_token():
     upd = make_update(text="", user_id=42)
     ctx = make_ctx(admin_id=999, link=make_link(plex_token="fresh-tok"),
                    user_data={"relink_resume": _fresh_marker(
-                       "resolve_close", {"issue_id": 42})})
+                       "resolve_close", {"ticket_id": 42})})
     assert await run_relink_resume(upd, ctx) is True
     ctx.bot_data["seerr"].resolve_issue.assert_called_once_with(
         42, as_plex_token="fresh-tok")
@@ -115,7 +115,7 @@ async def test_resume_comment_posts_saved_text():
     upd = make_update(text="", user_id=42)
     ctx = make_ctx(admin_id=999, link=make_link(plex_token="fresh-tok"),
                    user_data={"relink_resume": _fresh_marker(
-                       "resolve_comment", {"issue_id": 42, "comment": "still bad"})})
+                       "resolve_comment", {"ticket_id": 42, "comment": "still bad"})})
     assert await run_relink_resume(upd, ctx) is True
     ctx.bot_data["seerr"].add_issue_comment.assert_called_once_with(
         42, "still bad", as_plex_token="fresh-tok")
@@ -125,18 +125,18 @@ async def test_resume_ticket_reply_posts_saved_text():
     upd = make_update(text="", user_id=42)
     ctx = make_ctx(admin_id=999, link=make_link(plex_token="fresh-tok"),
                    user_data={"relink_resume": _fresh_marker(
-                       "ticket_reply", {"issue_id": 7, "text": "any update?"})})
+                       "ticket_reply", {"ticket_id": 7, "text": "any update?"})})
     assert await run_relink_resume(upd, ctx) is True
     ctx.bot_data["seerr"].add_issue_comment.assert_called_once_with(
         7, "any update?", as_plex_token="fresh-tok")
     assert "Replied to ticket #7" in upd.effective_message.reply_calls[-1]["text"]
 
 
-async def test_resume_submit_issue_reuses_draft_from_user_data():
+async def test_resume_submit_ticket_reuses_draft_from_user_data():
     upd = make_update(text="", user_id=42)
     ctx = make_ctx(admin_id=999, link=make_link(plex_token="fresh-tok"),
                    user_data={
-                       "relink_resume": _fresh_marker("submit_issue",
+                       "relink_resume": _fresh_marker("submit_ticket",
                                                       {"autofix": False}),
                        "media": {"type": "movie", "tmdb_id": 1,
                                  "seerr_media_id": 5, "title": "Avatar",
@@ -160,7 +160,7 @@ async def test_resume_submit_issue_reuses_draft_from_user_data():
 async def test_voluntary_unlink_abandons_marker():
     upd = make_update(text="/unlink", user_id=42)
     ctx = make_ctx(user_data={"relink_resume": _fresh_marker("resolve_close",
-                                                             {"issue_id": 42})})
+                                                             {"ticket_id": 42})})
     await cmd_unlink(upd, ctx)
     assert "relink_resume" not in ctx.user_data
 

@@ -27,7 +27,7 @@ logger = logging.getLogger("usher")
 
 # --- Conversation states ----------------------------------------------------
 
-# Issue creation
+# Ticket creation
 TITLE, PICK_MEDIA, PICK_SEASON, PICK_EPISODE, PICK_TYPE, DESCRIPTION, OFFER_AUTOFIX, CONFIRM_AUTOFIX = range(8)
 # Post-completion follow-up
 AWAIT_COMMENT = 100
@@ -39,7 +39,7 @@ RQ_TITLE = 300
 RQ_PICK_MEDIA = 301
 RQ_PICK_SEASONS = 302
 RQ_CONFIRM = 303
-# Ticket management (reply to existing issue)
+# Ticket management (reply to existing ticket)
 AWAIT_TICKET_REPLY = 400
 # Admin provisioning (/invite)
 INV_EMAIL = 500
@@ -189,13 +189,13 @@ def extract_affected_se(payload: dict):
 
     Seerr's default webhook delivers these in the top-level `extra` array as
     `{"name": "Affected Season", "value": "1"}` / `"Affected Episode"`; a custom
-    webhook template may instead set problemSeason/problemEpisode on the issue
+    webhook template may instead set problemSeason/problemEpisode on the ticket
     object. Tolerant of both; returns (None, None) when neither is present.
     """
     global _EXTRA_SHAPE_LOGGED
-    issue = payload.get("issue") or {}
-    season = issue.get("problemSeason")
-    episode = issue.get("problemEpisode")
+    ticket = payload.get("issue") or {}
+    season = ticket.get("problemSeason")
+    episode = ticket.get("problemEpisode")
     extra = payload.get("extra") or []
     for item in extra:
         if not isinstance(item, dict):
@@ -205,7 +205,7 @@ def extract_affected_se(payload: dict):
             season = item.get("value")
         elif "episode" in name and episode in (None, ""):
             episode = item.get("value")
-    if not _EXTRA_SHAPE_LOGGED and (issue.get("media") or payload.get("media")):
+    if not _EXTRA_SHAPE_LOGGED and (ticket.get("media") or payload.get("media")):
         _EXTRA_SHAPE_LOGGED = True
         logger.info(
             "Seerr webhook `extra` shape (first seen): %r; parsed season=%r episode=%r",
@@ -215,14 +215,14 @@ def extract_affected_se(payload: dict):
 
 
 def format_scope_label(media_type, season, episode) -> str:
-    """Human-readable affected scope for a TV issue:
+    """Human-readable affected scope for a TV ticket:
     'Season 1, Episode 5' / 'Season 1' / 'All seasons'. Empty for movies.
 
     Seerr uses season 0 (and absence) to mean a whole-series / all-seasons
-    issue, so a falsy season renders as 'All seasons'.
+    ticket, so a falsy season renders as 'All seasons'.
 
     Only safe when the caller KNOWS the scope was carried in the payload (the
-    issue-created webhook). For follow-up events, where absence means "not
+    ISSUE_CREATED webhook). For follow-up events, where absence means "not
     sent" rather than "whole series", use followup_scope_label instead."""
     if (media_type or "").lower() != "tv":
         return ""
@@ -233,11 +233,11 @@ def format_scope_label(media_type, season, episode) -> str:
     return f"Season {season}"
 
 
-async def followup_scope_label(seerr, payload: dict, issue_id, media_type) -> str:
+async def followup_scope_label(seerr, payload: dict, ticket_id, media_type) -> str:
     """Scope line for follow-up events (ISSUE_COMMENT / ISSUE_RESOLVED).
 
     Seerr only puts `Affected Season`/`Affected Episode` in the `extra` array
-    of the issue-CREATED webhook. Follow-up payloads carry neither those nor
+    of the ISSUE_CREATED webhook. Follow-up payloads carry neither those nor
     problemSeason/problemEpisode, so absence there means "unknown", NOT the
     whole series -- feeding it to format_scope_label told the reporter their
     single-episode ticket was "All seasons" (the create DM said
@@ -252,15 +252,15 @@ async def followup_scope_label(seerr, payload: dict, issue_id, media_type) -> st
     season, episode = extract_affected_se(payload)
     if season is None and episode is None and seerr is not None:
         try:
-            issue = await seerr.get_issue(issue_id)
+            ticket = await seerr.get_issue(ticket_id)
         except Exception:
             logger.info(
                 "Couldn't fetch ticket #%s for its affected scope; omitting the "
-                "scope line rather than guessing", issue_id, exc_info=True,
+                "scope line rather than guessing", ticket_id, exc_info=True,
             )
         else:
-            season = _se_to_int(getattr(issue, "problem_season", None))
-            episode = _se_to_int(getattr(issue, "problem_episode", None))
+            season = _se_to_int(getattr(ticket, "problem_season", None))
+            episode = _se_to_int(getattr(ticket, "problem_episode", None))
     if season is None and episode is None:
         # Genuinely unknown (no payload fields, no/failed lookup). A
         # whole-series ticket comes back as season 0, which is not None and
@@ -382,7 +382,7 @@ async def token_for(
 
 # --- Button bookkeeping -----------------------------------------------------
 # How many recent button-bearing messages per user the gate will admit. Three
-# is enough to cover a rapid-fire webhook burst (new-issue + comment + resolve)
+# is enough to cover a rapid-fire webhook burst (new-ticket + comment + resolve)
 # without letting truly-old messages stay live.
 BTN_HISTORY_MAX = 3
 
@@ -447,14 +447,14 @@ def record_btn(app, user_id: int, message) -> None:
 
 
 # Relink-resume executors, keyed by the resume kind stashed at each gated
-# surface. Populated at import time by issue_flow / resolve_flow / tickets so
+# surface. Populated at import time by ticket_flow / resolve_flow / tickets so
 # link_flow can dispatch without importing them (avoids import cycles).
 # Signature: async (update, ctx, payload: dict) -> None.
 RELINK_RESUME_EXECUTORS: dict[str, Callable] = {}
 
 
 # One canonical decrypt-failed message (it was pasted six times
-# with wording drift across tickets.py / resolve_flow.py / issue_flow.py).
+# with wording drift across tickets.py / resolve_flow.py / ticket_flow.py).
 DECRYPT_FAILED_MSG = (
     "Your Plex link can't be decrypted (the encryption key may have "
     "rotated). Run /unlink then /link to reconnect."
@@ -740,13 +740,13 @@ def truncate_message(text: str, limit: int = 4000) -> str:
 
 # --- Ticket detail keyboard ------------------------------------------------
 
-def ticket_detail_kb(issue_id: int, is_admin: bool) -> InlineKeyboardMarkup:
+def ticket_detail_kb(ticket_id: int, is_admin: bool) -> InlineKeyboardMarkup:
     """Top-level row for a ticket's detail view. Reply goes straight to the
     reply input (no submenu); only Close and Fix have submenus."""
-    row = [InlineKeyboardButton("💬 Reply", callback_data=f"{TK_REPLY}:{issue_id}")]
+    row = [InlineKeyboardButton("💬 Reply", callback_data=f"{TK_REPLY}:{ticket_id}")]
     if is_admin:
-        row.append(InlineKeyboardButton("🔧 Fix", callback_data=f"{TK_FIX}:{issue_id}"))
-        row.append(InlineKeyboardButton("✅ Close", callback_data=f"{TK_CLOSE}:{issue_id}"))
+        row.append(InlineKeyboardButton("🔧 Fix", callback_data=f"{TK_FIX}:{ticket_id}"))
+        row.append(InlineKeyboardButton("✅ Close", callback_data=f"{TK_CLOSE}:{ticket_id}"))
     return InlineKeyboardMarkup([row])
 
 

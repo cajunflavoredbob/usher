@@ -64,7 +64,7 @@ from bot.callback_prefixes import (
     TK_FIX_REDOWNLOAD,
     TK_OPEN,
 )
-from bot.issue_flow import _issue_conversation
+from bot.ticket_flow import _new_ticket_conversation
 from bot.admin_hub import ADMIN_HUB, cmd_admin, refuse_outside_admin_dm
 from bot.hub import end_markup, hub_open_callback
 from bot.link_flow import (_link_conversation, account_unlink, cmd_account,
@@ -232,7 +232,7 @@ async def _check_connections(app: Application) -> dict[str, str]:
         except Exception as exc:
             logger.exception("%s ping failed", label)
             out[label] = f"❌ {user_friendly_message(exc)}"
-    # Webhook-agent check: every issue/request DM depends on Seerr having
+    # Webhook-agent check: every Ticket/Request DM depends on Seerr having
     # the webhook agent on with the right event types, and a miss is
     # otherwise SILENT (upgraded installs predate the request events). One
     # line here + the startup DM is the detection.
@@ -369,7 +369,7 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     # in-progress conversation BEFORE the new command (and any text that
     # follows) is processed. See bot.shared.reset_stale_flows.
     link_conv = _link_conversation()
-    issue_conv = _issue_conversation()
+    new_ticket_conv = _new_ticket_conversation()
     request_conv = _request_conversation()
     invite_conv = _invite_conversation()
     resolve_conv = _resolve_conversation()
@@ -378,13 +378,13 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     # entry point refuse to start while another text-awaiting flow is active.
     app.bot_data["conversations"] = {
         "link": link_conv,
-        "issue": issue_conv,
+        "issue": new_ticket_conv,
         "request": request_conv,
         "invite": invite_conv,
         "resolve": resolve_conv,
         "ticket_reply": ticket_conv,
     }
-    app.bot_data["flow_convs"] = [link_conv, issue_conv, request_conv,
+    app.bot_data["flow_convs"] = [link_conv, new_ticket_conv, request_conv,
                                   invite_conv, resolve_conv, ticket_conv]
     app.add_handler(TypeHandler(Update, reset_stale_flows), group=-2)
 
@@ -403,7 +403,7 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CommandHandler("requests", cmd_requests))
     app.add_handler(CommandHandler("trending", cmd_trending))
     app.add_handler(CommandHandler("subscriptions", cmd_subscriptions))
-    app.add_handler(issue_conv)
+    app.add_handler(new_ticket_conv)
     app.add_handler(request_conv)
     app.add_handler(invite_conv)
     app.add_handler(CommandHandler("uninvite", cmd_uninvite))
@@ -452,7 +452,7 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CallbackQueryHandler(subscriptions_hub,
                                          pattern=fr"^{REQUESTS_SUBSCRIPTIONS}$"))
     # Tickets Hub list button, also a detail card's "⬅️ Tickets" (Report a
-    # problem is an issue-conversation entry).
+    # problem is a new-Ticket conversation entry).
     app.add_handler(CallbackQueryHandler(tickets_hub_list,
                                          pattern=fr"^{TICKETS_LIST}$"))
     # Admin Hub: Shares (list pages, a Share's view, its Remove) and Status
@@ -718,7 +718,7 @@ async def _post_shutdown(app: Application) -> None:
             logger.exception("HTTP server cleanup failed")
 
 
-# user_data keys populated by the ConversationHandlers (link, issue,
+# user_data keys populated by the ConversationHandlers (link, new Ticket,
 # resolve, ticket-reply, request, invite). Cleared on error so a
 # mid-conversation crash doesn't leak half-state into the next flow.
 _CONVERSATION_USER_DATA_KEYS = (
@@ -726,11 +726,11 @@ _CONVERSATION_USER_DATA_KEYS = (
     "link_active_loop", "hub_origin",
     "media", "search_results", "seasons", "season",
     "episode", "issue_type", "description",
-    "search_version", "submitting_issue",
+    "search_version", "submitting_ticket",
     "research_parent",
     "awaiting_comment_for",
 ) + _RQ_KEYS + (
-    # rq_jump_media is issue_flow's stash for the Request-it-instead jump
+    # rq_jump_media is ticket_flow's stash for the Request-it-instead jump
     # (request_flow._RQ_KEYS rightly omits it). rq_search_version is
     # deliberately in NEITHER list: the version counter must survive every
     # reset or a still-gated message from a prior flow could collide with a

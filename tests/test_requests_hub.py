@@ -13,7 +13,7 @@ from bot.callback_prefixes import (HUB_OPEN, REQUESTS_MINE, REQUESTS_NEW,
                                    REQUESTS_SUBSCRIPTIONS, REQUESTS_TRENDING)
 from bot.discover_cmd import cmd_trending, dv_page, trending_hub
 from bot.request_flow import (_request_conversation, _request_timeout,
-                              request_cancel, request_from_issue,
+                              request_cancel, request_from_ticket,
                               request_hub_new, request_start, request_submit,
                               request_title)
 from bot.requests_cmd import cmd_requests, requests_hub_mine, rq_list_cancel
@@ -505,7 +505,7 @@ async def test_trending_pick_from_hub_list_sets_origin():
     ctx = _linked_ctx()
     ctx.bot_data["flow_convs"] = []
     upd = _from_hub(make_update(callback_data="rqfi:movie:550", user_id=USER_ID))
-    state = await request_from_issue(upd, ctx)
+    state = await request_from_ticket(upd, ctx)
     assert state == RQ_CONFIRM
     assert hub.hub_origin(ctx) == REQUESTS_HUB
 
@@ -514,7 +514,7 @@ async def test_trending_pick_from_typed_list_clears_origin():
     ctx = _hub_ctx()
     ctx.bot_data["flow_convs"] = []
     upd = make_update(callback_data="rqfi:movie:550", user_id=USER_ID)
-    state = await request_from_issue(upd, ctx)
+    state = await request_from_ticket(upd, ctx)
     assert state == RQ_CONFIRM
     assert hub.hub_origin(ctx) is None
 

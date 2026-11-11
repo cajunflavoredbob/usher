@@ -166,17 +166,17 @@ async def _paint_progress(ctx: ContextTypes.DEFAULT_TYPE, store: UserStore,
         logger.debug("autofix progress paint failed (non-fatal)", exc_info=True)
 
 
-def _issue_line(fix) -> list[str]:
+def _ticket_line(fix) -> list[str]:
     """The "Ticket: <url>" line, or nothing for legacy rows enqueued
-    before the admin-fix path learned to set issue_url."""
-    return [f"Ticket: {html.escape(fix.issue_url)}"] if fix.issue_url else []
+    before the admin-fix path learned to set ticket_url."""
+    return [f"Ticket: {html.escape(fix.ticket_url)}"] if fix.ticket_url else []
 
 
 async def _notify_media_gone(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:
     lines = [
         f"⚠️ Auto-fix abandoned for <b>{html.escape(fix.label)}</b>.",
         "The media was removed from Sonarr/Radarr before the new file landed.",
-        *_issue_line(fix),
+        *_ticket_line(fix),
     ]
     try:
         await ctx.bot.send_message(chat_id=fix.chat_id, text="\n".join(lines), parse_mode="HTML")
@@ -187,13 +187,13 @@ async def _notify_media_gone(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:
 async def _notify_complete(ctx: ContextTypes.DEFAULT_TYPE, fix, extra: str = "") -> None:
     lines = [
         f"🎉 Auto-fix complete: <b>{html.escape(fix.label)}</b> downloaded{extra}.",
-        *_issue_line(fix),
+        *_ticket_line(fix),
         "",
         "Did this resolve the problem?",
     ]
     keyboard = [[
-        InlineKeyboardButton("✅ Yes, close it", callback_data=f"{RESOLVE}:{fix.issue_id}:yes"),
-        InlineKeyboardButton("💬 No, add a comment", callback_data=f"{RESOLVE}:{fix.issue_id}:no"),
+        InlineKeyboardButton("✅ Yes, close it", callback_data=f"{RESOLVE}:{fix.ticket_id}:yes"),
+        InlineKeyboardButton("💬 No, add a comment", callback_data=f"{RESOLVE}:{fix.ticket_id}:no"),
     ]]
     try:
         sent = await ctx.bot.send_message(
@@ -208,20 +208,20 @@ async def _notify_complete(ctx: ContextTypes.DEFAULT_TYPE, fix, extra: str = "")
 
 
 async def _notify_timeout(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:
-    # The admin follows up on their own issues; don't tell them to comment
+    # The admin follows up on their own Tickets; don't tell them to comment
     # "for the admin".
     is_admin = fix.user_id == ctx.bot_data.get("admin_id")
     lines = [
         f"⏱️ Auto-fix timed out ({AUTOFIX_TIMEOUT_HOURS}h) for <b>{html.escape(fix.label)}</b>.",
         "No new file was imported. Check Sonarr/Radarr to see if a release was grabbed.",
-        *_issue_line(fix),
+        *_ticket_line(fix),
         "",
         "Want to add a note to the ticket?" if is_admin
         else "Want to add a comment for the admin to follow up?",
     ]
     keyboard = [[
-        InlineKeyboardButton("💬 Add a comment", callback_data=f"{RESOLVE}:{fix.issue_id}:no"),
-        InlineKeyboardButton("🙅 No, leave it", callback_data=f"{RESOLVE}:{fix.issue_id}:skip"),
+        InlineKeyboardButton("💬 Add a comment", callback_data=f"{RESOLVE}:{fix.ticket_id}:no"),
+        InlineKeyboardButton("🙅 No, leave it", callback_data=f"{RESOLVE}:{fix.ticket_id}:skip"),
     ]]
     try:
         sent = await ctx.bot.send_message(

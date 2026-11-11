@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 from telegram.constants import ChatType
 
-from bot.issue_flow import issue_title
+from bot.ticket_flow import ticket_title
 from bot.link_flow import cmd_link
 from bot.shared import AWAIT_LINK_CONSENT, PICK_MEDIA, global_btn_gate, record_btn
 
@@ -45,7 +45,7 @@ def _gate_update(user_id: int, message_id: int, chat_id: int = 100):
     return SimpleNamespace(callback_query=q)
 
 
-async def test_issue_search_menu_recorded_and_admitted():
+async def test_ticket_search_menu_recorded_and_admitted():
     ctx = make_ctx()
     ctx.bot_data["seerr"].search.return_value = [
         SimpleNamespace(media_type="tv", title="Widow's Bay", year=2026,
@@ -54,7 +54,7 @@ async def test_issue_search_menu_recorded_and_admitted():
     _seed_history(ctx, 42)
 
     upd = make_update(text="Widow's Bay", user_id=42)
-    state = await issue_title(upd, ctx)
+    state = await ticket_title(upd, ctx)
     assert state == PICK_MEDIA
 
     # The menu must have been recorded as the user's newest button message...

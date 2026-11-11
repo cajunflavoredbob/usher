@@ -11,7 +11,7 @@ from seerr import IssueComment, IssueListItem
 from tests._handler_harness import make_ctx, make_update
 
 
-def _issue(**kwargs) -> IssueListItem:
+def _ticket(**kwargs) -> IssueListItem:
     defaults = dict(
         id=42,
         issue_type=1,
@@ -36,7 +36,7 @@ async def _open(ctx):
 
 async def test_replies_shown_oldest_first():
     ctx = make_ctx(admin_id=999)
-    ctx.bot_data["seerr"].get_issue.return_value = _issue(comments=[
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket(comments=[
         IssueComment(author="User1", message="looking into it", created_at=""),
         IssueComment(author="User2", message="any update?", created_at=""),
     ])
@@ -51,7 +51,7 @@ async def test_replies_shown_oldest_first():
 
 async def test_no_replies_section_when_thread_empty():
     ctx = make_ctx(admin_id=999)
-    ctx.bot_data["seerr"].get_issue.return_value = _issue(comments=[])
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket(comments=[])
     text = await _open(ctx)
     assert "Replies" not in text
 
@@ -60,7 +60,7 @@ async def test_thread_capped_with_note():
     ctx = make_ctx(admin_id=999)
     many = [IssueComment(author=f"u{i}", message=f"msg{i}", created_at="")
             for i in range(MAX_THREAD_COMMENTS + 5)]
-    ctx.bot_data["seerr"].get_issue.return_value = _issue(comments=many)
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket(comments=many)
     text = await _open(ctx)
     assert f"last {MAX_THREAD_COMMENTS} of {MAX_THREAD_COMMENTS + 5}" in text
     # Oldest few dropped, newest kept.
@@ -70,7 +70,7 @@ async def test_thread_capped_with_note():
 
 async def test_reply_author_and_message_escaped():
     ctx = make_ctx(admin_id=999)
-    ctx.bot_data["seerr"].get_issue.return_value = _issue(comments=[
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket(comments=[
         IssueComment(author="<b>x</b>", message="a & b <i>", created_at=""),
     ])
     text = await _open(ctx)

@@ -152,9 +152,9 @@ async def tickets_hub_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
                        back)
             return
 
-    # Fetch issues
+    # Fetch tickets
     try:
-        issues, total = await seerr.list_issues(
+        tickets, total = await seerr.list_issues(
             filter="open",
             as_plex_token=None if is_admin else link.plex_token,
         )
@@ -167,39 +167,39 @@ async def tickets_hub_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
                    end_markup(TICKETS_HUB, TICKETS_LIST))
         return
 
-    if not issues:
+    if not tickets:
         await show(
             ("No open tickets across all users. 🎉" if is_admin else "No open tickets! 🎉"),
             back)
         return
 
     # Resolve media titles in parallel
-    title_tasks = [seerr.get_media_title(i.media_type, i.tmdb_id) for i in issues]
+    title_tasks = [seerr.get_media_title(i.media_type, i.tmdb_id) for i in tickets]
     title_results = await asyncio.gather(*title_tasks, return_exceptions=True)
 
     # Honest truncation: the header used to claim "All open
-    # tickets (25)" while issues 26+ were silently invisible.
+    # tickets (25)" while tickets 26+ were silently invisible.
     scope = "All open tickets" if is_admin else "Your open tickets"
-    if total > len(issues):
-        header = f"📋 {scope} (showing {len(issues)} of {total}; manage the rest in Seerr):"
+    if total > len(tickets):
+        header = f"📋 {scope} (showing {len(tickets)} of {total}; manage the rest in Seerr):"
     else:
-        header = f"📋 {scope} ({len(issues)}):"
+        header = f"📋 {scope} ({len(tickets)}):"
     lines = [header, ""]
-    for issue, tr in zip(issues, title_results):
-        emoji, _ = ISSUE_TYPES.get(issue.issue_type, ("❓", "Other"))
+    for ticket, tr in zip(tickets, title_results):
+        emoji, _ = ISSUE_TYPES.get(ticket.issue_type, ("❓", "Other"))
         if isinstance(tr, Exception):
-            media_label = f"TMDb {issue.tmdb_id}"
+            media_label = f"TMDb {ticket.tmdb_id}"
         else:
             title, year = tr
             media_label = format_media_label(
                 title, year,
-                season=issue.problem_season if issue.media_type == "tv" else None,
-                episode=issue.problem_episode,
+                season=ticket.problem_season if ticket.media_type == "tv" else None,
+                episode=ticket.problem_episode,
             )
-        age = format_age(issue.created_at)
-        line = f"#{issue.id} {emoji} {media_label} - {age}"
-        if is_admin and issue.created_by:
-            line += f" - {issue.created_by}"
+        age = format_age(ticket.created_at)
+        line = f"#{ticket.id} {emoji} {media_label} - {age}"
+        if is_admin and ticket.created_by:
+            line += f" - {ticket.created_by}"
         lines.append(line)
     lines.append("")
     lines.append("Tap a ticket number below to manage it.")
@@ -208,8 +208,8 @@ async def tickets_hub_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
     # Inline keyboard: one button per ticket (#N)
     button_rows: list[list[InlineKeyboardButton]] = []
     current: list[InlineKeyboardButton] = []
-    for issue in issues:
-        current.append(InlineKeyboardButton(f"#{issue.id}", callback_data=f"{TK_OPEN}:{issue.id}"))
+    for ticket in tickets:
+        current.append(InlineKeyboardButton(f"#{ticket.id}", callback_data=f"{TK_OPEN}:{ticket.id}"))
         if len(current) == TICKET_BUTTONS_PER_ROW:
             button_rows.append(current)
             current = []
@@ -259,7 +259,7 @@ async def _reply_result(update, ctx, text: str,
         record_btn(ctx.application, update.effective_user.id, sent)
 
 
-def _with_list_back(kb: Optional[InlineKeyboardMarkup], issue_id: int,
+def _with_list_back(kb: Optional[InlineKeyboardMarkup], ticket_id: int,
                     *, retry: bool) -> InlineKeyboardMarkup:
     """Add the "⬅️ Tickets" (back to the list) row to a detail keyboard. A
     detail that failed to load (kb None) gets Try again beside it when
@@ -267,7 +267,7 @@ def _with_list_back(kb: Optional[InlineKeyboardMarkup], issue_id: int,
     if kb is None:
         row = [list_back_button()]
         if retry:
-            row.insert(0, try_again_button(f"{TK_OPEN}:{issue_id}"))
+            row.insert(0, try_again_button(f"{TK_OPEN}:{ticket_id}"))
         return InlineKeyboardMarkup([row])
     return InlineKeyboardMarkup(
         [list(r) for r in kb.inline_keyboard] + [[list_back_button()]])
@@ -283,7 +283,7 @@ async def tk_open(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
     await q.answer()
     try:
-        issue_id = int(q.data.split(":", 1)[1])
+        ticket_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
         logger.warning("Unparseable callback data: %r", q.data)
         return
@@ -301,7 +301,7 @@ async def tk_open(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     from_list = (came_from_hub(q.message, TICKETS_HUB)
                  or TICKETS_LIST in keyboard_callbacks(q.message))
     try:
-        text, kb = await _build_ticket_detail(ctx, issue_id, is_admin, token)
+        text, kb = await _build_ticket_detail(ctx, ticket_id, is_admin, token)
     except PlexTokenInvalidError:
         await prompt_plex_relink(
             update, ctx, back=list_back_button() if from_list else None)
@@ -309,7 +309,7 @@ async def tk_open(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if from_list:
         msg = await edit_or_send(
             q, text, parse_mode="HTML",
-            reply_markup=_with_list_back(kb, issue_id, retry=True))
+            reply_markup=_with_list_back(kb, ticket_id, retry=True))
         record_btn(ctx.application, tg_id, msg)
         return
     msg = await q.message.reply_text(
@@ -322,7 +322,7 @@ async def tk_open(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _build_ticket_detail(
     ctx: ContextTypes.DEFAULT_TYPE,
-    issue_id: int,
+    ticket_id: int,
     is_admin: bool,
     token: Optional[str],
 ) -> tuple[str, Optional[InlineKeyboardMarkup]]:
@@ -338,35 +338,35 @@ async def _build_ticket_detail(
     description = ""
     comments: list = []
     try:
-        issue = await seerr.get_issue(issue_id, as_plex_token=None if is_admin else token)
-        type_emoji, type_name = ISSUE_TYPES.get(issue.issue_type, ("❓", "Other"))
-        reporter = issue.created_by or ""
-        age = format_age(issue.created_at) if issue.created_at else ""
-        description = (issue.description or "").strip()
-        comments = issue.comments or []
-        if issue.media_type in ("movie", "tv") and issue.tmdb_id:
+        ticket = await seerr.get_issue(ticket_id, as_plex_token=None if is_admin else token)
+        type_emoji, type_name = ISSUE_TYPES.get(ticket.issue_type, ("❓", "Other"))
+        reporter = ticket.created_by or ""
+        age = format_age(ticket.created_at) if ticket.created_at else ""
+        description = (ticket.description or "").strip()
+        comments = ticket.comments or []
+        if ticket.media_type in ("movie", "tv") and ticket.tmdb_id:
             try:
-                title, year = await seerr.get_media_title(issue.media_type, issue.tmdb_id)
-                m_emoji = "🎬" if issue.media_type == "movie" else "📺"
+                title, year = await seerr.get_media_title(ticket.media_type, ticket.tmdb_id)
+                m_emoji = "🎬" if ticket.media_type == "movie" else "📺"
                 bare = format_media_label(
                     title, year,
-                    season=issue.problem_season if issue.media_type == "tv" else None,
-                    episode=issue.problem_episode,
+                    season=ticket.problem_season if ticket.media_type == "tv" else None,
+                    episode=ticket.problem_episode,
                 )
                 media_label = f"{m_emoji} {bare}"
             except Exception:
-                logger.exception("get_media_title failed for #%d", issue_id)
+                logger.exception("get_media_title failed for #%d", ticket_id)
     except PlexTokenInvalidError:
         raise  # callers show the re-link prompt; a degraded view can't help
     except Exception:
         # Honest failure state: the old path rendered a
         # healthy-looking detail with live Fix/Close buttons over data it
         # never loaded.
-        logger.exception("get_issue failed for #%d", issue_id)
-        return (f"<b>Ticket #{issue_id}</b>\n"
+        logger.exception("get_issue failed for #%d", ticket_id)
+        return (f"<b>Ticket #{ticket_id}</b>\n"
                 "Couldn't load the ticket details right now. "
                 "Try again in a moment.", None)
-    lines = [f"<b>Ticket #{issue_id}</b>"]
+    lines = [f"<b>Ticket #{ticket_id}</b>"]
     if media_label:
         lines.append(html.escape(media_label))
     lines.append(f"<b>Issue type:</b> {type_emoji} {type_name}")
@@ -391,7 +391,7 @@ async def _build_ticket_detail(
             if age_c:
                 head += f" · {age_c}"
             lines.append(f"{head}: <i>\"{html.escape(c.message)}\"</i>")
-    return truncate_message("\n".join(lines)), ticket_detail_kb(issue_id, is_admin)
+    return truncate_message("\n".join(lines)), ticket_detail_kb(ticket_id, is_admin)
 
 
 async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -402,7 +402,7 @@ async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await q.answer()
     from_list = q.data.startswith(f"{TK_BACK_LIST}:")
     try:
-        issue_id = int(q.data.split(":", 1)[1])
+        ticket_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
         logger.warning("Unparseable callback data: %r", q.data)
         return
@@ -419,17 +419,17 @@ async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await q.message.reply_text("DM me /link first so I can act on tickets as you.")
         return
     try:
-        text, kb = await _build_ticket_detail(ctx, issue_id, is_admin, token)
+        text, kb = await _build_ticket_detail(ctx, ticket_id, is_admin, token)
     except PlexTokenInvalidError:
         await prompt_plex_relink(
             update, ctx, back=list_back_button() if from_list else None)
         return
     if from_list:
-        kb = _with_list_back(kb, issue_id, retry=False)
+        kb = _with_list_back(kb, ticket_id, retry=False)
     try:
         await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
     except Exception:
-        logger.exception("tk_back edit failed for #%d", issue_id)
+        logger.exception("tk_back edit failed for #%d", ticket_id)
         return
     # The same message_id is the active one; refresh sent_at so the 6h timer resets.
     record_btn(ctx.application, tg_id, q.message)
@@ -446,7 +446,7 @@ async def tk_close_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
     await q.answer()
     try:
-        issue_id = int(q.data.split(":", 1)[1])
+        ticket_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
         logger.warning("Unparseable callback data: %r", q.data)
         return
@@ -454,12 +454,12 @@ async def tk_close_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     kb = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("💬 Comment", callback_data=f"{TK_CLOSE_WITH_COMMENT}:{issue_id}"),
-            InlineKeyboardButton("✓ No comment", callback_data=f"{TK_CLOSE_DIRECT}:{issue_id}"),
+            InlineKeyboardButton("💬 Comment", callback_data=f"{TK_CLOSE_WITH_COMMENT}:{ticket_id}"),
+            InlineKeyboardButton("✓ No comment", callback_data=f"{TK_CLOSE_DIRECT}:{ticket_id}"),
         ],
-        [InlineKeyboardButton("⬅️ Back", callback_data=f"{_back_prefix(q)}:{issue_id}")],
+        [InlineKeyboardButton("⬅️ Back", callback_data=f"{_back_prefix(q)}:{ticket_id}")],
     ])
-    await q.edit_message_text(f"Close ticket #{issue_id}?", reply_markup=kb)
+    await q.edit_message_text(f"Close ticket #{ticket_id}?", reply_markup=kb)
     record_btn(ctx.application, update.effective_user.id, q.message)
 
 
@@ -468,7 +468,7 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
     await q.answer()
     try:
-        issue_id = int(q.data.split(":", 1)[1])
+        ticket_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
         logger.warning("Unparseable callback data: %r", q.data)
         return
@@ -476,13 +476,13 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     kb = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🔄 Redownload", callback_data=f"{TK_FIX_REDOWNLOAD}:{issue_id}"),
-            InlineKeyboardButton("🚫 Mark Failed", callback_data=f"{TK_FIX_MARK_FAILED}:{issue_id}"),
+            InlineKeyboardButton("🔄 Redownload", callback_data=f"{TK_FIX_REDOWNLOAD}:{ticket_id}"),
+            InlineKeyboardButton("🚫 Mark Failed", callback_data=f"{TK_FIX_MARK_FAILED}:{ticket_id}"),
         ],
-        [InlineKeyboardButton("⬅️ Back", callback_data=f"{_back_prefix(q)}:{issue_id}")],
+        [InlineKeyboardButton("⬅️ Back", callback_data=f"{_back_prefix(q)}:{ticket_id}")],
     ])
     await q.edit_message_text(
-        f"🔧 Fix #{issue_id} - how?\n"
+        f"🔧 Fix #{ticket_id} - how?\n"
         "⚠️ Both options delete the current file from disk before searching "
         "for a replacement.",
         reply_markup=kb,
@@ -504,11 +504,11 @@ async def tk_fix_mark_failed(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
 class _FixContext:
     """Resolved context for an admin Fix / Mark Failed action.
 
-    Carries everything _apply_fix needs to dispatch + render: the issue id
+    Carries everything _apply_fix needs to dispatch + render: the ticket id
     (for messages + audit-log + poll-tracking row), the media dict the arr
     clients expect, the season/episode (for label + workflow), and the
     pre-built label for the success/failure DM."""
-    issue_id: int
+    ticket_id: int
     media: dict
     season: Optional[int]
     episode: Optional[int]
@@ -520,21 +520,21 @@ _FETCH_FAILED = "Couldn't fetch ticket"
 
 
 async def _resolve_fix_context(
-    seerr: SeerrClient, issue_id: int, *, action_name: str,
+    seerr: SeerrClient, ticket_id: int, *, action_name: str,
 ) -> tuple[Optional[_FixContext], Optional[str]]:
-    """Fetch the issue + media title + tvdb_id and return a _FixContext.
+    """Fetch the ticket + media title + tvdb_id and return a _FixContext.
     On any unrecoverable failure returns (None, user_facing_error_string).
     Best-effort lookups (title, tvdb_id) don't fail the whole flow."""
     try:
-        issue = await seerr.get_issue(issue_id)
+        ticket = await seerr.get_issue(ticket_id)
     except Exception as exc:
-        logger.exception("get_issue failed for #%d", issue_id)
-        return None, f"{_FETCH_FAILED} #{issue_id}. {user_friendly_message(exc)}"
+        logger.exception("get_issue failed for #%d", ticket_id)
+        return None, f"{_FETCH_FAILED} #{ticket_id}. {user_friendly_message(exc)}"
 
-    media_type = issue.media_type
-    tmdb_id = issue.tmdb_id
-    season = issue.problem_season
-    episode = issue.problem_episode
+    media_type = ticket.media_type
+    tmdb_id = ticket.tmdb_id
+    season = ticket.problem_season
+    episode = ticket.problem_episode
 
     # season may be None on garbage/fork payloads even when episode is set;
     # letting that through would query Sonarr with an empty seasonNumber
@@ -542,7 +542,7 @@ async def _resolve_fix_context(
     if media_type == "tv" and (season is None or not episode):
         return None, (
             f"{action_name} only works on individual episodes or movies, not "
-            f"whole seasons or shows. For #{issue_id}, fix it in Sonarr directly."
+            f"whole seasons or shows. For #{ticket_id}, fix it in Sonarr directly."
         )
 
     media: dict = {"type": media_type, "tmdb_id": tmdb_id}
@@ -551,26 +551,26 @@ async def _resolve_fix_context(
     try:
         label_title, label_year = await seerr.get_media_title(media_type, tmdb_id)
     except Exception:
-        logger.exception("get_media_title failed for #%d", issue_id)
+        logger.exception("get_media_title failed for #%d", ticket_id)
     if media_type == "tv":
         try:
             _seasons, tvdb_id = await seerr.get_tv_seasons(tmdb_id)
             media["tvdb_id"] = tvdb_id
         except Exception:
-            logger.exception("get_tv_seasons failed for #%d", issue_id)
+            logger.exception("get_tv_seasons failed for #%d", ticket_id)
 
     label = format_media_label(
         label_title, label_year,
         season=season if media_type == "tv" else None,
         episode=episode,
     )
-    return _FixContext(issue_id=issue_id, media=media, season=season,
+    return _FixContext(ticket_id=ticket_id, media=media, season=season,
                        episode=episode, label=label), None
 
 
 async def _enqueue_fix_completion(
     store: UserStore, *, fix: _FixContext, result: FixResult,
-    chat_id: int, user_id: int, issue_url: str,
+    chat_id: int, user_id: int, ticket_url: str,
 ) -> int:
     """Build the pending_autofix row from result.poll_info; returns the row
     id so the caller can attach the Fix's Progress card to it. Raises on
@@ -580,9 +580,9 @@ async def _enqueue_fix_completion(
         "chat_id": chat_id,
         "user_id": user_id,
         "media_type": fix.media["type"],
-        "label": fix.label or f"#{fix.issue_id}",
-        "issue_id": fix.issue_id,
-        "issue_url": issue_url,
+        "label": fix.label or f"#{fix.ticket_id}",
+        "ticket_id": fix.ticket_id,
+        "ticket_url": ticket_url,
     }
     if fix.media["type"] == "movie":
         kwargs["radarr_movie_id"] = poll_info.get("movie_id")
@@ -595,40 +595,40 @@ async def _enqueue_fix_completion(
     return await store.add_pending_autofix(**kwargs)
 
 
-def _ticket_back_button(issue_id: int, from_list: bool) -> InlineKeyboardButton:
+def _ticket_back_button(ticket_id: int, from_list: bool) -> InlineKeyboardButton:
     """"⬅️ Ticket": shows the Ticket again with its buttons (through
     `tk_back`), keeping the "⬅️ Tickets" row when it was opened from the list."""
     prefix = TK_BACK_LIST if from_list else TK_BACK
-    return InlineKeyboardButton("⬅️ Ticket", callback_data=f"{prefix}:{issue_id}")
+    return InlineKeyboardButton("⬅️ Ticket", callback_data=f"{prefix}:{ticket_id}")
 
 
-def _fix_end_markup(issue_id: int, from_list: bool,
+def _fix_end_markup(ticket_id: int, from_list: bool,
                     retry: Optional[str] = None) -> InlineKeyboardMarkup:
     """Keyboard for a Fix that couldn't start or didn't run: "⬅️ Ticket",
     with Try again (callback `retry`) before it when the card was opened from
     the list and the step failed."""
-    row = [_ticket_back_button(issue_id, from_list)]
+    row = [_ticket_back_button(ticket_id, from_list)]
     if from_list and retry is not None:
         row.insert(0, try_again_button(retry))
     return InlineKeyboardMarkup([row])
 
 
-async def _restore_ticket_card(q, ctx, issue_id: int, from_list: bool) -> None:
+async def _restore_ticket_card(q, ctx, ticket_id: int, from_list: bool) -> None:
     """Edit the Ticket card back into the Ticket with its buttons, the same
     view its Back shows (plus "⬅️ Tickets" when opened from the list)."""
     try:
-        text, kb = await _build_ticket_detail(ctx, issue_id, True, None)
+        text, kb = await _build_ticket_detail(ctx, ticket_id, True, None)
     except Exception:
-        logger.exception("couldn't rebuild ticket #%d after a fix started", issue_id)
-        text, kb = f"<b>Ticket #{issue_id}</b>", None
+        logger.exception("couldn't rebuild ticket #%d after a fix started", ticket_id)
+        text, kb = f"<b>Ticket #{ticket_id}</b>", None
     if from_list:
-        kb = _with_list_back(kb, issue_id, retry=False)
+        kb = _with_list_back(kb, ticket_id, retry=False)
     elif kb is None:
-        kb = InlineKeyboardMarkup([[_ticket_back_button(issue_id, False)]])
+        kb = InlineKeyboardMarkup([[_ticket_back_button(ticket_id, False)]])
     try:
         sent = await edit_or_send(q, text, parse_mode="HTML", reply_markup=kb)
     except Exception:
-        logger.exception("couldn't restore ticket card #%d", issue_id)
+        logger.exception("couldn't restore ticket card #%d", ticket_id)
         return
     record_btn(ctx.application, q.from_user.id, sent)
 
@@ -678,7 +678,7 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
     q = update.callback_query
     await q.answer()
     try:
-        issue_id = int(q.data.split(":", 1)[1])
+        ticket_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
         logger.warning("Unparseable callback data: %r", q.data)
         return
@@ -695,13 +695,13 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
 
     # Edit BEFORE any network call: strips the Fix choices so they can't be
     # tapped again while the Seerr calls run.
-    await edit_or_send(q, f"⏳ Starting {action_name} for #{issue_id}...")
+    await edit_or_send(q, f"⏳ Starting {action_name} for #{ticket_id}...")
 
-    fix, err = await _resolve_fix_context(seerr, issue_id, action_name=action_name)
+    fix, err = await _resolve_fix_context(seerr, ticket_id, action_name=action_name)
     if err is not None:
         fetch_failed = err.startswith(_FETCH_FAILED)
         await _edit_result(q, ctx, err, _fix_end_markup(
-            issue_id, from_list, retry if fetch_failed else None))
+            ticket_id, from_list, retry if fetch_failed else None))
         return
     assert fix is not None
 
@@ -711,17 +711,17 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
     media_key = media_action_key(fix.media)
     if not try_begin_action(ctx, media_key):
         await _edit_result(q, ctx,
-            f"⏳ Another fix for {fix.label or f'#{issue_id}'} is already "
+            f"⏳ Another fix for {fix.label or f'#{ticket_id}'} is already "
             "running. Wait for its result before retrying.",
-            _fix_end_markup(issue_id, from_list),
+            _fix_end_markup(ticket_id, from_list),
         )
         return
     try:
         # The Fix has started: its progress goes on a new Progress card and
         # the Ticket card shows the Ticket again.
         card = _ProgressCard(ctx, q.message.chat_id)
-        await card.show(f"⏳ {action_name} for #{issue_id} - working...")
-        await _restore_ticket_card(q, ctx, issue_id, from_list)
+        await card.show(f"⏳ {action_name} for #{ticket_id} - working...")
+        await _restore_ticket_card(q, ctx, ticket_id, from_list)
 
         action: FixAction = "fix" if strategy == "redownload" else "mark_failed"
         result = await _run_arr_action(
@@ -731,11 +731,11 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
         if result.status == "failed":
             await card.delete()
             await _edit_result(
-                q, ctx, f"⚠️ {action_name} for #{issue_id} didn't run: {result.message}",
-                _fix_end_markup(issue_id, from_list, retry))
+                q, ctx, f"⚠️ {action_name} for #{ticket_id} didn't run: {result.message}",
+                _fix_end_markup(ticket_id, from_list, retry))
             return
 
-        # ok or partial: always log the autofix event (mirrors _submit_issue,
+        # ok or partial: always log the autofix event (mirrors _submit_ticket,
         # which logs even when no search ran); enqueue the completion poller
         # iff search ran.
         await store.log_autofix(update.effective_user.id, fix.media["type"],
@@ -748,20 +748,20 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
                     store, fix=fix, result=result,
                     chat_id=q.message.chat_id,
                     user_id=update.effective_user.id,
-                    issue_url=f"{seerr.public_url}/issues/{issue_id}",
+                    ticket_url=f"{seerr.public_url}/issues/{ticket_id}",
                 )
             except Exception:
-                logger.exception("failed to enqueue pending autofix for #%d", issue_id)
+                logger.exception("failed to enqueue pending autofix for #%d", ticket_id)
                 prefix = "🔧" if result.ok else "⚠️"
                 await card.show(
-                    f"{prefix} {action_name} for #{issue_id} ({result.message}), "
+                    f"{prefix} {action_name} for #{ticket_id} ({result.message}), "
                     "but couldn't enqueue completion notification.")
                 return
 
         prefix = "🔧" if result.ok else "⚠️"
         tail = "\n\n🔔 I'll DM when the new file finishes downloading." if result.should_poll else ""
         await card.show(
-            f"{prefix} {action_name} for #{issue_id}.\n{fix.label}\n\n{result.message}{tail}")
+            f"{prefix} {action_name} for #{ticket_id}.\n{fix.label}\n\n{result.message}{tail}")
         # The poller paints download progress onto the Progress card. It has
         # no keyboard: the Ticket card keeps its buttons, and its "⬅️ Tickets"
         # row when it was opened from the list.
@@ -770,7 +770,7 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
                 await store.set_autofix_message(pending_id, card.message_id,
                                                 reply_markup="")
             except Exception:
-                logger.exception("couldn't attach autofix card for #%d", issue_id)
+                logger.exception("couldn't attach autofix card for #%d", ticket_id)
         return
     finally:
         end_action(ctx, media_key)
@@ -781,7 +781,7 @@ async def tk_close_direct(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     q = update.callback_query
     await q.answer()
     try:
-        issue_id = int(q.data.split(":", 1)[1])
+        ticket_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
         logger.warning("Unparseable callback data: %r", q.data)
         return
@@ -791,22 +791,22 @@ async def tk_close_direct(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     seerr: SeerrClient = ctx.bot_data["seerr"]
     # Double-tap guard: strip the submenu before the network
     # call, and drop a racing second tap that got in before the edit (it
-    # would resolve an already-resolved issue and show a contradictory
+    # would resolve an already-resolved ticket and show a contradictory
     # "Closed" + "Couldn't close" pair on screen).
-    close_key = f"close:{issue_id}"
+    close_key = f"close:{ticket_id}"
     if not try_begin_action(ctx, close_key):
         return
     try:
-        await edit_or_send(q, f"⏳ Closing #{issue_id}...")
+        await edit_or_send(q, f"⏳ Closing #{ticket_id}...")
         try:
-            await seerr.resolve_issue(issue_id, as_plex_token=None)
+            await seerr.resolve_issue(ticket_id, as_plex_token=None)
         except Exception as exc:
-            logger.exception("resolve_issue failed for #%d", issue_id)
+            logger.exception("resolve_issue failed for #%d", ticket_id)
             await _edit_result(
-                q, ctx, f"Couldn't close #{issue_id}. {user_friendly_message(exc)}",
+                q, ctx, f"Couldn't close #{ticket_id}. {user_friendly_message(exc)}",
                 _result_markup(from_list, q.data))
             return
-        await _edit_result(q, ctx, f"✅ Closed ticket #{issue_id}.",
+        await _edit_result(q, ctx, f"✅ Closed ticket #{ticket_id}.",
                            _result_markup(from_list))
     finally:
         end_action(ctx, close_key)
@@ -819,7 +819,7 @@ async def tk_reply_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
     try:
-        issue_id = int(q.data.split(":", 1)[1])
+        ticket_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
         logger.warning("Unparseable callback data: %r", q.data)
         return ConversationHandler.END
@@ -840,17 +840,17 @@ async def tk_reply_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
             "/cancel it first, then tap Reply again."
         )
         return ConversationHandler.END
-    ctx.user_data["tk_reply_id"] = issue_id
+    ctx.user_data["tk_reply_id"] = ticket_id
     ctx.user_data["tk_close_after"] = False
     ctx.user_data["tk_reply_from_list"] = _opened_from_list(q.message)
-    # Strip the inline buttons but keep the original issue-announcement text,
+    # Strip the inline buttons but keep the original ticket-announcement text,
     # then prompt for the reply text in a separate message.
     try:
         await q.edit_message_reply_markup(reply_markup=None)
     except Exception:
-        logger.debug("Couldn't clear buttons on ticket #%d message", issue_id)
+        logger.debug("Couldn't clear buttons on ticket #%d message", ticket_id)
     await q.message.reply_text(
-        f"Send the reply text for ticket #{issue_id} (or /cancel)."
+        f"Send the reply text for ticket #{ticket_id} (or /cancel)."
     )
     return AWAIT_TICKET_REPLY
 
@@ -860,7 +860,7 @@ async def tk_close_with_comment_start(update: Update, ctx: ContextTypes.DEFAULT_
     q = update.callback_query
     await q.answer()
     try:
-        issue_id = int(q.data.split(":", 1)[1])
+        ticket_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
         logger.warning("Unparseable callback data: %r", q.data)
         return ConversationHandler.END
@@ -873,17 +873,17 @@ async def tk_close_with_comment_start(update: Update, ctx: ContextTypes.DEFAULT_
             "/cancel it first, then tap the button again."
         )
         return ConversationHandler.END
-    ctx.user_data["tk_reply_id"] = issue_id
+    ctx.user_data["tk_reply_id"] = ticket_id
     ctx.user_data["tk_close_after"] = True
     ctx.user_data["tk_reply_from_list"] = _opened_from_list(q.message)
-    # Strip the inline buttons but keep the original issue-announcement text,
+    # Strip the inline buttons but keep the original ticket-announcement text,
     # then prompt for the closing comment in a separate message.
     try:
         await q.edit_message_reply_markup(reply_markup=None)
     except Exception:
-        logger.debug("Couldn't clear buttons on ticket #%d message", issue_id)
+        logger.debug("Couldn't clear buttons on ticket #%d message", ticket_id)
     await q.message.reply_text(
-        f"Send the closing comment for ticket #{issue_id} (or /cancel)."
+        f"Send the closing comment for ticket #{ticket_id} (or /cancel)."
     )
     return AWAIT_TICKET_REPLY
 
@@ -893,19 +893,19 @@ def _clear_reply_state(ctx) -> None:
         ctx.user_data.pop(key, None)
 
 
-def _reply_retry(ctx, issue_id: int) -> str:
+def _reply_retry(ctx, ticket_id: int) -> str:
     """Try again for a reply that never posted: start the same reply again."""
     prefix = (TK_CLOSE_WITH_COMMENT if ctx.user_data.get("tk_close_after")
               else TK_REPLY)
-    return f"{prefix}:{issue_id}"
+    return f"{prefix}:{ticket_id}"
 
 
 async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive the reply text, post it, optionally close."""
-    issue_id = ctx.user_data.get("tk_reply_id")
+    ticket_id = ctx.user_data.get("tk_reply_id")
     close_after = bool(ctx.user_data.get("tk_close_after"))
     from_list = bool(ctx.user_data.get("tk_reply_from_list"))
-    if not issue_id:
+    if not ticket_id:
         return ConversationHandler.END
     text = (update.effective_message.text or "").strip()
     if not text:
@@ -924,32 +924,32 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
     seerr: SeerrClient = ctx.bot_data["seerr"]
     try:
-        await seerr.add_issue_comment(issue_id, text, as_plex_token=token)
+        await seerr.add_issue_comment(ticket_id, text, as_plex_token=token)
     except PlexTokenInvalidError:
         # Carry the typed reply for the post-relink resume. close_after isn't
         # carried: close-with-comment is admin-only, and the admin (admin-key
         # attribution) can never hit this gate.
         await prompt_plex_relink(update, ctx, resume_kind="ticket_reply",
-                                 resume_payload={"issue_id": issue_id,
+                                 resume_payload={"ticket_id": ticket_id,
                                                  "text": text},
                                  back=list_back_button() if from_list else None)
         _clear_reply_state(ctx)
         return ConversationHandler.END
     except Exception as exc:
-        logger.exception("add_issue_comment failed for #%d", issue_id)
+        logger.exception("add_issue_comment failed for #%d", ticket_id)
         await _reply_result(
             update, ctx,
-            f"Couldn't post comment on #{issue_id}. {user_friendly_message(exc)}",
-            _result_markup(from_list, _reply_retry(ctx, issue_id)))
+            f"Couldn't post comment on #{ticket_id}. {user_friendly_message(exc)}",
+            _result_markup(from_list, _reply_retry(ctx, ticket_id)))
         _clear_reply_state(ctx)
         return ConversationHandler.END
-    # If the user started a new reply flow for a different issue during the
+    # If the user started a new reply flow for a different ticket during the
     # add_issue_comment await, our comment still landed on the right ticket
-    # (we bound issue_id at entry) but we mustn't apply the close-after side
+    # (we bound ticket_id at entry) but we mustn't apply the close-after side
     # effect to whatever flow they're now on.
-    if ctx.user_data.get("tk_reply_id") != issue_id:
+    if ctx.user_data.get("tk_reply_id") != ticket_id:
         await update.effective_message.reply_text(
-            f"💬 Reply posted on #{issue_id}. "
+            f"💬 Reply posted on #{ticket_id}. "
             "(You've started a new reply since then. That one's still active.)"
         )
         # Return None, not END: the shared (chat,user) conversation now belongs
@@ -958,20 +958,20 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         return None
     if close_after:
         try:
-            await seerr.resolve_issue(issue_id, as_plex_token=None)
+            await seerr.resolve_issue(ticket_id, as_plex_token=None)
         except Exception as exc:
-            logger.exception("resolve_issue failed for #%d", issue_id)
+            logger.exception("resolve_issue failed for #%d", ticket_id)
             await _reply_result(
                 update, ctx,
-                f"💬 Comment posted on #{issue_id}, but couldn't close. {user_friendly_message(exc)}",
-                _result_markup(from_list, f"{TK_CLOSE_DIRECT}:{issue_id}"))
+                f"💬 Comment posted on #{ticket_id}, but couldn't close. {user_friendly_message(exc)}",
+                _result_markup(from_list, f"{TK_CLOSE_DIRECT}:{ticket_id}"))
             _clear_reply_state(ctx)
             return ConversationHandler.END
         await _reply_result(update, ctx,
-                            f"💬 Replied and ✅ closed ticket #{issue_id}.",
+                            f"💬 Replied and ✅ closed ticket #{ticket_id}.",
                             _result_markup(from_list))
     else:
-        await _reply_result(update, ctx, f"💬 Replied to ticket #{issue_id}.",
+        await _reply_result(update, ctx, f"💬 Replied to ticket #{ticket_id}.",
                             _result_markup(from_list))
     _clear_reply_state(ctx)
     return ConversationHandler.END
@@ -981,20 +981,20 @@ async def _resume_ticket_reply(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                                payload: dict) -> None:
     """Relink-resume executor: post the ticket reply the revoked token
     blocked, with the text the user had already typed."""
-    issue_id = payload["issue_id"]
+    ticket_id = payload["ticket_id"]
     text = payload["text"]
     is_admin, token, _ = await token_for(ctx, update.effective_user.id)
     if not is_admin and token is None:
         return  # can't happen right after a successful link; guard anyway
     seerr: SeerrClient = ctx.bot_data["seerr"]
     try:
-        await seerr.add_issue_comment(issue_id, text, as_plex_token=token)
+        await seerr.add_issue_comment(ticket_id, text, as_plex_token=token)
     except Exception as exc:
-        logger.exception("resumed add_issue_comment failed for #%d", issue_id)
+        logger.exception("resumed add_issue_comment failed for #%d", ticket_id)
         await update.effective_message.reply_text(
-            f"Couldn't post comment on #{issue_id}. {user_friendly_message(exc)}")
+            f"Couldn't post comment on #{ticket_id}. {user_friendly_message(exc)}")
         return
-    await update.effective_message.reply_text(f"💬 Replied to ticket #{issue_id}.")
+    await update.effective_message.reply_text(f"💬 Replied to ticket #{ticket_id}.")
 
 
 RELINK_RESUME_EXECUTORS["ticket_reply"] = _resume_ticket_reply
@@ -1012,10 +1012,10 @@ async def _tk_reply_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     conversation doesn't leak user_data for the life of the process, and tell
     the user (the flow explicitly solicited text, so silence loses their
     later reply with no explanation)."""
-    issue_id = ctx.user_data.get("tk_reply_id")
+    ticket_id = ctx.user_data.get("tk_reply_id")
     markup = _result_markup(
-        bool(ctx.user_data.get("tk_reply_from_list")) and issue_id is not None,
-        _reply_retry(ctx, issue_id))
+        bool(ctx.user_data.get("tk_reply_from_list")) and ticket_id is not None,
+        _reply_retry(ctx, ticket_id))
     _clear_reply_state(ctx)
     try:
         if update is not None and update.effective_chat is not None:

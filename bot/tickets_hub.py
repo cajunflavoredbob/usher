@@ -4,7 +4,7 @@ entry in GLOSSARY.md.
 
 Holds only the Hub's render function, its registration and the detail card's
 back-to-list button. The button handlers live in the modules that own their
-flows (bot.issue_flow, bot.tickets), and each imports TICKETS_HUB from here,
+flows (bot.ticket_flow, bot.tickets), and each imports TICKETS_HUB from here,
 which registers the Hub as a side effect."""
 from __future__ import annotations
 

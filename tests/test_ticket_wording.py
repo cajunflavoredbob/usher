@@ -39,7 +39,7 @@ def test_no_em_dash_in_bot_or_panel_copy():
         ROOT / "webui.py", ROOT / "http_util.py"]
     for path in paths:
         for node in _copy_strings(path):
-            # The title separator list in issue_flow splits typed queries; it is data.
+            # The title separator list in ticket_flow splits typed queries; it is data.
             if EM_DASH in node.value and node.value != f" {EM_DASH} ":
                 offenders.append(f"{path.name}:{node.lineno}")
     assert offenders == []

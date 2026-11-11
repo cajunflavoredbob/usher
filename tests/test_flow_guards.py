@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 from telegram.ext import ConversationHandler
 
-from bot.issue_flow import _issue_conversation, _resume_submit_issue, _submit_issue
+from bot.ticket_flow import _new_ticket_conversation, _resume_submit_ticket, _submit_ticket
 from bot.link_flow import _finalize_link
 from bot.resolve_flow import resolve_start
 from bot.shared import (
@@ -24,7 +24,7 @@ from seerr import IssueListItem
 from tests._handler_harness import make_ctx, make_link, make_update
 
 
-def _issue(*, media_type: str = "movie", tmdb_id: int = 12345) -> IssueListItem:
+def _ticket(*, media_type: str = "movie", tmdb_id: int = 12345) -> IssueListItem:
     return IssueListItem(
         id=42, issue_type=1, status=1, created_at="2026-05-29T12:00:00Z",
         tmdb_id=tmdb_id, media_type=media_type,
@@ -55,7 +55,7 @@ async def test_apply_fix_strips_buttons_before_network_calls():
     """The first edit is the Starting state with no keyboard."""
     upd = make_update(callback_data="tkfd:42", user_id=999)
     ctx = make_ctx(admin_id=999)
-    ctx.bot_data["seerr"].get_issue.return_value = _issue()
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket()
     ctx.bot_data["radarr"].auto_fix.return_value = FixResult.success(
         "ok", steps_done=["delete", "search"], poll_info={"movie_id": 5})
     await _apply_fix(upd, ctx, strategy="redownload")
@@ -67,7 +67,7 @@ async def test_apply_fix_strips_buttons_before_network_calls():
 async def test_apply_fix_refuses_when_media_action_in_flight():
     upd = make_update(callback_data="tkfm:42", user_id=999)
     ctx = make_ctx(admin_id=999)
-    ctx.bot_data["seerr"].get_issue.return_value = _issue(tmdb_id=777)
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket(tmdb_id=777)
     ctx.bot_data["inflight_actions"] = {"movie:777"}
     await _apply_fix(upd, ctx, strategy="mark_failed")
     ctx.bot_data["radarr"].mark_failed.assert_not_called()
@@ -79,7 +79,7 @@ async def test_apply_fix_refuses_when_media_action_in_flight():
 async def test_apply_fix_releases_key_after_run():
     upd = make_update(callback_data="tkfd:42", user_id=999)
     ctx = make_ctx(admin_id=999)
-    ctx.bot_data["seerr"].get_issue.return_value = _issue(tmdb_id=777)
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket(tmdb_id=777)
     ctx.bot_data["radarr"].auto_fix.return_value = FixResult.success(
         "ok", steps_done=["delete", "search"], poll_info={"movie_id": 5})
     await _apply_fix(upd, ctx, strategy="redownload")
@@ -95,16 +95,16 @@ async def test_close_direct_second_tap_is_noop():
 
 
 async def test_double_submit_is_noop():
-    """Second concurrent confirm tap must not file a duplicate Seerr issue."""
+    """Second concurrent confirm tap must not file a duplicate Seerr Ticket."""
     upd = make_update(text="", user_id=42)
     ctx = make_ctx(admin_id=999, link=make_link(plex_token="tok"),
-                   user_data={"submitting_issue": True,
+                   user_data={"submitting_ticket": True,
                               "media": {"type": "movie", "tmdb_id": 1,
                                         "seerr_media_id": 5, "title": "M",
                                         "year": ""},
                               "issue_type": 1, "description": "d"})
     ctx.bot_data["seerr"].create_issue = AsyncMock()
-    state = await _submit_issue(upd, ctx, autofix=False)
+    state = await _submit_ticket(upd, ctx, autofix=False)
     assert state == ConversationHandler.END
     ctx.bot_data["seerr"].create_issue.assert_not_called()
 
@@ -138,13 +138,13 @@ def test_ptb_conversation_key_shape_is_chat_then_user():
     """Pins the private PTB detail user_in_conversation depends on: for a
     per_chat+per_user handler the key is (chat_id, user_id). If a PTB
     upgrade changes _get_key or _conversations, this fails loudly."""
-    conv = _issue_conversation()
+    conv = _new_ticket_conversation()
     assert hasattr(conv, "_conversations")
     upd = make_update(callback_data="x", user_id=42, chat_id=100)
     assert conv._get_key(upd) == (100, 42)
 
 
-async def test_resolve_comment_refused_while_issue_flow_active():
+async def test_resolve_comment_refused_while_ticket_flow_active():
     upd = make_update(callback_data="resolve:42:no", user_id=42, chat_id=100)
     ctx = make_ctx(admin_id=999, link=make_link(plex_token="tok"))
     ctx.bot_data["conversations"] = {"issue": _fake_conv({(100, 42)})}
@@ -157,14 +157,14 @@ async def test_resolve_comment_refused_while_issue_flow_active():
     assert upd.callback_query.edits == []
 
 
-async def test_resume_submit_refused_while_new_issue_flow_active():
+async def test_resume_submit_refused_while_new_ticket_flow_active():
     """A new /issue started mid-relink owns user_data; auto-submitting would
     file that half-built draft."""
     upd = make_update(text="", user_id=42, chat_id=100)
     ctx = make_ctx(admin_id=999, link=make_link(plex_token="tok"))
     ctx.bot_data["conversations"] = {"issue": _fake_conv({(100, 42)})}
     ctx.bot_data["seerr"].create_issue = AsyncMock()
-    await _resume_submit_issue(upd, ctx, {"autofix": False})
+    await _resume_submit_ticket(upd, ctx, {"autofix": False})
     ctx.bot_data["seerr"].create_issue.assert_not_called()
     assert "didn't auto-submit" in upd.effective_message.reply_calls[0]["text"]
 

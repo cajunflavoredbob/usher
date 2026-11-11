@@ -129,7 +129,7 @@ def test_format_status_escapes_values():
 # --- Sonarr null-season guard (destructive-fix safety) ----------------------
 
 async def test_fix_context_rejects_tv_with_episode_but_null_season():
-    """An issue with episode set but season None must be rejected before the
+    """A Ticket with episode set but season None must be rejected before the
     delete workflow: get_episodes(series, None) serializes an empty
     seasonNumber filter = every episode in the series, and an episode-only
     match could delete the wrong file."""

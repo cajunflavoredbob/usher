@@ -575,8 +575,8 @@ async def test_entry_caches_permissions():
 
 # --- rqfi entry (jump from /issue dead-end) -----------------------------------
 
-async def test_request_from_issue_uses_stashed_title():
-    from bot.request_flow import request_from_issue
+async def test_request_from_ticket_uses_stashed_title():
+    from bot.request_flow import request_from_ticket
     ctx = _linked_ctx(user_data={
         "rq_jump_media": {"tmdb_id": 550, "title": "Stashed Movie",
                           "year": "2020"},
@@ -584,15 +584,15 @@ async def test_request_from_issue_uses_stashed_title():
     ctx.bot_data["conversations"] = {}
     ctx.bot_data["flow_convs"] = []
     upd = make_update(callback_data="rqfi:movie:550", user_id=USER_ID)
-    state = await request_from_issue(upd, ctx)
+    state = await request_from_ticket(upd, ctx)
     assert state == RQ_CONFIRM
     assert "Stashed Movie (2020)" in upd.callback_query.edits[0]["text"]
     # Stash consumed, no TMDb re-fetch needed.
     ctx.bot_data["seerr"].get_media_title.assert_not_awaited()
 
 
-async def test_request_from_issue_refetches_on_stash_mismatch():
-    from bot.request_flow import request_from_issue
+async def test_request_from_ticket_refetches_on_stash_mismatch():
+    from bot.request_flow import request_from_ticket
     ctx = _linked_ctx(user_data={
         "rq_jump_media": {"tmdb_id": 999, "title": "Wrong Stash", "year": ""},
     })
@@ -600,19 +600,19 @@ async def test_request_from_issue_refetches_on_stash_mismatch():
     ctx.bot_data["flow_convs"] = []
     ctx.bot_data["seerr"].get_media_title.return_value = ("Fetched Title", "2021")
     upd = make_update(callback_data="rqfi:movie:550", user_id=USER_ID)
-    state = await request_from_issue(upd, ctx)
+    state = await request_from_ticket(upd, ctx)
     assert state == RQ_CONFIRM
     assert "Fetched Title (2021)" in upd.callback_query.edits[0]["text"]
 
 
-async def test_request_from_issue_gates_unlinked_user():
-    from bot.request_flow import request_from_issue
+async def test_request_from_ticket_gates_unlinked_user():
+    from bot.request_flow import request_from_ticket
     ctx = make_ctx(admin_id=ADMIN_ID, link=None)
     ctx.args = []
     ctx.bot_data["conversations"] = {}
     ctx.bot_data["flow_convs"] = []
     upd = make_update(callback_data="rqfi:movie:550", user_id=USER_ID)
-    state = await request_from_issue(upd, ctx)
+    state = await request_from_ticket(upd, ctx)
     assert state == ConversationHandler.END
     assert "link" in upd.effective_message.reply_calls[0]["text"]
     ctx.bot_data["seerr"].create_request.assert_not_awaited()
@@ -718,15 +718,15 @@ async def test_exhausted_quota_renders_used_up_warning():
     assert "0 of 10" not in text
 
 
-async def test_from_issue_jump_bumps_version():
-    """Two consecutive from-issue jumps must not share a version, or the
+async def test_from_ticket_jump_bumps_version():
+    """Two consecutive from-ticket jumps must not share a version, or the
     first jump's still-gated buttons could act on the second flow."""
-    from bot.request_flow import request_from_issue
+    from bot.request_flow import request_from_ticket
     ctx = _linked_ctx(user_data={"rq_search_version": 3})
     ctx.bot_data["conversations"] = {}
     ctx.bot_data["flow_convs"] = []
     upd = make_update(callback_data="rqfi:movie:550", user_id=USER_ID)
-    await request_from_issue(upd, ctx)
+    await request_from_ticket(upd, ctx)
     assert ctx.user_data["rq_search_version"] == 4
 
 
@@ -765,11 +765,11 @@ async def test_current_cancel_still_cancels():
     assert "rq_media" not in ctx.user_data
 
 
-async def test_from_issue_jump_drops_flow_markers():
+async def test_from_ticket_jump_drops_flow_markers():
     """force_end_flow_conversations owns the free-text markers now; the
-    from-issue entry must clear link_active_loop so an in-flight Plex PIN
+    from-ticket entry must clear link_active_loop so an in-flight Plex PIN
     poll can't outlive its force-ended conversation."""
-    from bot.request_flow import request_from_issue
+    from bot.request_flow import request_from_ticket
     ctx = _linked_ctx(user_data={
         "link_active_loop": object(),
         "rq_jump_media": {"tmdb_id": 550, "title": "T", "year": ""},
@@ -777,7 +777,7 @@ async def test_from_issue_jump_drops_flow_markers():
     ctx.bot_data["conversations"] = {}
     ctx.bot_data["flow_convs"] = []
     upd = make_update(callback_data="rqfi:movie:550", user_id=USER_ID)
-    await request_from_issue(upd, ctx)
+    await request_from_ticket(upd, ctx)
     assert "link_active_loop" not in ctx.user_data
 
 

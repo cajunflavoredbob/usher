@@ -11,9 +11,9 @@ from telegram.ext import ConversationHandler
 from bot import hub
 from bot.callback_prefixes import (HUB_OPEN, TICKETS_LIST, TICKETS_REPORT,
                                    TK_BACK, TK_BACK_LIST, TK_OPEN)
-from bot.issue_flow import (_issue_conversation, _issue_timeout,
-                            _submit_issue, issue_cancel, issue_hub_report,
-                            issue_start, issue_title)
+from bot.ticket_flow import (_new_ticket_conversation, _ticket_timeout,
+                            _submit_ticket, ticket_cancel, ticket_hub_report,
+                            ticket_start, ticket_title)
 from bot.shared import TITLE
 from bot.tickets import (_apply_fix, _tk_reply_timeout, cmd_tickets,
                          tickets_hub_list, tk_back, tk_close_direct,
@@ -40,7 +40,7 @@ def _flat(markup):
             for row in markup.inline_keyboard for b in row]
 
 
-def _issue(id: int = 1, **kwargs) -> IssueListItem:
+def _ticket(id: int = 1, **kwargs) -> IssueListItem:
     defaults = dict(
         id=id, issue_type=1, status=1, created_at="2026-05-29T12:00:00Z",
         tmdb_id=12345, media_type="movie", problem_season=None,
@@ -130,7 +130,7 @@ async def test_hub_and_back_labels_never_say_issue():
 
 
 async def test_hub_report_season_fetch_failure_offers_try_again_and_back():
-    from bot.issue_flow import issue_pick_media
+    from bot.ticket_flow import ticket_pick_media
     from seerr import MediaResult
     ctx = _hub_ctx(user_data={
         "search_results": {"version": 1, "by_key": {
@@ -138,7 +138,7 @@ async def test_hub_report_season_fetch_failure_offers_try_again_and_back():
     hub.set_hub_origin(ctx, TICKETS_HUB)
     ctx.bot_data["seerr"].get_tv_seasons.side_effect = RuntimeError("boom")
     upd = make_update(callback_data="media:1:tv:9", user_id=USER_ID)
-    state = await issue_pick_media(upd, ctx)
+    state = await ticket_pick_media(upd, ctx)
     assert state == ConversationHandler.END
     edit = upd.callback_query.edits[0]
     assert edit["text"].startswith("Couldn't fetch seasons.")
@@ -159,7 +159,7 @@ async def test_tickets_back_button_shows_hub():
 async def test_hub_report_edits_hub_into_title_prompt():
     ctx = _linked_ctx()
     upd = make_update(callback_data=TICKETS_REPORT, user_id=USER_ID)
-    state = await issue_hub_report(upd, ctx)
+    state = await ticket_hub_report(upd, ctx)
     assert state == TITLE
     assert hub.hub_origin(ctx) == TICKETS_HUB
     edit = upd.callback_query.edits[0]
@@ -170,7 +170,7 @@ async def test_hub_report_edits_hub_into_title_prompt():
 async def test_typed_issue_still_prompts_for_title():
     ctx = _linked_ctx()
     upd = make_update(text="/issue", user_id=USER_ID)
-    state = await issue_start(upd, ctx)
+    state = await ticket_start(upd, ctx)
     assert state == TITLE
     reply = upd.effective_message.reply_calls[0]
     assert reply["text"] == "What movie or show is the issue with? (Reply with the title.)"
@@ -179,14 +179,14 @@ async def test_typed_issue_still_prompts_for_title():
 
 async def test_typed_issue_clears_hub_origin():
     ctx = _hub_ctx()
-    await issue_start(make_update(text="/issue", user_id=USER_ID), ctx)
+    await ticket_start(make_update(text="/issue", user_id=USER_ID), ctx)
     assert hub.hub_origin(ctx) is None
 
 
 async def test_hub_report_unlinked_ends_with_back_only():
     ctx = make_ctx(admin_id=ADMIN_ID, link=None)
     upd = make_update(callback_data=TICKETS_REPORT, user_id=USER_ID)
-    state = await issue_hub_report(upd, ctx)
+    state = await ticket_hub_report(upd, ctx)
     assert state == ConversationHandler.END
     edit = upd.callback_query.edits[0]
     assert edit["text"].startswith("DM me /link first")
@@ -196,7 +196,7 @@ async def test_hub_report_unlinked_ends_with_back_only():
 async def test_hub_report_without_seerr_keeps_setup_text_with_back():
     ctx = _linked_ctx(bot_data_overrides={"seerr": None})
     upd = make_update(callback_data=TICKETS_REPORT, user_id=USER_ID)
-    state = await issue_hub_report(upd, ctx)
+    state = await ticket_hub_report(upd, ctx)
     assert state == ConversationHandler.END
     reply = upd.callback_query.message.reply_calls[0]
     assert "isn't set up yet" in reply["text"]
@@ -207,7 +207,7 @@ async def test_hub_report_search_failure_offers_try_again_and_back():
     ctx = _hub_ctx()
     ctx.bot_data["seerr"].search.side_effect = RuntimeError("boom")
     upd = make_update(text="dune", user_id=USER_ID)
-    state = await issue_title(upd, ctx)
+    state = await ticket_title(upd, ctx)
     assert state == ConversationHandler.END
     reply = upd.effective_message.reply_calls[0]
     assert reply["text"].startswith("Search failed.")
@@ -218,7 +218,7 @@ async def test_typed_issue_search_failure_has_no_buttons():
     ctx = _linked_ctx()
     ctx.bot_data["seerr"].search.side_effect = RuntimeError("boom")
     upd = make_update(text="dune", user_id=USER_ID)
-    await issue_title(upd, ctx)
+    await ticket_title(upd, ctx)
     reply = upd.effective_message.reply_calls[0]
     assert reply["text"].startswith("Search failed.")
     assert reply.get("reply_markup") is None
@@ -227,7 +227,7 @@ async def test_typed_issue_search_failure_has_no_buttons():
 async def test_hub_report_timeout_offers_try_again_and_back():
     ctx = _hub_ctx()
     upd = make_update(text="x", user_id=USER_ID)
-    state = await _issue_timeout(upd, ctx)
+    state = await _ticket_timeout(upd, ctx)
     assert state == ConversationHandler.END
     kwargs = ctx.bot.send_message.call_args.kwargs
     assert kwargs["text"] == "⏱️ The report timed out."
@@ -237,7 +237,7 @@ async def test_hub_report_timeout_offers_try_again_and_back():
 async def test_hub_report_cancel_ends_with_back():
     ctx = _hub_ctx()
     upd = make_update(callback_data="cancel", user_id=USER_ID)
-    state = await issue_cancel(upd, ctx)
+    state = await ticket_cancel(upd, ctx)
     assert state == ConversationHandler.END
     edit = upd.callback_query.edits[0]
     assert edit["text"] == "Cancelled."
@@ -247,7 +247,7 @@ async def test_hub_report_cancel_ends_with_back():
 async def test_typed_issue_cancel_keeps_old_text_and_no_buttons():
     ctx = _linked_ctx()
     upd = make_update(callback_data="cancel", user_id=USER_ID)
-    await issue_cancel(upd, ctx)
+    await ticket_cancel(upd, ctx)
     edit = upd.callback_query.edits[0]
     assert edit["text"] == "Cancelled. /issue to start over."
     assert edit.get("reply_markup") is None
@@ -256,7 +256,7 @@ async def test_typed_issue_cancel_keeps_old_text_and_no_buttons():
 async def test_hub_report_submit_ends_with_back():
     ctx = _submit_ctx(TICKETS_HUB)
     upd = make_update(text="no sound", user_id=USER_ID)
-    state = await _submit_issue(upd, ctx, autofix=False)
+    state = await _submit_ticket(upd, ctx, autofix=False)
     assert state == ConversationHandler.END
     reply = upd.effective_message.reply_calls[0]
     assert reply["text"].startswith("✅ Reported as ticket #77")
@@ -267,7 +267,7 @@ async def test_hub_report_submit_failure_offers_try_again_and_back():
     ctx = _submit_ctx(TICKETS_HUB)
     ctx.bot_data["seerr"].create_issue = _async_return(exc=RuntimeError("boom"))
     upd = make_update(text="no sound", user_id=USER_ID)
-    await _submit_issue(upd, ctx, autofix=False)
+    await _submit_ticket(upd, ctx, autofix=False)
     reply = upd.effective_message.reply_calls[0]
     assert reply["text"].startswith("Couldn't submit the ticket.")
     assert _flat(reply["reply_markup"]) == [RETRY_REPORT, BACK]
@@ -276,7 +276,7 @@ async def test_hub_report_submit_failure_offers_try_again_and_back():
 async def test_typed_issue_submit_has_no_buttons():
     ctx = _submit_ctx()
     upd = make_update(text="no sound", user_id=USER_ID)
-    await _submit_issue(upd, ctx, autofix=False)
+    await _submit_ticket(upd, ctx, autofix=False)
     reply = upd.effective_message.reply_calls[0]
     assert reply["text"].startswith("✅ Reported as ticket #77")
     assert reply.get("reply_markup") is None
@@ -285,13 +285,13 @@ async def test_typed_issue_submit_has_no_buttons():
 async def test_other_hub_origin_gives_no_tickets_back():
     ctx = _submit_ctx("account")
     upd = make_update(text="no sound", user_id=USER_ID)
-    await _submit_issue(upd, ctx, autofix=False)
+    await _submit_ticket(upd, ctx, autofix=False)
     reply = upd.effective_message.reply_calls[0]
     assert reply.get("reply_markup") is None
 
 
-def test_hub_report_is_issue_conversation_entry():
-    conv = _issue_conversation()
+def test_hub_report_is_new_ticket_conversation_entry():
+    conv = _new_ticket_conversation()
     patterns = {ep.pattern.pattern for ep in conv.entry_points
                 if getattr(ep, "pattern", None) is not None}
     assert f"^{TICKETS_REPORT}$" in patterns
@@ -302,7 +302,7 @@ def test_hub_report_is_issue_conversation_entry():
 async def test_hub_list_shows_user_tickets():
     ctx = make_ctx(admin_id=ADMIN_ID,
                    link=make_link(telegram_id=USER_ID, plex_token="user-token"))
-    ctx.bot_data["seerr"].list_issues.return_value = ([_issue(id=7)], 1)
+    ctx.bot_data["seerr"].list_issues.return_value = ([_ticket(id=7)], 1)
     upd = make_update(callback_data=TICKETS_LIST, user_id=USER_ID)
     await tickets_hub_list(upd, ctx)
     edit = upd.callback_query.edits[0]
@@ -315,7 +315,7 @@ async def test_hub_list_shows_user_tickets():
 
 async def test_hub_list_shows_all_tickets_for_admin():
     ctx = make_ctx(admin_id=ADMIN_ID)
-    ctx.bot_data["seerr"].list_issues.return_value = ([_issue(id=1), _issue(id=2)], 2)
+    ctx.bot_data["seerr"].list_issues.return_value = ([_ticket(id=1), _ticket(id=2)], 2)
     upd = make_update(callback_data=TICKETS_LIST, user_id=ADMIN_ID)
     await tickets_hub_list(upd, ctx)
     edit = upd.callback_query.edits[0]
@@ -379,7 +379,7 @@ def test_tickets_list_button_registered():
 
 async def test_detail_from_list_has_tickets_back_to_list():
     ctx = make_ctx(admin_id=ADMIN_ID)
-    ctx.bot_data["seerr"].get_issue.return_value = _issue(id=5)
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket(id=5)
     upd = _from_hub(make_update(callback_data=f"{TK_OPEN}:5", user_id=ADMIN_ID))
     await tk_open(upd, ctx)
     edit = upd.callback_query.edits[0]
@@ -392,7 +392,7 @@ async def test_detail_from_list_has_tickets_back_to_list():
 
 async def test_detail_from_dm_has_no_tickets_back():
     ctx = make_ctx(admin_id=ADMIN_ID)
-    ctx.bot_data["seerr"].get_issue.return_value = _issue(id=5)
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket(id=5)
     upd = make_update(callback_data=f"{TK_OPEN}:5", user_id=ADMIN_ID)
     await tk_open(upd, ctx)
     reply = upd.callback_query.message.reply_calls[0]
@@ -403,7 +403,7 @@ async def test_detail_from_dm_has_no_tickets_back():
 
 async def test_tickets_back_from_detail_shows_list():
     ctx = make_ctx(admin_id=ADMIN_ID)
-    ctx.bot_data["seerr"].list_issues.return_value = ([_issue(id=5)], 1)
+    ctx.bot_data["seerr"].list_issues.return_value = ([_ticket(id=5)], 1)
     upd = _from_list_detail(make_update(callback_data=TICKETS_LIST, user_id=ADMIN_ID))
     await tickets_hub_list(upd, ctx)
     edit = upd.callback_query.edits[0]
@@ -423,7 +423,7 @@ async def test_failed_detail_from_list_offers_try_again():
 
 async def test_open_from_message_with_list_back_edits_in_place():
     ctx = make_ctx(admin_id=ADMIN_ID)
-    ctx.bot_data["seerr"].get_issue.return_value = _issue(id=5)
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket(id=5)
     upd = _from_list_detail(make_update(callback_data=f"{TK_OPEN}:5", user_id=ADMIN_ID))
     await tk_open(upd, ctx)
     assert _flat(upd.callback_query.edits[0]["reply_markup"])[-1] == LIST_BACK
@@ -437,7 +437,7 @@ async def test_submenu_back_from_list_detail_keeps_tickets_back():
         await handler(upd, ctx)
         flat = _flat(upd.callback_query.edits[0]["reply_markup"])
         assert ("⬅️ Back", f"{TK_BACK_LIST}:5") in flat
-    ctx.bot_data["seerr"].get_issue.return_value = _issue(id=5)
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket(id=5)
     upd = make_update(callback_data=f"{TK_BACK_LIST}:5", user_id=ADMIN_ID)
     await tk_back(upd, ctx)
     edit = upd.callback_query.edits[0]
@@ -450,7 +450,7 @@ async def test_submenu_back_from_dm_detail_has_no_tickets_back():
     upd = make_update(callback_data="tkc:5", user_id=ADMIN_ID)
     await tk_close_menu(upd, ctx)
     assert ("⬅️ Back", f"{TK_BACK}:5") in _flat(upd.callback_query.edits[0]["reply_markup"])
-    ctx.bot_data["seerr"].get_issue.return_value = _issue(id=5)
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket(id=5)
     upd = make_update(callback_data=f"{TK_BACK}:5", user_id=ADMIN_ID)
     await tk_back(upd, ctx)
     flat = _flat(upd.callback_query.edits[0]["reply_markup"])
@@ -467,7 +467,7 @@ def test_menu_drops_issue():
 
 
 def test_typed_issue_still_registered():
-    conv = _issue_conversation()
+    conv = _new_ticket_conversation()
     commands = {c for ep in conv.entry_points for c in getattr(ep, "commands", ())}
     assert "issue" in commands
 
@@ -505,7 +505,7 @@ async def test_hub_report_relink_prompt_has_back():
     ctx = _submit_ctx(TICKETS_HUB)
     ctx.bot_data["seerr"].create_issue = _async_return(exc=PlexTokenInvalidError())
     upd = make_update(text="no sound", user_id=USER_ID)
-    await _submit_issue(upd, ctx, autofix=False)
+    await _submit_ticket(upd, ctx, autofix=False)
     reply = upd.effective_message.reply_calls[0]
     assert reply["text"].startswith("⚠️ Plex says your sign-in is no longer valid.")
     assert _flat(reply["reply_markup"]) == [RELINK, BACK]
@@ -516,7 +516,7 @@ async def test_typed_report_relink_prompt_has_relink_only():
     ctx = _submit_ctx()
     ctx.bot_data["seerr"].create_issue = _async_return(exc=PlexTokenInvalidError())
     upd = make_update(text="no sound", user_id=USER_ID)
-    await _submit_issue(upd, ctx, autofix=False)
+    await _submit_ticket(upd, ctx, autofix=False)
     assert _flat(upd.effective_message.reply_calls[0]["reply_markup"]) == [RELINK]
 
 
@@ -588,7 +588,7 @@ async def test_close_from_dm_has_no_buttons():
 
 async def test_fix_from_list_restores_tickets_back_row():
     ctx = make_ctx(admin_id=ADMIN_ID)
-    ctx.bot_data["seerr"].get_issue.return_value = _issue(id=5)
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket(id=5)
     ctx.bot_data["radarr"].auto_fix.return_value = FixResult.success(
         "Deleted file and triggered re-search.", steps_done=["delete", "search"],
         poll_info={"movie_id": 555})
@@ -601,7 +601,7 @@ async def test_fix_from_list_restores_tickets_back_row():
 
 async def test_fix_from_list_that_did_not_run_offers_try_again_and_ticket_back():
     ctx = make_ctx(admin_id=ADMIN_ID)
-    ctx.bot_data["seerr"].get_issue.return_value = _issue(id=5)
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket(id=5)
     ctx.bot_data["radarr"].mark_failed.return_value = FIX_FAILED
     upd = _from_list_submenu(make_update(callback_data="tkfm:5", user_id=ADMIN_ID))
     await _apply_fix(upd, ctx, strategy="mark_failed")
@@ -622,7 +622,7 @@ async def test_fix_from_list_fetch_failure_offers_try_again_and_ticket_back():
 
 async def test_fix_from_list_on_a_whole_season_ends_with_ticket_back_only():
     ctx = make_ctx(admin_id=ADMIN_ID)
-    ctx.bot_data["seerr"].get_issue.return_value = _issue(
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket(
         id=5, media_type="tv", problem_season=1, problem_episode=None)
     upd = _from_list_submenu(make_update(callback_data="tkfd:5", user_id=ADMIN_ID))
     await _apply_fix(upd, ctx, strategy="redownload")
@@ -748,7 +748,7 @@ def _autofix_ctx(hub_name=None):
 async def test_hub_report_progress_card_stores_its_keyboard():
     ctx = _autofix_ctx(TICKETS_HUB)
     upd = make_update(text="no sound", user_id=USER_ID)
-    await _submit_issue(upd, ctx, autofix=True)
+    await _submit_ticket(upd, ctx, autofix=True)
     store = ctx.bot_data["store"]
     store.set_autofix_message.assert_awaited_once()
     stored = store.set_autofix_message.call_args.kwargs["reply_markup"]
@@ -758,7 +758,7 @@ async def test_hub_report_progress_card_stores_its_keyboard():
 async def test_typed_report_progress_card_stores_no_keyboard():
     ctx = _autofix_ctx()
     upd = make_update(text="no sound", user_id=USER_ID)
-    await _submit_issue(upd, ctx, autofix=True)
+    await _submit_ticket(upd, ctx, autofix=True)
     store = ctx.bot_data["store"]
     store.set_autofix_message.assert_awaited_once()
     assert store.set_autofix_message.call_args.kwargs.get("reply_markup", "") == ""
@@ -766,7 +766,7 @@ async def test_typed_report_progress_card_stores_no_keyboard():
 
 async def test_fix_from_list_progress_card_stores_no_keyboard():
     ctx = make_ctx(admin_id=ADMIN_ID)
-    ctx.bot_data["seerr"].get_issue.return_value = _issue(id=5)
+    ctx.bot_data["seerr"].get_issue.return_value = _ticket(id=5)
     ctx.bot_data["radarr"].auto_fix.return_value = FixResult.success(
         "Deleted file and triggered re-search.", steps_done=["delete", "search"],
         poll_info={"movie_id": 555})

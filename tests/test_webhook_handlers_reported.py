@@ -1,5 +1,5 @@
-"""Tests for bot.webhook_handlers.handle_seerr_reported (the new-issue admin
-DM). v0.11.24: TV issues now show the affected scope line, and the message
+"""Tests for bot.webhook_handlers.handle_seerr_reported (the new-Ticket admin
+DM). v0.11.24: TV Tickets now show the affected scope line, and the message
 carries a History button alongside Reply/Fix/Close.
 """
 from __future__ import annotations
@@ -38,7 +38,7 @@ def _callbacks(kb):
     return [b.callback_data for row in kb.inline_keyboard for b in row]
 
 
-async def test_new_issue_shows_episode_scope():
+async def test_new_ticket_shows_episode_scope():
     app = _app(admin_link=make_link(telegram_id=999, plex_username="user1plex"))
     await handle_seerr_reported(app, _payload(extra=[
         {"name": "Affected Season", "value": "1"},
@@ -48,14 +48,14 @@ async def test_new_issue_shows_episode_scope():
     assert "Season 1, Episode 5" in text
 
 
-async def test_new_issue_shows_all_seasons_when_no_season():
+async def test_new_ticket_shows_all_seasons_when_no_season():
     app = _app(admin_link=make_link(telegram_id=999, plex_username="user1plex"))
     await handle_seerr_reported(app, _payload(extra=[]))
     text = app.bot.send_message.call_args.kwargs["text"]
     assert "All seasons" in text
 
 
-async def test_movie_issue_has_no_scope_line():
+async def test_movie_ticket_has_no_scope_line():
     app = _app(admin_link=make_link(telegram_id=999, plex_username="user1plex"))
     await handle_seerr_reported(app, _payload(media={"media_type": "movie", "tmdbId": 99}))
     text = app.bot.send_message.call_args.kwargs["text"]
@@ -63,7 +63,7 @@ async def test_movie_issue_has_no_scope_line():
     assert "All seasons" not in text
 
 
-async def test_new_issue_has_history_button():
+async def test_new_ticket_has_history_button():
     app = _app(admin_link=make_link(telegram_id=999, plex_username="user1plex"))
     await handle_seerr_reported(app, _payload())
     cbs = _callbacks(app.bot.send_message.call_args.kwargs["reply_markup"])

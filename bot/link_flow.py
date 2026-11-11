@@ -308,7 +308,7 @@ async def _finalize_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     if hub is not None:
         record_btn(ctx.application, tg_id, sent)
 
-    # If a revoked token interrupted an action (issue submit, close, comment),
+    # If a revoked token interrupted an action (Ticket submit, close, comment),
     # pick it back up now that the fresh token is stored.
     await run_relink_resume(update, ctx)
 

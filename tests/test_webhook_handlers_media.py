@@ -228,7 +228,7 @@ async def test_admin_failed_disabled_drops_notified_claim():
     assert "admin has been notified" not in texts[0]
 
 
-async def test_issue_class_disabled_silences_issue_handlers():
+async def test_ticket_class_disabled_silences_resolved_handler():
     from bot.webhook_handlers import handle_seerr_resolved
     app = _app(requester_link=make_link(telegram_id=USER_ID))
     app.bot_data["settings_store"].settings.tg_notify_issues = False

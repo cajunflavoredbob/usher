@@ -1,7 +1,7 @@
 """Tests for the autofix poller notification helpers: button-gate recording
 (the v0.11.18 bug class, missed in the poller), HTML escaping of media
 titles (legacy Markdown died on titles like M*A*S*H and lost the DM),
-legacy rows with an empty issue_url, and mark-before-notify ordering."""
+legacy rows with an empty ticket_url, and mark-before-notify ordering."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -24,7 +24,7 @@ from tests._handler_harness import make_ctx, make_message
 
 
 def _make_fix(*, fix_id: int = 1, label: str = "Test Movie",
-              issue_url: str = "http://seerr.example/issues/1",
+              ticket_url: str = "http://seerr.example/issues/1",
               timed_out: bool = False) -> PendingAutofix:
     now = datetime.now(timezone.utc)
     delta = timedelta(hours=-1 if timed_out else 1)
@@ -33,7 +33,7 @@ def _make_fix(*, fix_id: int = 1, label: str = "Test Movie",
         media_type="movie", radarr_movie_id=555,
         sonarr_series_id=None, sonarr_episode_id=None,
         sonarr_season=None, expected_episode_ids=[],
-        label=label, issue_id=fix_id, issue_url=issue_url,
+        label=label, ticket_id=fix_id, ticket_url=ticket_url,
         started_at=now.strftime("%Y-%m-%d %H:%M:%S"),
         timeout_at=(now + delta).strftime("%Y-%m-%d %H:%M:%S"),
     )
@@ -78,7 +78,7 @@ async def test_timeout_copy_for_user_mentions_admin():
 
 
 async def test_timeout_copy_for_admin_omits_admin_reference():
-    """The admin follows up on their own issues; the timeout DM must not
+    """The admin follows up on their own Tickets; the timeout DM must not
     tell them to leave a comment 'for the admin'."""
     fix = _make_fix(timed_out=True)  # user_id=42
     ctx = make_ctx(admin_id=42)
@@ -111,10 +111,10 @@ async def test_media_gone_uses_html_and_escapes_title():
     assert "Weird &lt;Title&gt;" in kwargs["text"]
 
 
-async def test_empty_issue_url_omits_dangling_line():
-    """Legacy rows from the admin-fix path were enqueued with issue_url="";
+async def test_empty_ticket_url_omits_dangling_line():
+    """Legacy rows from the admin-fix path were enqueued with ticket_url="";
     the DM must not render a dangling 'Original issue:' label."""
-    fix = _make_fix(issue_url="")
+    fix = _make_fix(ticket_url="")
     ctx = make_ctx()
     ctx.bot.send_message = AsyncMock(return_value=make_message(message_id=781))
     await _notify_complete(ctx, fix)
@@ -273,8 +273,8 @@ async def test_autofix_tick_fires_arr_refresh():
     fix = SimpleNamespace(id=1, chat_id=100, message_id=None, media_type="movie",
                           radarr_movie_id=9, sonarr_series_id=None,
                           sonarr_episode_id=None, sonarr_season=None,
-                          expected_episode_ids=[], label="M", issue_id=1,
-                          issue_url="", started_at="",
+                          expected_episode_ids=[], label="M", ticket_id=1,
+                          ticket_url="", started_at="",
                           timeout_at="2099-01-01 00:00:00",
                           last_progress="", bumped=0, reply_markup="")
     fix.is_complete = AsyncMock(return_value=(False, ""))

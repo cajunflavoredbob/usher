@@ -59,7 +59,7 @@ _Avoid_: issue (for the report itself)
 The kind of problem a Ticket describes: Video, Audio, Subtitles, or Other.
 
 **Scope**:
-The part of a show a Ticket covers: one episode, one season, or all seasons.
+The part of a show a Ticket covers: one episode, one season, or all seasons. The bot itself offers one episode or a whole season (Specials go to Seerr as season 0, which Seerr treats as all seasons) and has no all-seasons button; a whole-show Ticket is made in Seerr's own UI.
 
 **Fix**:
 Replacing a bad file named in a Ticket.

@@ -185,7 +185,7 @@ Because users sign in with Plex, Usher authenticates to Seerr **as the user** (v
 - Offered only to Telegram IDs in the allowlist (defaults to just the admin).
 - **Per-user daily limit** (default 3 per 24h), configurable in the Auto-fix tab. The Admin bypasses it.
 - Explicit confirmation required before deletion.
-- For TV: **per-episode only**. Whole-season and whole-show Tickets are reported to Seerr but never auto-fixed (the season-wide delete workflow was removed in 0.12.0).
+- For TV: **per-episode only**. A whole-season Ticket (the bot offers one episode or a whole season) or a whole-show Ticket (made in Seerr's own UI) is reported to Seerr but never auto-fixed (the season-wide delete workflow was removed in 0.12.0).
 - Usher polls the *arr after triggering and DMs the user when the new file lands (or on timeout).
 - If the media isn't managed by Radarr/Sonarr, Usher reports "not in Radarr/Sonarr" without touching the Ticket.
 - All auto-fix events are recorded in the `autofix_events` SQLite table.

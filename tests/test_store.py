@@ -130,7 +130,7 @@ async def test_log_autofix_then_count(fresh_store: UserStore):
 async def test_pending_autofix_lifecycle(fresh_store: UserStore):
     pid = await fresh_store.add_pending_autofix(
         chat_id=100, user_id=42, media_type="movie",
-        label="Movie (2026)", issue_id=1, issue_url="http://x/issues/1",
+        label="Movie (2026)", ticket_id=1, ticket_url="http://x/issues/1",
         radarr_movie_id=555,
     )
     assert isinstance(pid, int)
@@ -140,7 +140,7 @@ async def test_pending_autofix_lifecycle(fresh_store: UserStore):
     assert pending[0].id == pid
     assert pending[0].media_type == "movie"
     assert pending[0].radarr_movie_id == 555
-    assert pending[0].issue_id == 1
+    assert pending[0].ticket_id == 1
 
     await fresh_store.mark_autofix_status(pid, "complete")
     assert (await fresh_store.list_pending_autofixes()) == []  # only 'pending' rows listed
@@ -149,7 +149,7 @@ async def test_pending_autofix_lifecycle(fresh_store: UserStore):
 async def test_pending_autofix_whole_season_carries_episode_ids(fresh_store: UserStore):
     await fresh_store.add_pending_autofix(
         chat_id=100, user_id=42, media_type="tv",
-        label="Show S01", issue_id=2, issue_url="http://x/issues/2",
+        label="Show S01", ticket_id=2, ticket_url="http://x/issues/2",
         sonarr_series_id=10, sonarr_season=1,
         expected_episode_ids=[101, 102, 103],
     )
@@ -184,12 +184,12 @@ async def test_corrupt_pending_row_is_skipped_not_fatal(fresh_store: UserStore,
     permanently stopping all completion/timeout DMs."""
     good = await fresh_store.add_pending_autofix(
         chat_id=100, user_id=42, media_type="movie",
-        label="Good Movie", issue_id=1, issue_url="http://x/issues/1",
+        label="Good Movie", ticket_id=1, ticket_url="http://x/issues/1",
         radarr_movie_id=555,
     )
     bad = await fresh_store.add_pending_autofix(
         chat_id=100, user_id=42, media_type="tv",
-        label="Bad Show", issue_id=2, issue_url="http://x/issues/2",
+        label="Bad Show", ticket_id=2, ticket_url="http://x/issues/2",
         sonarr_series_id=10, sonarr_season=1, expected_episode_ids=[101],
     )
     with sqlite3.connect(tmp_db_path) as c:
@@ -203,7 +203,7 @@ async def test_non_list_episode_ids_is_skipped(fresh_store: UserStore,
                                                tmp_db_path: Path):
     pid = await fresh_store.add_pending_autofix(
         chat_id=100, user_id=42, media_type="tv",
-        label="Show", issue_id=2, issue_url="http://x/issues/2",
+        label="Show", ticket_id=2, ticket_url="http://x/issues/2",
         sonarr_series_id=10, sonarr_season=1, expected_episode_ids=[101],
     )
     with sqlite3.connect(tmp_db_path) as c:
@@ -243,7 +243,7 @@ async def test_old_shape_autofix_table_is_reconciled(tmp_db_path: Path,
     # The full modern insert + list path must work against the migrated table.
     pid = await store.add_pending_autofix(
         chat_id=100, user_id=42, media_type="movie",
-        label="Movie", issue_id=1, issue_url="http://x/issues/1",
+        label="Movie", ticket_id=1, ticket_url="http://x/issues/1",
         radarr_movie_id=555,
     )
     pending = await store.list_pending_autofixes()
@@ -253,7 +253,7 @@ async def test_old_shape_autofix_table_is_reconciled(tmp_db_path: Path,
 async def test_pending_autofix_keeps_the_card_keyboard(fresh_store: UserStore):
     pid = await fresh_store.add_pending_autofix(
         chat_id=100, user_id=42, media_type="movie",
-        label="Movie (2026)", issue_id=1, issue_url="http://x/issues/1",
+        label="Movie (2026)", ticket_id=1, ticket_url="http://x/issues/1",
         radarr_movie_id=555,
     )
     assert (await fresh_store.list_pending_autofixes())[0].reply_markup == ""

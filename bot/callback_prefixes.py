@@ -32,15 +32,15 @@ RELINK: Final = "relink"              # fixed-shape "Unlink & sign in again"
                                       # (revoked-Plex-token recovery)
 
 # --- /issue flow -----------------------------------------------------------
-ISSUE_MEDIA: Final = "media"
-ISSUE_SEASON: Final = "season"
-ISSUE_EPISODE: Final = "ep"
-ISSUE_EPISODE_PAGE: Final = "ep_page"
+TICKET_MEDIA: Final = "media"
+TICKET_SEASON: Final = "season"
+TICKET_EPISODE: Final = "ep"
+TICKET_EPISODE_PAGE: Final = "ep_page"
 ISSUE_TYPE: Final = "type"
-ISSUE_AUTOFIX_OFFER: Final = "autofix"
-ISSUE_AUTOFIX_CONFIRM: Final = "confirm"
-ISSUE_CANCEL: Final = "cancel"
-ISSUE_RESEARCH_PARENT: Final = "research_parent"
+TICKET_AUTOFIX_OFFER: Final = "autofix"
+TICKET_AUTOFIX_CONFIRM: Final = "confirm"
+TICKET_CANCEL: Final = "cancel"
+TICKET_RESEARCH_PARENT: Final = "research_parent"
 
 # --- /request flow ----------------------------------------------------------
 RQ_MEDIA: Final = "rqm"               # rqm:<version>:<media_type>:<tmdb_id>
@@ -55,7 +55,7 @@ RQ_INFO: Final = "rqi"                # rqi:<version>:<media_type>:<tmdb_id>
                                       # detail card (poster + overview)
 RQ_INFO_DISMISS: Final = "rqx"        # dismiss a detail card (global handler)
 RQ_CANCEL: Final = "rqcancel"         # rqcancel:<version> (bare via /cancel)
-RQ_FROM_ISSUE: Final = "rqfi"         # rqfi:<media_type>:<tmdb_id> jump from
+RQ_FROM_TICKET: Final = "rqfi"        # rqfi:<media_type>:<tmdb_id> jump from
                                       # the /issue not-in-library dead-end
 RQ_LIST_CANCEL: Final = "rqlc"        # rqlc:<request_id> cancel from /requests
 
@@ -82,7 +82,7 @@ SHARE_MATCHES: Final = "shq"          # shq:<page> Prev/Next of typed /uninvite
                                       # matches (search text in user_data)
 
 # --- Post-autofix resolve follow-up ----------------------------------------
-RESOLVE: Final = "resolve"            # resolve:<issue_id>:yes|no|skip
+RESOLVE: Final = "resolve"            # resolve:<ticket_id>:yes|no|skip
 
 # --- Hubs (shared by every Hub; see bot.hub) --------------------------------
 HUB_OPEN: Final = "hubo"              # hubo:<hub> "⬅️ <Hub>" back button:
@@ -99,7 +99,7 @@ REQUESTS_MINE: Final = "rqhm"         # Requests Hub "My requests" (global handl
 REQUESTS_TRENDING: Final = "rqht"     # Requests Hub "Trending" (global handler)
 REQUESTS_SUBSCRIPTIONS: Final = "rqhs"  # Requests Hub "Subscriptions" (global
                                       # handler)
-TICKETS_REPORT: Final = "tkhr"        # Tickets Hub "Report a problem" (issue
+TICKETS_REPORT: Final = "tkhr"        # Tickets Hub "Report a problem" (new-Ticket
                                       # conversation entry point)
 TICKETS_LIST: Final = "tkhl"          # Tickets Hub list button and a detail
                                       # card's "⬅️ Tickets": show the list

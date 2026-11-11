@@ -68,7 +68,7 @@ async def test_user_with_decrypt_failed_link():
 
 async def test_close_after_suppressed_when_user_started_new_reply():
     """While add_issue_comment is awaiting, the user kicks off a new reply
-    flow for a different issue. The comment landed on issue 42 (bound at
+    flow for a different Ticket. The comment landed on Ticket 42 (bound at
     entry), but the close-after side effect must NOT fire -- it would
     affect a stale flow."""
     upd = make_update(text="closing comment", user_id=999)
@@ -77,7 +77,7 @@ async def test_close_after_suppressed_when_user_started_new_reply():
     # Simulate the user starting a new reply during the comment-post await
     # by overwriting tk_reply_id while add_issue_comment is in flight.
     async def slow_add_comment(*args, **kwargs):
-        ctx.user_data["tk_reply_id"] = 99  # user moved to a different issue
+        ctx.user_data["tk_reply_id"] = 99  # user moved to a different Ticket
     ctx.bot_data["seerr"].add_issue_comment.side_effect = slow_add_comment
 
     state = await tk_reply_text(upd, ctx)
@@ -85,7 +85,7 @@ async def test_close_after_suppressed_when_user_started_new_reply():
     # the NEW reply flow, so ending it here would kill the flow the user just
     # started and swallow their next message.
     assert state is None
-    # Comment was posted on issue 42 (the locally-bound issue_id).
+    # Comment was posted on Ticket 42 (the locally-bound ticket_id).
     args, _ = ctx.bot_data["seerr"].add_issue_comment.call_args
     assert args[0] == 42
     # But resolve_issue was NOT called (close-after suppressed).

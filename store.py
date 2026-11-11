@@ -107,8 +107,8 @@ class PendingAutofix:
     sonarr_season: Optional[int]        # for whole-season tv
     expected_episode_ids: list[int]     # episodes that had files at fix time (whole-season)
     label: str                          # for the notification text
-    issue_id: int
-    issue_url: str
+    ticket_id: int
+    ticket_url: str
     started_at: str
     timeout_at: str
     message_id: Optional[int] = None    # the fix's Progress card (the /issue
@@ -747,8 +747,8 @@ class UserStore:
         user_id: int,
         media_type: str,
         label: str,
-        issue_id: int,
-        issue_url: str,
+        ticket_id: int,
+        ticket_url: str,
         # Single source of truth: no caller passes this, so the
         # const IS the effective timeout, and the DM text derives from the
         # same value instead of lying when it's tuned.
@@ -778,7 +778,7 @@ class UserStore:
                     (
                         chat_id, user_id, media_type,
                         radarr_movie_id, sonarr_series_id, sonarr_episode_id, sonarr_season,
-                        json.dumps(expected_episode_ids or []), label, issue_id, issue_url,
+                        json.dumps(expected_episode_ids or []), label, ticket_id, ticket_url,
                         message_id, f"+{timeout_hours} hours",
                     ),
                 )
@@ -818,7 +818,7 @@ class UserStore:
                     radarr_movie_id=r[4], sonarr_series_id=r[5],
                     sonarr_episode_id=r[6], sonarr_season=r[7],
                     expected_episode_ids=ids,
-                    label=r[9], issue_id=r[10], issue_url=r[11],
+                    label=r[9], ticket_id=r[10], ticket_url=r[11],
                     started_at=r[12], timeout_at=r[13],
                     message_id=r[14], last_progress=r[15] or "",
                     bumped=r[16] or 0,

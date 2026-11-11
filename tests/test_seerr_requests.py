@@ -51,7 +51,7 @@ async def test_create_request_movie_sends_tmdb_id_and_parses_response(monkeypatc
     client = _client(monkeypatch, handler)
     created = await client.create_request(media_type="movie", tmdb_id=550)
     assert captured["path"].endswith("/request")
-    # mediaId is the TMDb id for requests (unlike issues, which use the
+    # mediaId is the TMDb id for requests (unlike Tickets, which use the
     # internal media.id) and no seasons key is sent for movies.
     assert captured["body"] == {"mediaType": "movie", "mediaId": 550}
     assert created.id == 7

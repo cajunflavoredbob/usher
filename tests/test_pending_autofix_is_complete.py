@@ -26,7 +26,7 @@ def _make_fix(
         sonarr_season=sonarr_season,
         expected_episode_ids=expected_episode_ids or [],
         label="Label",
-        issue_id=1, issue_url="http://x/issues/1",
+        ticket_id=1, ticket_url="http://x/issues/1",
         started_at="2026-05-30 00:00:00",
         timeout_at="2026-05-30 06:00:00",
     )

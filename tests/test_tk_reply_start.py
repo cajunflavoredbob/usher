@@ -1,6 +1,6 @@
 """Tests for bot.tickets.tk_reply_start / tk_close_with_comment_start: the
 Reply-button entry points. The v0.11.22 fix: clicking Reply must strip the
-inline buttons but KEEP the original issue-announcement text, and prompt for
+inline buttons but KEEP the original Ticket-announcement text, and prompt for
 the reply in a *separate* message (previously edit_message_text overwrote the
 whole announcement)."""
 from __future__ import annotations
