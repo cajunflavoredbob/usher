@@ -252,7 +252,7 @@ def _end_kwargs(hub: Optional[str], retry: Optional[str] = None) -> dict:
 
 async def _finalize_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                          auth_token: str, *, hub: Optional[str] = None) -> None:
-    """Shared post-auth path: Seerr login + persist mapping + success/failure reply."""
+    """Shared post-auth path: Seerr login + persist link + success/failure reply."""
     plex: PlexClient = ctx.bot_data["plex"]
     seerr: SeerrClient = ctx.bot_data["seerr"]
     store: UserStore = ctx.bot_data["store"]
@@ -494,14 +494,14 @@ async def cmd_unlink(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def render_account(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> HubView:
     store: UserStore = ctx.bot_data["store"]
-    mapping = await store.get(update.effective_user.id)
-    if mapping is None:
+    link = await store.get(update.effective_user.id)
+    if link is None:
         return HubView(
             "Not linked. Link your Plex account so your requests and tickets "
             "are tagged as you.",
             [InlineKeyboardButton("🔗 Link", callback_data=ACCOUNT_LINK)],
         )
-    name = mapping.seerr_display or mapping.plex_username or ""
+    name = link.seerr_display or link.plex_username or ""
     return HubView(
         f"🔗 Linked as <b>{html.escape(name)}</b>.",
         [InlineKeyboardButton("🔓 Unlink", callback_data=ACCOUNT_UNLINK)],

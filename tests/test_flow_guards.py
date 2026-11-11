@@ -21,7 +21,7 @@ from bot.shared import (
 from bot.tickets import _apply_fix, tk_close_direct
 from fix_result import FixResult
 from seerr import IssueListItem
-from tests._handler_harness import make_ctx, make_mapping, make_update
+from tests._handler_harness import make_ctx, make_link, make_update
 
 
 def _issue(*, media_type: str = "movie", tmdb_id: int = 12345) -> IssueListItem:
@@ -97,7 +97,7 @@ async def test_close_direct_second_tap_is_noop():
 async def test_double_submit_is_noop():
     """Second concurrent confirm tap must not file a duplicate Seerr issue."""
     upd = make_update(text="", user_id=42)
-    ctx = make_ctx(admin_id=999, mapping=make_mapping(plex_token="tok"),
+    ctx = make_ctx(admin_id=999, link=make_link(plex_token="tok"),
                    user_data={"submitting_issue": True,
                               "media": {"type": "movie", "tmdb_id": 1,
                                         "seerr_media_id": 5, "title": "M",
@@ -146,7 +146,7 @@ def test_ptb_conversation_key_shape_is_chat_then_user():
 
 async def test_resolve_comment_refused_while_issue_flow_active():
     upd = make_update(callback_data="resolve:42:no", user_id=42, chat_id=100)
-    ctx = make_ctx(admin_id=999, mapping=make_mapping(plex_token="tok"))
+    ctx = make_ctx(admin_id=999, link=make_link(plex_token="tok"))
     ctx.bot_data["conversations"] = {"issue": _fake_conv({(100, 42)})}
     state = await resolve_start(upd, ctx)
     assert state == ConversationHandler.END
@@ -161,7 +161,7 @@ async def test_resume_submit_refused_while_new_issue_flow_active():
     """A new /issue started mid-relink owns user_data; auto-submitting would
     file that half-built draft."""
     upd = make_update(text="", user_id=42, chat_id=100)
-    ctx = make_ctx(admin_id=999, mapping=make_mapping(plex_token="tok"))
+    ctx = make_ctx(admin_id=999, link=make_link(plex_token="tok"))
     ctx.bot_data["conversations"] = {"issue": _fake_conv({(100, 42)})}
     ctx.bot_data["seerr"].create_issue = AsyncMock()
     await _resume_submit_issue(upd, ctx, {"autofix": False})

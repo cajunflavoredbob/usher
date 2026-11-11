@@ -31,14 +31,14 @@ from bot.request_flow import (
 )
 from bot.shared import RQ_CONFIRM, RQ_PICK_MEDIA, RQ_PICK_SEASONS, RQ_TITLE
 
-from tests._handler_harness import make_ctx, make_mapping, make_update
+from tests._handler_harness import make_ctx, make_link, make_update
 
 USER_ID = 42
 ADMIN_ID = 999
 
 
 def _linked_ctx(**kwargs):
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=make_mapping(telegram_id=USER_ID),
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID),
                    **kwargs)
     ctx.args = []
     return ctx
@@ -53,7 +53,7 @@ def _quota(remaining=4, limit=10):
 # --- entry -------------------------------------------------------------------
 
 async def test_start_unlinked_user_is_gated():
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=None)
+    ctx = make_ctx(admin_id=ADMIN_ID, link=None)
     ctx.args = ["dune"]
     upd = make_update(text="/request", user_id=USER_ID)
     state = await request_start(upd, ctx)
@@ -563,7 +563,7 @@ async def test_submit_4k_passes_flag_and_labels():
 
 
 async def test_entry_caches_permissions():
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=make_mapping(telegram_id=USER_ID))
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
     ctx.args = ["dune"]
     ctx.bot_data["seerr"].get_my_permissions.return_value = 1026
     upd = make_update(text="/request", user_id=USER_ID)
@@ -607,7 +607,7 @@ async def test_request_from_issue_refetches_on_stash_mismatch():
 
 async def test_request_from_issue_gates_unlinked_user():
     from bot.request_flow import request_from_issue
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=None)
+    ctx = make_ctx(admin_id=ADMIN_ID, link=None)
     ctx.args = []
     ctx.bot_data["conversations"] = {}
     ctx.bot_data["flow_convs"] = []

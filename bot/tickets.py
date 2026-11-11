@@ -138,16 +138,16 @@ async def tickets_hub_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
     admin_id = ctx.bot_data.get("admin_id")
     is_admin = user_id == admin_id
     store: UserStore = ctx.bot_data["store"]
-    mapping = await store.get(user_id)
+    link = await store.get(user_id)
 
     # Eligibility check for non-admin users. decrypt_failed is
     # distinguished like every sibling gate: telling that user to "/link
     # first" is the wrong remedy (they need /unlink then /link).
     if not is_admin:
-        if mapping and mapping.plex_token_decrypt_failed:
+        if link and link.plex_token_decrypt_failed:
             await show(DECRYPT_FAILED_MSG, back)
             return
-        if not mapping or not mapping.plex_token:
+        if not link or not link.plex_token:
             await show("DM me /link first so I know which Plex account is yours.",
                        back)
             return
@@ -156,7 +156,7 @@ async def tickets_hub_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
     try:
         issues, total = await seerr.list_issues(
             filter="open",
-            as_plex_token=None if is_admin else mapping.plex_token,
+            as_plex_token=None if is_admin else link.plex_token,
         )
     except PlexTokenInvalidError:
         await prompt_plex_relink(update, ctx, back=back_button(TICKETS_HUB))

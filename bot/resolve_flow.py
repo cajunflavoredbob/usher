@@ -204,7 +204,7 @@ async def resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
 async def _resume_resolve_close(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                                 payload: dict) -> None:
     """Relink-resume executor: close the issue the revoked token blocked.
-    The fresh token comes from the just-stored mapping, never the payload."""
+    The fresh token comes from the just-stored link, never the payload."""
     issue_id = payload["issue_id"]
     is_admin, token, _ = await token_for(ctx, update.effective_user.id)
     if not is_admin and token is None:

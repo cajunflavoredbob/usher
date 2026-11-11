@@ -13,16 +13,16 @@ from unittest.mock import AsyncMock
 
 from bot.webhook_handlers import handle_seerr_comment
 from bot.callback_prefixes import TK_OPEN, TK_REPLY
-from tests._handler_harness import make_ctx, make_mapping
+from tests._handler_harness import make_ctx, make_link
 
 
-def _app(*, admin_id=999, admin_mapping=None, reporter_mapping=None):
-    """Build a fake Application for the comment handler. `admin_mapping` is what
-    store.get(admin_id) returns; `reporter_mapping` is what
+def _app(*, admin_id=999, admin_link=None, reporter_link=None):
+    """Build a fake Application for the comment handler. `admin_link` is what
+    store.get(admin_id) returns; `reporter_link` is what
     store.find_by_plex_username(reporter) returns."""
     app = make_ctx(admin_id=admin_id).application
-    app.bot_data["store"].get = AsyncMock(return_value=admin_mapping)
-    app.bot_data["store"].find_by_plex_username = AsyncMock(return_value=reporter_mapping)
+    app.bot_data["store"].get = AsyncMock(return_value=admin_link)
+    app.bot_data["store"].find_by_plex_username = AsyncMock(return_value=reporter_link)
     return app
 
 
@@ -50,9 +50,9 @@ def _sent_chat_ids(app):
 
 
 async def test_reporter_followup_notifies_admin_not_reporter():
-    admin = make_mapping(telegram_id=999, plex_username="user1plex")
-    reporter = make_mapping(telegram_id=111, plex_username="user2")
-    app = _app(admin_id=999, admin_mapping=admin, reporter_mapping=reporter)
+    admin = make_link(telegram_id=999, plex_username="user1plex")
+    reporter = make_link(telegram_id=111, plex_username="user2")
+    app = _app(admin_id=999, admin_link=admin, reporter_link=reporter)
 
     # User2 (the reporter) comments on his own issue.
     await handle_seerr_comment(app, _payload(commenter="user2", reporter="user2"))
@@ -65,9 +65,9 @@ async def test_reporter_followup_notifies_admin_not_reporter():
 
 
 async def test_admin_reply_notifies_reporter_not_admin():
-    admin = make_mapping(telegram_id=999, plex_username="user1plex")
-    reporter = make_mapping(telegram_id=111, plex_username="user2")
-    app = _app(admin_id=999, admin_mapping=admin, reporter_mapping=reporter)
+    admin = make_link(telegram_id=999, plex_username="user1plex")
+    reporter = make_link(telegram_id=111, plex_username="user2")
+    app = _app(admin_id=999, admin_link=admin, reporter_link=reporter)
 
     # User1 (admin) comments; commenter == admin's plex username.
     await handle_seerr_comment(app, _payload(commenter="user1plex", reporter="user2"))
@@ -80,9 +80,9 @@ async def test_admin_reply_notifies_reporter_not_admin():
 
 
 async def test_third_party_comment_notifies_both():
-    admin = make_mapping(telegram_id=999, plex_username="user1plex")
-    reporter = make_mapping(telegram_id=111, plex_username="user2")
-    app = _app(admin_id=999, admin_mapping=admin, reporter_mapping=reporter)
+    admin = make_link(telegram_id=999, plex_username="user1plex")
+    reporter = make_link(telegram_id=111, plex_username="user2")
+    app = _app(admin_id=999, admin_link=admin, reporter_link=reporter)
 
     await handle_seerr_comment(app, _payload(commenter="someoneelse", reporter="user2"))
 
@@ -95,8 +95,8 @@ async def test_third_party_comment_notifies_both():
 
 async def test_admin_is_reporter_no_double_dm():
     # Admin filed the issue themselves; a third party comments.
-    admin = make_mapping(telegram_id=999, plex_username="user1plex")
-    app = _app(admin_id=999, admin_mapping=admin, reporter_mapping=admin)
+    admin = make_link(telegram_id=999, plex_username="user1plex")
+    app = _app(admin_id=999, admin_link=admin, reporter_link=admin)
 
     await handle_seerr_comment(app, _payload(commenter="someoneelse", reporter="user1plex"))
 
@@ -112,9 +112,9 @@ def _callbacks(kb):
 
 
 async def test_reply_and_history_present_when_open():
-    admin = make_mapping(telegram_id=999, plex_username="user1plex")
-    reporter = make_mapping(telegram_id=111, plex_username="user2")
-    app = _app(admin_id=999, admin_mapping=admin, reporter_mapping=reporter)
+    admin = make_link(telegram_id=999, plex_username="user1plex")
+    reporter = make_link(telegram_id=111, plex_username="user2")
+    app = _app(admin_id=999, admin_link=admin, reporter_link=reporter)
 
     await handle_seerr_comment(app, _payload(commenter="user2", status="OPEN"))
 
@@ -124,9 +124,9 @@ async def test_reply_and_history_present_when_open():
 
 
 async def test_history_present_no_reply_when_resolved():
-    admin = make_mapping(telegram_id=999, plex_username="user1plex")
-    reporter = make_mapping(telegram_id=111, plex_username="user2")
-    app = _app(admin_id=999, admin_mapping=admin, reporter_mapping=reporter)
+    admin = make_link(telegram_id=999, plex_username="user1plex")
+    reporter = make_link(telegram_id=111, plex_username="user2")
+    app = _app(admin_id=999, admin_link=admin, reporter_link=reporter)
 
     await handle_seerr_comment(app, _payload(commenter="user2", status="RESOLVED"))
 
@@ -138,9 +138,9 @@ async def test_history_present_no_reply_when_resolved():
 
 
 async def test_scope_line_from_extra_array():
-    admin = make_mapping(telegram_id=999, plex_username="user1plex")
-    reporter = make_mapping(telegram_id=111, plex_username="user2")
-    app = _app(admin_id=999, admin_mapping=admin, reporter_mapping=reporter)
+    admin = make_link(telegram_id=999, plex_username="user1plex")
+    reporter = make_link(telegram_id=111, plex_username="user2")
+    app = _app(admin_id=999, admin_link=admin, reporter_link=reporter)
     # get_media_title is mocked to ("Movie Title", "2026") in the harness.
     payload = {
         "notification_type": "ISSUE_COMMENT",
@@ -162,9 +162,9 @@ async def test_scope_line_falls_back_to_api_when_payload_has_none():
     array, so the scope fell through to "All seasons" and contradicted the
     create DM, which correctly said Season 6, Episode 9. The handler must now
     resolve the ticket's real scope instead of guessing."""
-    admin = make_mapping(telegram_id=999, plex_username="user1plex")
-    reporter = make_mapping(telegram_id=111, plex_username="user2")
-    app = _app(admin_id=999, admin_mapping=admin, reporter_mapping=reporter)
+    admin = make_link(telegram_id=999, plex_username="user1plex")
+    reporter = make_link(telegram_id=111, plex_username="user2")
+    app = _app(admin_id=999, admin_link=admin, reporter_link=reporter)
     app.bot_data["seerr"].get_issue = AsyncMock(return_value=SimpleNamespace(
         problem_season=6, problem_episode=9,
     ))
@@ -184,9 +184,9 @@ async def test_scope_line_falls_back_to_api_when_payload_has_none():
 async def test_scope_line_omitted_when_scope_unknowable():
     """No payload scope and no API answer -> no scope line, rather than a
     fabricated "All seasons"."""
-    admin = make_mapping(telegram_id=999, plex_username="user1plex")
-    reporter = make_mapping(telegram_id=111, plex_username="user2")
-    app = _app(admin_id=999, admin_mapping=admin, reporter_mapping=reporter)
+    admin = make_link(telegram_id=999, plex_username="user1plex")
+    reporter = make_link(telegram_id=111, plex_username="user2")
+    app = _app(admin_id=999, admin_link=admin, reporter_link=reporter)
     app.bot_data["seerr"].get_issue = AsyncMock(return_value=SimpleNamespace(
         problem_season=None, problem_episode=None,
     ))
@@ -214,6 +214,6 @@ async def test_empty_comment_dropped():
 async def test_reporter_followup_admin_unlinked_nobody_notified():
     """Reporter comments but no admin_id is configured and reporter wrote it,
     so there's no one to route to."""
-    app = _app(admin_id=None, admin_mapping=None, reporter_mapping=None)
+    app = _app(admin_id=None, admin_link=None, reporter_link=None)
     await handle_seerr_comment(app, _payload(commenter="user2", reporter="user2"))
     app.bot.send_message.assert_not_called()

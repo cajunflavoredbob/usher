@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from cryptography.fernet import Fernet
 
-from store import Mapping, TokenCrypto, UserStore
+from store import Link, TokenCrypto, UserStore
 
 
 async def test_init_creates_schema_and_wal(tmp_db_path: Path, fresh_token_crypto):
@@ -27,13 +27,13 @@ async def test_link_and_get_roundtrip(fresh_store: UserStore):
         plex_uuid="uuid-abc",
         plex_username="user1",
     )
-    m = await fresh_store.get(42)
-    assert m is not None
-    assert m.telegram_id == 42
-    assert m.seerr_id == 7
-    assert m.plex_token == "plex-token-secret"
-    assert m.plex_username == "user1"
-    assert m.plex_token_decrypt_failed is False
+    link = await fresh_store.get(42)
+    assert link is not None
+    assert link.telegram_id == 42
+    assert link.seerr_id == 7
+    assert link.plex_token == "plex-token-secret"
+    assert link.plex_username == "user1"
+    assert link.plex_token_decrypt_failed is False
 
 
 async def test_get_missing_returns_none(fresh_store: UserStore):
@@ -81,10 +81,10 @@ async def test_decrypt_failed_when_key_changes(tmp_db_path: Path, tmp_path: Path
     key_b = TokenCrypto(key_path=key_b_path)
     store_b = UserStore(tmp_db_path, crypto=key_b)
 
-    m = await store_b.get(42)
-    assert m is not None
-    assert m.plex_token is None
-    assert m.plex_token_decrypt_failed is True
+    link = await store_b.get(42)
+    assert link is not None
+    assert link.plex_token is None
+    assert link.plex_token_decrypt_failed is True
 
 
 async def test_count_decrypt_failures_zero_when_healthy(fresh_store: UserStore):

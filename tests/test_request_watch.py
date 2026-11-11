@@ -12,7 +12,7 @@ from bot.request_watch import (
     poll_request_watches,
 )
 
-from tests._handler_harness import make_ctx, make_mapping, make_update
+from tests._handler_harness import make_ctx, make_link, make_update
 
 USER_ID = 42
 
@@ -137,7 +137,7 @@ async def test_webhook_available_finalizes_and_deletes():
 async def test_submit_enqueues_watch():
     from seerr import CreatedRequest, REQUEST_STATUS_APPROVED
     from bot.request_flow import request_submit
-    ctx = make_ctx(admin_id=999, mapping=make_mapping(telegram_id=USER_ID),
+    ctx = make_ctx(admin_id=999, link=make_link(telegram_id=USER_ID),
                    user_data={"rq_media": {"type": "movie", "tmdb_id": 550,
                                            "title": "Movie", "year": "2026"},
                               "rq_search_version": 1})

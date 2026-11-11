@@ -10,7 +10,7 @@ from seerr import (
 )
 from bot.requests_cmd import cmd_requests, rq_list_cancel
 
-from tests._handler_harness import make_ctx, make_mapping, make_update
+from tests._handler_harness import make_ctx, make_link, make_update
 
 USER_ID = 42
 ADMIN_ID = 999
@@ -34,7 +34,7 @@ def _callbacks(markup) -> list[str]:
 
 
 async def test_list_renders_statuses_and_cancel_buttons():
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=make_mapping(telegram_id=USER_ID))
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
     ctx.bot_data["seerr"].list_requests.return_value = (_items(), 2)
     upd = make_update(text="/requests", user_id=USER_ID)
     await cmd_requests(upd, ctx)
@@ -51,7 +51,7 @@ async def test_list_renders_statuses_and_cancel_buttons():
 
 
 async def test_admin_list_shows_requesters_and_uses_admin_key():
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=make_mapping(telegram_id=ADMIN_ID))
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=ADMIN_ID))
     ctx.bot_data["seerr"].list_requests.return_value = (_items(), 2)
     upd = make_update(text="/requests", user_id=ADMIN_ID)
     await cmd_requests(upd, ctx)
@@ -61,7 +61,7 @@ async def test_admin_list_shows_requesters_and_uses_admin_key():
 
 
 async def test_unlinked_user_is_gated():
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=None)
+    ctx = make_ctx(admin_id=ADMIN_ID, link=None)
     upd = make_update(text="/requests", user_id=USER_ID)
     await cmd_requests(upd, ctx)
     assert "link" in upd.effective_message.reply_calls[0]["text"]
@@ -69,7 +69,7 @@ async def test_unlinked_user_is_gated():
 
 
 async def test_empty_list_message():
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=make_mapping(telegram_id=USER_ID))
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
     ctx.bot_data["seerr"].list_requests.return_value = ([], 0)
     upd = make_update(text="/requests", user_id=USER_ID)
     await cmd_requests(upd, ctx)
@@ -77,7 +77,7 @@ async def test_empty_list_message():
 
 
 async def test_cancel_deletes_and_rerenders():
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=make_mapping(telegram_id=USER_ID))
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
     ctx.bot_data["seerr"].list_requests.return_value = ([_items()[1]], 1)
     upd = make_update(callback_data="rqlc:12", user_id=USER_ID)
     await rq_list_cancel(upd, ctx)
@@ -94,7 +94,7 @@ async def test_cancel_deletes_and_rerenders():
 async def test_cancel_failure_surfaces_reason():
     """The callback is answered up front (a slow DELETE would outlive the
     query's validity), so failure feedback rides the re-rendered list."""
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=make_mapping(telegram_id=USER_ID))
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
     ctx.bot_data["seerr"].delete_request.side_effect = RuntimeError("boom")
     ctx.bot_data["seerr"].list_requests.return_value = ([_items()[0]], 1)
     upd = make_update(callback_data="rqlc:12", user_id=USER_ID)
@@ -108,7 +108,7 @@ async def test_cancel_not_found_treated_as_success():
     """A 404 on DELETE (already cancelled, or our own retried DELETE) reads
     as success, not a scary failure alert."""
     from http_util import NotFoundAPIError
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=make_mapping(telegram_id=USER_ID))
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
     ctx.bot_data["seerr"].delete_request.side_effect = NotFoundAPIError(
         "gone", status_code=404, service="Seerr")
     ctx.bot_data["seerr"].list_requests.return_value = ([], 0)

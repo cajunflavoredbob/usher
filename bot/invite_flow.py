@@ -106,11 +106,11 @@ async def _admin_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     if await refuse_outside_admin_dm(update, ctx):
         return None
     store: UserStore = ctx.bot_data["store"]
-    mapping = await store.get(update.effective_user.id)
-    if mapping is None or not mapping.plex_token:
+    link = await store.get(update.effective_user.id)
+    if link is None or not link.plex_token:
         await end_flow(update, ctx, _NOT_LINKED, hub)
         return None
-    return mapping.plex_token
+    return link.plex_token
 
 
 async def _invite_expect_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
@@ -223,11 +223,11 @@ async def _accept_email(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     ctx.user_data["inv_email"] = email
     await send_typing(update, ctx)
     store: UserStore = ctx.bot_data["store"]
-    mapping = await store.get(update.effective_user.id)
+    link = await store.get(update.effective_user.id)
     plex: PlexClient = ctx.bot_data["plex"]
     try:
-        machine_id, server_name = await plex.get_owned_server(mapping.plex_token)
-        sections = await plex.get_library_sections(mapping.plex_token, machine_id)
+        machine_id, server_name = await plex.get_owned_server(link.plex_token)
+        sections = await plex.get_library_sections(link.plex_token, machine_id)
     except LookupError:
         await end_flow(update, ctx,
                        "Your linked Plex account doesn't own a server: sharing needs "
@@ -415,8 +415,8 @@ async def _invite_send_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
         _clear(ctx)
         return ConversationHandler.END
     store: UserStore = ctx.bot_data["store"]
-    mapping = await store.get(update.effective_user.id)
-    if mapping is None or not mapping.plex_token:
+    link = await store.get(update.effective_user.id)
+    if link is None or not link.plex_token:
         await end_flow(update, ctx, "Your /link is no longer usable; /link first.",
                        hub, typed_text=("Your /link is no longer usable. /link "
                                     "then /invite again."))
@@ -433,7 +433,7 @@ async def _invite_send_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     await send_typing(update, ctx)
     plex: PlexClient = ctx.bot_data["plex"]
     try:
-        await plex.invite_to_server(mapping.plex_token, machine, email,
+        await plex.invite_to_server(link.plex_token, machine, email,
                                     sorted(selected))
     except Exception as exc:
         logger.exception("plex invite failed")
@@ -621,15 +621,15 @@ async def _load_shares(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     On a refusal or failure, edits the tapped message into it (back button,
     plus Try again with `retry` on a failure) and returns None."""
     store: UserStore = ctx.bot_data["store"]
-    mapping = await store.get(update.effective_user.id)
-    if mapping is None or not mapping.plex_token:
+    link = await store.get(update.effective_user.id)
+    if link is None or not link.plex_token:
         await end_flow(update, ctx, _NOT_LINKED, ADMIN_HUB)
         return None
     await send_typing(update, ctx)
     plex: PlexClient = ctx.bot_data["plex"]
     try:
-        machine_id, _ = await plex.get_owned_server(mapping.plex_token)
-        shares = await plex.list_shares(mapping.plex_token, machine_id)
+        machine_id, _ = await plex.get_owned_server(link.plex_token)
+        shares = await plex.list_shares(link.plex_token, machine_id)
     except LookupError:
         await end_flow(update, ctx, _NO_SERVER, ADMIN_HUB)
         return None
@@ -795,14 +795,14 @@ async def _uninvite_go_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     the already confirmed removal."""
     q = update.callback_query
     store: UserStore = ctx.bot_data["store"]
-    mapping = await store.get(update.effective_user.id)
-    if mapping is None or not mapping.plex_token:
+    link = await store.get(update.effective_user.id)
+    if link is None or not link.plex_token:
         await end_flow(update, ctx, "Your /link is no longer usable; /link first.",
                        ADMIN_HUB)
         return
     plex: PlexClient = ctx.bot_data["plex"]
     try:
-        await plex.remove_share(mapping.plex_token, share_id)
+        await plex.remove_share(link.plex_token, share_id)
     except NotFoundAPIError:
         # Already gone (removed elsewhere, or a racing duplicate tap):
         # the desired end state holds, so report it as done.

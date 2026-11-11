@@ -26,7 +26,7 @@ from bot.shared import INV_CONFIRM, INV_EMAIL, INV_LIBS
 from http_util import PermanentAPIError, TransientAPIError
 from plex import PlexLibrarySection, PlexShare
 
-from tests._handler_harness import make_ctx, make_mapping, make_update
+from tests._handler_harness import make_ctx, make_link, make_update
 
 ADMIN_ID = 999
 
@@ -39,7 +39,7 @@ def _sections():
 
 def _plex_ctx(**kwargs):
     ctx = make_ctx(admin_id=ADMIN_ID,
-                   mapping=make_mapping(telegram_id=ADMIN_ID), **kwargs)
+                   link=make_link(telegram_id=ADMIN_ID), **kwargs)
     ctx.args = []
     plex = AsyncMock()
     plex.get_owned_server.return_value = ("machine-1", "server1")
@@ -76,7 +76,7 @@ async def test_invite_requires_dm():
 
 
 async def test_invite_requires_link():
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=None)
+    ctx = make_ctx(admin_id=ADMIN_ID, link=None)
     ctx.args = []
     ctx.bot_data["plex"] = AsyncMock()
     upd = _dm(make_update(text="/invite", user_id=ADMIN_ID))
@@ -255,7 +255,7 @@ def _share(id, email, accepted=True, username="", all_libraries=False,
 
 def _shares_ctx(shares=(), **kwargs):
     ctx = make_ctx(admin_id=ADMIN_ID,
-                   mapping=make_mapping(telegram_id=ADMIN_ID), **kwargs)
+                   link=make_link(telegram_id=ADMIN_ID), **kwargs)
     ctx.args = []
     plex = AsyncMock()
     plex.get_owned_server.return_value = ("machine-1", "server1")

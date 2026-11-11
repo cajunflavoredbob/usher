@@ -25,7 +25,7 @@ from seerr import (REQUEST_STATUS_APPROVED, REQUEST_STATUS_PENDING,
                    CreatedRequest, MediaResult, QuotaExceededError,
                    RequestListItem)
 
-from tests._handler_harness import make_ctx, make_mapping, make_update
+from tests._handler_harness import make_ctx, make_link, make_update
 
 USER_ID = 42
 ADMIN_ID = 999
@@ -43,7 +43,7 @@ def _cbs(markup):
 
 
 def _linked_ctx(**kwargs):
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=make_mapping(telegram_id=USER_ID),
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID),
                    **kwargs)
     ctx.args = []
     return ctx
@@ -106,7 +106,7 @@ def _fake_conv(key=(100, USER_ID)):
 # --- the Hub itself ------------------------------------------------------------
 
 async def test_request_without_title_shows_four_button_hub():
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=None)  # no gate for the Hub
+    ctx = make_ctx(admin_id=ADMIN_ID, link=None)  # no gate for the Hub
     ctx.args = []
     upd = make_update(text="/request", user_id=USER_ID)
     state = await request_start(upd, ctx)
@@ -444,7 +444,7 @@ async def test_hub_submit_quota_ends_with_back_only():
 
 
 async def test_hub_new_request_unlinked_ends_with_back_only():
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=None)
+    ctx = make_ctx(admin_id=ADMIN_ID, link=None)
     ctx.args = []
     upd = make_update(callback_data=REQUESTS_NEW, user_id=USER_ID)
     state = await request_hub_new(upd, ctx)

@@ -229,7 +229,7 @@ def _request_conversation() -> ConversationHandler:
 async def _gate_entry(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *,
                       hub: Optional[str] = None) -> bool:
     """Shared /request entry gate: Seerr configured + a usable link. The
-    admin passes without a mapping (admin-key attribution, like /issue's
+    admin passes without a link (admin-key attribution, like /issue's
     admin paths). On success, the user's Seerr permission bitmask is cached
     in user_data so pick/confirm can decide whether to offer 4K without a
     round-trip per screen. With `hub` set (entry from a Hub button) the link
@@ -833,11 +833,11 @@ async def _quota_line(ctx: ContextTypes.DEFAULT_TYPE, tg_id: int,
     try:
         is_admin, token, _ = await token_for(ctx, tg_id)
         store: UserStore = ctx.bot_data["store"]
-        mapping = await store.get(tg_id)
-        if mapping is None or not mapping.seerr_id:
+        link = await store.get(tg_id)
+        if link is None or not link.seerr_id:
             return ""
         seerr: SeerrClient = ctx.bot_data["seerr"]
-        quota = await seerr.get_quota(mapping.seerr_id, as_plex_token=token)
+        quota = await seerr.get_quota(link.seerr_id, as_plex_token=token)
         bucket = quota.movie if media_type == "movie" else quota.tv
         if not bucket.limit or bucket.remaining is None:
             return ""

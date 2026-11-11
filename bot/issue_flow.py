@@ -195,19 +195,19 @@ async def issue_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if await require_seerr(update, ctx) is None:
         return ConversationHandler.END
     # Full link gate at flow ENTRY: the old check only tested
-    # for a mapping row, so a decrypt-failed or token-less link sailed
+    # for a Link, so a decrypt-failed or token-less one sailed
     # through the whole flow and died at submit with a misleading "lost
     # conversation state", discarding the typed description.
     store: UserStore = ctx.bot_data["store"]
-    mapping = await store.get(update.effective_user.id)
-    if mapping is None or (not mapping.plex_token
-                           and not mapping.plex_token_decrypt_failed):
+    link = await store.get(update.effective_user.id)
+    if link is None or (not link.plex_token
+                        and not link.plex_token_decrypt_failed):
         await update.effective_message.reply_text(
             "DM me /link first so reports are filed as you. It's a quick "
             "Plex sign-in - no username needed."
         )
         return ConversationHandler.END
-    if mapping.plex_token_decrypt_failed:
+    if link.plex_token_decrypt_failed:
         await update.effective_message.reply_text(
             DECRYPT_FAILED_MSG
         )
@@ -230,14 +230,14 @@ async def issue_hub_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
                            reply_markup=end_markup(TICKETS_HUB)) is None:
         return ConversationHandler.END
     store: UserStore = ctx.bot_data["store"]
-    mapping = await store.get(update.effective_user.id)
-    if mapping is None or (not mapping.plex_token
-                           and not mapping.plex_token_decrypt_failed):
+    link = await store.get(update.effective_user.id)
+    if link is None or (not link.plex_token
+                        and not link.plex_token_decrypt_failed):
         await end_flow(update, ctx,
                        "DM me /link first so reports are filed as you. It's a quick "
                        "Plex sign-in - no username needed.", TICKETS_HUB)
         return ConversationHandler.END
-    if mapping.plex_token_decrypt_failed:
+    if link.plex_token_decrypt_failed:
         await end_flow(update, ctx, DECRYPT_FAILED_MSG, TICKETS_HUB)
         return ConversationHandler.END
     await edit_or_send(q, "What movie or show is the issue with? (Reply with the title.)")
@@ -805,8 +805,8 @@ async def _submit_issue_inner(
     episode = ctx.user_data.get("episode")
 
     hub = _tickets_origin(ctx)
-    mapping = await store.get(update.effective_user.id)
-    if not (mapping and mapping.plex_token and issue_type and media):
+    link = await store.get(update.effective_user.id)
+    if not (link and link.plex_token and issue_type and media):
         await end_flow(
             update, ctx, "Lost conversation state or your Plex link is incomplete.",
             hub, TICKETS_REPORT, edit=False,
@@ -831,7 +831,7 @@ async def _submit_issue_inner(
             media_type=media["type"],
             problem_season=season if media["type"] == "tv" else None,
             problem_episode=episode if media["type"] == "tv" else None,
-            as_plex_token=mapping.plex_token,
+            as_plex_token=link.plex_token,
         )
     except PlexTokenInvalidError:
         # The draft (media, type, description) stays in user_data; only the

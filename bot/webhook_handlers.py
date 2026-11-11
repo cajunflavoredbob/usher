@@ -58,8 +58,8 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
 
     # Resolve the admin's Plex username so we can tell whether the admin wrote
     # this comment (and must therefore not be notified about it).
-    admin_mapping = await store.get(admin_id) if admin_id else None
-    admin_plex = (admin_mapping.plex_username if admin_mapping else "") or ""
+    admin_link = await store.get(admin_id) if admin_id else None
+    admin_plex = (admin_link.plex_username if admin_link else "") or ""
     commenter_is_admin = bool(
         commenter_username and admin_plex
         and commenter_username.lower() == admin_plex.lower()
@@ -124,15 +124,15 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
     # Notify the reporter unless they wrote the comment.
     reporter_tid = None
     if not commenter_is_reporter:
-        mapping = await store.find_by_plex_username(reporter_username)
-        if mapping is None:
+        link = await store.find_by_plex_username(reporter_username)
+        if link is None:
             logger.info(
                 "Webhook comment on issue #%d: reporter '%s' not linked; "
                 "skipping reporter notify", issue_id, reporter_username,
             )
         else:
-            reporter_tid = mapping.telegram_id
-            await _notify(mapping.telegram_id, "reporter")
+            reporter_tid = link.telegram_id
+            await _notify(link.telegram_id, "reporter")
 
     # Notify the admin unless they wrote the comment or are the reporter
     # (already notified just above).
@@ -160,8 +160,8 @@ async def handle_seerr_resolved(app: Application, payload: dict) -> None:
         return
 
     store: UserStore = app.bot_data["store"]
-    mapping = await store.find_by_plex_username(reporter_username)
-    if mapping is None:
+    link = await store.find_by_plex_username(reporter_username)
+    if link is None:
         logger.info(
             "Webhook resolved on issue #%d: reporter '%s' not linked in Usher",
             issue_id, reporter_username,
@@ -180,7 +180,7 @@ async def handle_seerr_resolved(app: Application, payload: dict) -> None:
     admin_id = app.bot_data.get("admin_id")
 
     # DM the reporter (if they're linked)
-    if mapping is not None:
+    if link is not None:
         reporter_lines = [f"✅ Your ticket #{issue_id} was resolved."]
         if safe_title:
             reporter_lines.append(safe_title)
@@ -188,21 +188,21 @@ async def handle_seerr_resolved(app: Application, payload: dict) -> None:
             reporter_lines.append(safe_scope)
         try:
             await app.bot.send_message(
-                chat_id=mapping.telegram_id,
+                chat_id=link.telegram_id,
                 text="\n".join(reporter_lines),
                 parse_mode="HTML",
                 disable_web_page_preview=True,
             )
             logger.info("Notified telegram_id=%d of resolved issue #%d",
-                        mapping.telegram_id, issue_id)
+                        link.telegram_id, issue_id)
         except Exception:
             logger.exception(
                 "Failed to DM telegram_id=%d about resolved issue #%d",
-                mapping.telegram_id, issue_id,
+                link.telegram_id, issue_id,
             )
 
     # Also DM the admin (unless admin IS the reporter)
-    if admin_id and (mapping is None or mapping.telegram_id != admin_id):
+    if admin_id and (link is None or link.telegram_id != admin_id):
         admin_lines = [f"✅ Ticket #{issue_id} resolved"]
         if safe_title:
             admin_lines.append(safe_title)
@@ -248,9 +248,9 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
 
     # Skip if admin filed it themselves -- they already saw the /issue confirmation
     store: UserStore = app.bot_data["store"]
-    admin_mapping = await store.get(admin_id)
-    if (admin_mapping and admin_mapping.plex_username
-            and admin_mapping.plex_username.lower() == reporter_username.lower()):
+    admin_link = await store.get(admin_id)
+    if (admin_link and admin_link.plex_username
+            and admin_link.plex_username.lower() == reporter_username.lower()):
         logger.info("ISSUE_REPORTED #%d filed by admin themselves; not DMing", issue_id)
         return
 
@@ -352,7 +352,7 @@ def _requested_seasons_note(payload: dict) -> str:
 
 async def _resolve_requester(app: Application, request_block: dict,
                              fallback_username: str):
-    """Resolve the webhook's requester to (mapping, requester_seerr_id).
+    """Resolve the webhook's requester to (link, requester_seerr_id).
 
     Primary path: fetch the request by id (admin key) and join on the
     numeric Seerr user id -- display names are user-editable in Seerr, so
@@ -370,8 +370,8 @@ async def _resolve_requester(app: Application, request_block: dict,
         try:
             req = await seerr.get_request(request_id)
             if req.requested_by_id is not None:
-                mapping = await store.find_by_seerr_id(req.requested_by_id)
-                return mapping, req.requested_by_id
+                link = await store.find_by_seerr_id(req.requested_by_id)
+                return link, req.requested_by_id
         except Exception:
             logger.debug("requester resolution via request id failed; "
                          "falling back to username match", exc_info=True)
@@ -419,9 +419,9 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
     requester_username = (request.get("requestedBy_username")
                           or payload.get("notifyuser_username") or "").strip()
 
-    mapping, requester_seerr_id = await _resolve_requester(
+    link, requester_seerr_id = await _resolve_requester(
         app, request, requester_username)
-    if mapping is None and (requester_username or requester_seerr_id):
+    if link is None and (requester_username or requester_seerr_id):
         logger.info("Webhook media event %s: requester '%s' not linked in Usher",
                     nt, requester_username or requester_seerr_id)
 
@@ -434,9 +434,9 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
         title_line = str(payload.get("subject") or "").strip()
 
     admin_id = app.bot_data.get("admin_id")
-    requester_is_admin = mapping is not None and mapping.telegram_id == admin_id
+    requester_is_admin = link is not None and link.telegram_id == admin_id
     if not requester_is_admin and requester_seerr_id is not None and seerr is not None:
-        # The admin can request WITHOUT a mapping (admin-key attribution);
+        # The admin can request WITHOUT a link (admin-key attribution);
         # those requests carry the API key's own Seerr user id. Without this
         # check the admin would be DMed "New request" about their own
         # requests.
@@ -471,13 +471,13 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
         except Exception:
             logger.exception("Failed to DM telegram_id=%d about %s", chat_id, nt)
 
-    # The unlinked admin (admin-key attribution) has no mapping but is a
+    # The unlinked admin (admin-key attribution) has no link but is a
     # fully supported requester; their lifecycle DMs go to the admin chat.
     # Without this, MEDIA_FAILED on an admin request notified NOBODY (the
-    # requester line had no mapping and the admin FYI is self-suppressed).
+    # requester line had no link and the admin FYI is self-suppressed).
     requester_chat_id = None
-    if mapping is not None:
-        requester_chat_id = mapping.telegram_id
+    if link is not None:
+        requester_chat_id = link.telegram_id
     elif requester_is_admin and admin_id:
         requester_chat_id = admin_id
     requester_dmed = False

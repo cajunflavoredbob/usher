@@ -8,13 +8,13 @@ from unittest.mock import AsyncMock
 
 from bot.webhook_handlers import handle_seerr_reported
 from bot.callback_prefixes import TK_CLOSE, TK_FIX, TK_OPEN, TK_REPLY
-from tests._handler_harness import make_ctx, make_mapping
+from tests._handler_harness import make_ctx, make_link
 
 
-def _app(admin_id=999, admin_mapping=None):
+def _app(admin_id=999, admin_link=None):
     app = make_ctx(admin_id=admin_id).application
     # Admin is NOT the reporter, so the DM is sent.
-    app.bot_data["store"].get = AsyncMock(return_value=admin_mapping)
+    app.bot_data["store"].get = AsyncMock(return_value=admin_link)
     return app
 
 
@@ -39,7 +39,7 @@ def _callbacks(kb):
 
 
 async def test_new_issue_shows_episode_scope():
-    app = _app(admin_mapping=make_mapping(telegram_id=999, plex_username="user1plex"))
+    app = _app(admin_link=make_link(telegram_id=999, plex_username="user1plex"))
     await handle_seerr_reported(app, _payload(extra=[
         {"name": "Affected Season", "value": "1"},
         {"name": "Affected Episode", "value": "5"},
@@ -49,14 +49,14 @@ async def test_new_issue_shows_episode_scope():
 
 
 async def test_new_issue_shows_all_seasons_when_no_season():
-    app = _app(admin_mapping=make_mapping(telegram_id=999, plex_username="user1plex"))
+    app = _app(admin_link=make_link(telegram_id=999, plex_username="user1plex"))
     await handle_seerr_reported(app, _payload(extra=[]))
     text = app.bot.send_message.call_args.kwargs["text"]
     assert "All seasons" in text
 
 
 async def test_movie_issue_has_no_scope_line():
-    app = _app(admin_mapping=make_mapping(telegram_id=999, plex_username="user1plex"))
+    app = _app(admin_link=make_link(telegram_id=999, plex_username="user1plex"))
     await handle_seerr_reported(app, _payload(media={"media_type": "movie", "tmdbId": 99}))
     text = app.bot.send_message.call_args.kwargs["text"]
     assert "Season" not in text
@@ -64,7 +64,7 @@ async def test_movie_issue_has_no_scope_line():
 
 
 async def test_new_issue_has_history_button():
-    app = _app(admin_mapping=make_mapping(telegram_id=999, plex_username="user1plex"))
+    app = _app(admin_link=make_link(telegram_id=999, plex_username="user1plex"))
     await handle_seerr_reported(app, _payload())
     cbs = _callbacks(app.bot.send_message.call_args.kwargs["reply_markup"])
     assert cbs == [

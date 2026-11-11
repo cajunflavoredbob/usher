@@ -65,12 +65,12 @@ async def _render_requests(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     admin_id = ctx.bot_data.get("admin_id")
     is_admin = user_id == admin_id
     store: UserStore = ctx.bot_data["store"]
-    mapping = await store.get(user_id)
+    link = await store.get(user_id)
 
     try:
         requests, total = await seerr.list_requests(
             take=REQUEST_LIST_TAKE,
-            as_plex_token=None if is_admin else mapping.plex_token,
+            as_plex_token=None if is_admin else link.plex_token,
         )
     except PlexTokenInvalidError:
         await prompt_plex_relink(update, ctx,
@@ -163,12 +163,12 @@ async def cmd_requests(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     is_admin = user_id == ctx.bot_data.get("admin_id")
     store: UserStore = ctx.bot_data["store"]
-    mapping = await store.get(user_id)
+    link = await store.get(user_id)
     if not is_admin:
-        if mapping and mapping.plex_token_decrypt_failed:
+        if link and link.plex_token_decrypt_failed:
             await update.effective_message.reply_text(DECRYPT_FAILED_MSG)
             return
-        if not mapping or not mapping.plex_token:
+        if not link or not link.plex_token:
             await update.effective_message.reply_text(
                 "DM me /link first so I know which Plex account is yours."
             )
@@ -191,12 +191,12 @@ async def requests_hub_mine(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
     user_id = update.effective_user.id
     is_admin = user_id == ctx.bot_data.get("admin_id")
     store: UserStore = ctx.bot_data["store"]
-    mapping = await store.get(user_id)
+    link = await store.get(user_id)
     guard = None
     if not is_admin:
-        if mapping and mapping.plex_token_decrypt_failed:
+        if link and link.plex_token_decrypt_failed:
             guard = DECRYPT_FAILED_MSG
-        elif not mapping or not mapping.plex_token:
+        elif not link or not link.plex_token:
             guard = "DM me /link first so I know which Plex account is yours."
     if guard is not None:
         sent = await edit_or_send(q, guard, reply_markup=back_only)
@@ -226,8 +226,8 @@ async def rq_list_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     user_id = update.effective_user.id
     is_admin = user_id == ctx.bot_data.get("admin_id")
     store: UserStore = ctx.bot_data["store"]
-    mapping = await store.get(user_id)
-    token = None if is_admin else (mapping.plex_token if mapping else None)
+    link = await store.get(user_id)
+    token = None if is_admin else (link.plex_token if link else None)
     if not is_admin and not token:
         await q.answer("Your /link isn't usable anymore. /link again first.",
                        show_alert=True)

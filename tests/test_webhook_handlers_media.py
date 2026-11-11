@@ -7,17 +7,17 @@ from unittest.mock import AsyncMock
 
 from bot.webhook_handlers import handle_seerr_media
 
-from tests._handler_harness import make_ctx, make_mapping
+from tests._handler_harness import make_ctx, make_link
 
 USER_ID = 42
 ADMIN_ID = 999
 
 
-def _app(*, requester_mapping=None, admin_id=ADMIN_ID):
+def _app(*, requester_link=None, admin_id=ADMIN_ID):
     ctx = make_ctx(admin_id=admin_id)
     app = ctx.application
     app.bot_data["store"].find_by_plex_username = AsyncMock(
-        return_value=requester_mapping)
+        return_value=requester_link)
     return app
 
 
@@ -42,7 +42,7 @@ def _sent_chat_ids(app) -> list[int]:
 
 
 async def test_pending_notifies_admin_only():
-    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app = _app(requester_link=make_link(telegram_id=USER_ID))
     await handle_seerr_media(app, _payload("MEDIA_PENDING"))
     assert _sent_chat_ids(app) == [ADMIN_ID]
     text = app.bot.send_message.call_args.kwargs["text"]
@@ -51,47 +51,47 @@ async def test_pending_notifies_admin_only():
 
 
 async def test_approved_notifies_requester_only():
-    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app = _app(requester_link=make_link(telegram_id=USER_ID))
     await handle_seerr_media(app, _payload("MEDIA_APPROVED"))
     assert _sent_chat_ids(app) == [USER_ID]
     assert "approved" in app.bot.send_message.call_args.kwargs["text"]
 
 
 async def test_auto_approved_notifies_admin_only():
-    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app = _app(requester_link=make_link(telegram_id=USER_ID))
     await handle_seerr_media(app, _payload("MEDIA_AUTO_APPROVED"))
     assert _sent_chat_ids(app) == [ADMIN_ID]
     assert "auto-approved" in app.bot.send_message.call_args.kwargs["text"]
 
 
 async def test_declined_notifies_requester_only():
-    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app = _app(requester_link=make_link(telegram_id=USER_ID))
     await handle_seerr_media(app, _payload("MEDIA_DECLINED"))
     assert _sent_chat_ids(app) == [USER_ID]
 
 
 async def test_available_notifies_requester():
-    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app = _app(requester_link=make_link(telegram_id=USER_ID))
     await handle_seerr_media(app, _payload("MEDIA_AVAILABLE"))
     assert _sent_chat_ids(app) == [USER_ID]
     assert "available in Plex" in app.bot.send_message.call_args.kwargs["text"]
 
 
 async def test_failed_notifies_both():
-    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app = _app(requester_link=make_link(telegram_id=USER_ID))
     await handle_seerr_media(app, _payload("MEDIA_FAILED"))
     assert sorted(_sent_chat_ids(app)) == [USER_ID, ADMIN_ID]
 
 
 async def test_admin_requester_not_double_notified():
     """Admin requested it themselves: the 'New request' admin FYI is noise."""
-    app = _app(requester_mapping=make_mapping(telegram_id=ADMIN_ID))
+    app = _app(requester_link=make_link(telegram_id=ADMIN_ID))
     await handle_seerr_media(app, _payload("MEDIA_PENDING"))
     assert app.bot.send_message.call_args_list == []
 
 
 async def test_unlinked_requester_gets_no_dm():
-    app = _app(requester_mapping=None)
+    app = _app(requester_link=None)
     await handle_seerr_media(app, _payload("MEDIA_APPROVED"))
     assert app.bot.send_message.call_args_list == []
 
@@ -99,7 +99,7 @@ async def test_unlinked_requester_gets_no_dm():
 async def test_available_null_request_uses_notifyuser_fallback():
     """Scan-triggered MEDIA_AVAILABLE can carry request: null; notifyuser_*
     then identifies the target."""
-    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app = _app(requester_link=make_link(telegram_id=USER_ID))
     await handle_seerr_media(app, _payload(
         "MEDIA_AVAILABLE", request_block=False, notifyuser="user1plex"))
     assert _sent_chat_ids(app) == [USER_ID]
@@ -107,7 +107,7 @@ async def test_available_null_request_uses_notifyuser_fallback():
 
 
 async def test_requested_seasons_note_included():
-    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app = _app(requester_link=make_link(telegram_id=USER_ID))
     await handle_seerr_media(app, _payload(
         "MEDIA_APPROVED",
         extra=[{"name": "Requested Seasons", "value": "1, 3"}]))
@@ -116,7 +116,7 @@ async def test_requested_seasons_note_included():
 
 
 async def test_auto_requested_is_silent():
-    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app = _app(requester_link=make_link(telegram_id=USER_ID))
     await handle_seerr_media(app, _payload("MEDIA_AUTO_REQUESTED"))
     assert app.bot.send_message.call_args_list == []
 
@@ -124,7 +124,7 @@ async def test_auto_requested_is_silent():
 async def test_title_falls_back_to_subject():
     """When the TMDb lookup fails, the DM carries Seerr's subject line
     instead of no title at all."""
-    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app = _app(requester_link=make_link(telegram_id=USER_ID))
     app.bot_data["seerr"].get_media_title.side_effect = RuntimeError("down")
     await handle_seerr_media(app, _payload("MEDIA_APPROVED"))
     assert "Some Movie (2026)" in app.bot.send_message.call_args.kwargs["text"]
@@ -142,9 +142,9 @@ def _stub_request_lookup(app, requested_by_id):
 async def test_requester_resolved_by_id_beats_spoofed_display_name():
     """Display names are user-editable in Seerr; the numeric id from the
     request lookup wins over the payload's username."""
-    victim = make_mapping(telegram_id=777, plex_username="victimplex")
-    app = _app(requester_mapping=victim)  # username match would hit victim
-    real = make_mapping(telegram_id=USER_ID)
+    victim = make_link(telegram_id=777, plex_username="victimplex")
+    app = _app(requester_link=victim)  # username match would hit victim
+    real = make_link(telegram_id=USER_ID)
     _stub_request_lookup(app, requested_by_id=42)
     app.bot_data["store"].find_by_seerr_id = AsyncMock(return_value=real)
     await handle_seerr_media(app, _payload("MEDIA_APPROVED",
@@ -154,10 +154,10 @@ async def test_requester_resolved_by_id_beats_spoofed_display_name():
 
 
 async def test_unlinked_admin_request_does_not_self_notify():
-    """The admin can request without a mapping (admin-key attribution);
+    """The admin can request without a link (admin-key attribution);
     matching the request's Seerr user id against the API key's own id
     suppresses the 'New request' self-DM."""
-    app = _app(requester_mapping=None)
+    app = _app(requester_link=None)
     _stub_request_lookup(app, requested_by_id=1)
     app.bot_data["store"].find_by_seerr_id = AsyncMock(return_value=None)
     app.bot_data["seerr"].get_admin_user_id = AsyncMock(return_value=1)
@@ -168,7 +168,7 @@ async def test_unlinked_admin_request_does_not_self_notify():
 async def test_linked_admin_failed_request_drops_notified_claim():
     """'The admin has been notified' is a lie when the requester IS the
     admin; the clause is dropped for them."""
-    app = _app(requester_mapping=make_mapping(telegram_id=ADMIN_ID))
+    app = _app(requester_link=make_link(telegram_id=ADMIN_ID))
     await handle_seerr_media(app, _payload("MEDIA_FAILED"))
     texts = [c.kwargs["text"] for c in app.bot.send_message.call_args_list]
     assert len(texts) == 1
@@ -177,7 +177,7 @@ async def test_linked_admin_failed_request_drops_notified_claim():
 
 
 async def test_garbage_extra_entry_does_not_kill_dms():
-    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app = _app(requester_link=make_link(telegram_id=USER_ID))
     await handle_seerr_media(app, _payload(
         "MEDIA_APPROVED", extra=["garbage-string", None,
                                  {"name": "Requested Seasons", "value": "2"}]))
@@ -186,10 +186,10 @@ async def test_garbage_extra_entry_does_not_kill_dms():
 
 
 async def test_unlinked_admin_gets_lifecycle_dms():
-    """The unlinked admin (admin-key attribution) has no mapping; their
+    """The unlinked admin (admin-key attribution) has no link; their
     approved/declined/available/failed DMs go to the admin chat instead of
     vanishing -- MEDIA_FAILED previously notified NOBODY."""
-    app = _app(requester_mapping=None)
+    app = _app(requester_link=None)
     _stub_request_lookup(app, requested_by_id=1)
     app.bot_data["store"].find_by_seerr_id = AsyncMock(return_value=None)
     app.bot_data["seerr"].get_admin_user_id = AsyncMock(return_value=1)
@@ -203,14 +203,14 @@ async def test_unlinked_admin_gets_lifecycle_dms():
 # --- notification-class gates -------------------------------------------------
 
 async def test_requester_class_disabled_silences_requester_dm():
-    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app = _app(requester_link=make_link(telegram_id=USER_ID))
     app.bot_data["settings_store"].settings.tg_notify_requester = False
     await handle_seerr_media(app, _payload("MEDIA_APPROVED"))
     assert app.bot.send_message.call_args_list == []
 
 
 async def test_admin_request_class_disabled_keeps_failed_alarm():
-    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app = _app(requester_link=make_link(telegram_id=USER_ID))
     app.bot_data["settings_store"].settings.tg_notify_admin_requests = False
     await handle_seerr_media(app, _payload("MEDIA_PENDING"))
     assert app.bot.send_message.call_args_list == []
@@ -220,7 +220,7 @@ async def test_admin_request_class_disabled_keeps_failed_alarm():
 
 
 async def test_admin_failed_disabled_drops_notified_claim():
-    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app = _app(requester_link=make_link(telegram_id=USER_ID))
     app.bot_data["settings_store"].settings.tg_notify_admin_failed = False
     await handle_seerr_media(app, _payload("MEDIA_FAILED"))
     texts = [c.kwargs["text"] for c in app.bot.send_message.call_args_list]
@@ -230,7 +230,7 @@ async def test_admin_failed_disabled_drops_notified_claim():
 
 async def test_issue_class_disabled_silences_issue_handlers():
     from bot.webhook_handlers import handle_seerr_resolved
-    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app = _app(requester_link=make_link(telegram_id=USER_ID))
     app.bot_data["settings_store"].settings.tg_notify_issues = False
     await handle_seerr_resolved(app, {
         "issue": {"issue_id": "5", "reportedBy_username": "user1plex"},
@@ -242,7 +242,7 @@ async def test_issue_class_disabled_silences_issue_handlers():
 async def test_requester_class_off_still_runs_cards_and_fanout():
     """A silenced DM class must never disable the still-enabled card morphs
     or subscription fan-out (the gate nulls message templates only)."""
-    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app = _app(requester_link=make_link(telegram_id=USER_ID))
     app.bot_data["settings_store"].settings.tg_notify_requester = False
     app.bot_data["store"].find_request_watches = AsyncMock(return_value=[])
     app.bot_data["store"].pop_subscribers = AsyncMock(return_value=[88])
@@ -257,7 +257,7 @@ async def test_requester_class_off_subscription_still_delivers_to_requester():
     """With the requester DM class silenced, the requester's own
     subscription row is their only notification: the fan-out must not
     skip them via already_notified (their DM never went out)."""
-    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app = _app(requester_link=make_link(telegram_id=USER_ID))
     app.bot_data["settings_store"].settings.tg_notify_requester = False
     app.bot_data["store"].find_request_watches = AsyncMock(return_value=[])
     app.bot_data["store"].pop_subscribers = AsyncMock(return_value=[USER_ID])
@@ -270,7 +270,7 @@ async def test_failed_card_line_honors_admin_alarm_toggle():
     """The card must not claim 'the admin has been notified' when the
     failed-download alarm is off."""
     from bot.request_watch import apply_webhook_event
-    app = _app(requester_mapping=make_mapping(telegram_id=USER_ID))
+    app = _app(requester_link=make_link(telegram_id=USER_ID))
     app.bot_data["settings_store"].settings.tg_notify_admin_failed = False
     app.bot_data["store"].find_request_watches = AsyncMock(return_value=[{
         "id": 1, "chat_id": USER_ID, "message_id": 5, "status": "grabbing",

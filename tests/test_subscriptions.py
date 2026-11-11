@@ -14,7 +14,7 @@ from bot.subscriptions import (
     sub_del,
 )
 
-from tests._handler_harness import make_ctx, make_mapping, make_update
+from tests._handler_harness import make_ctx, make_link, make_update
 
 USER_ID = 42
 ADMIN_ID = 999
@@ -36,7 +36,7 @@ def test_card_offers_notify_only_when_availability_can_change():
 
 
 async def test_sub_add_stores_with_title():
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=make_mapping(telegram_id=USER_ID))
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
     upd = make_update(callback_data="subadd:movie:550", user_id=USER_ID)
     await sub_add(upd, ctx)
     args = ctx.bot_data["store"].add_subscription.call_args.args
@@ -46,7 +46,7 @@ async def test_sub_add_stores_with_title():
 
 
 async def test_sub_add_gated_for_unlinked():
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=None)
+    ctx = make_ctx(admin_id=ADMIN_ID, link=None)
     upd = make_update(callback_data="subadd:movie:550", user_id=USER_ID)
     await sub_add(upd, ctx)
     ctx.bot_data["store"].add_subscription.assert_not_awaited()
@@ -54,7 +54,7 @@ async def test_sub_add_gated_for_unlinked():
 
 
 async def test_sub_add_duplicate_says_already_listed():
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=make_mapping(telegram_id=USER_ID))
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
     ctx.bot_data["store"].add_subscription.return_value = False
     upd = make_update(callback_data="subadd:movie:550", user_id=USER_ID)
     await sub_add(upd, ctx)
@@ -62,7 +62,7 @@ async def test_sub_add_duplicate_says_already_listed():
 
 
 async def test_subscriptions_list_and_delete_own_only():
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=make_mapping(telegram_id=USER_ID))
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
     ctx.bot_data["store"].list_subscriptions.return_value = [
         (7, "movie", 550, "Fight Club (1999)"),
         (9, "tv", 1399, "Game of Thrones (2011)"),
@@ -80,7 +80,7 @@ async def test_subscriptions_list_and_delete_own_only():
 
 
 async def test_empty_list_hint():
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=make_mapping(telegram_id=USER_ID))
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
     upd = make_update(text="/subscriptions", user_id=USER_ID)
     await cmd_subscriptions(upd, ctx)
     assert "not watching anything" in upd.effective_message.reply_calls[-1]["text"]
@@ -103,7 +103,7 @@ async def test_available_webhook_triggers_fanout():
     ctx = make_ctx(admin_id=ADMIN_ID)
     app = ctx.application
     app.bot_data["store"].find_by_plex_username = AsyncMock(
-        return_value=make_mapping(telegram_id=USER_ID))
+        return_value=make_link(telegram_id=USER_ID))
     app.bot_data["store"].pop_subscribers = AsyncMock(return_value=[88])
     payload = {
         "notification_type": "MEDIA_AVAILABLE",

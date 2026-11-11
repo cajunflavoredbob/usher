@@ -69,7 +69,7 @@ from bot.callback_prefixes import (ACCOUNT_LINK, ACCOUNT_UNLINK, LINK_CONSENT,
 from bot.shared import (AWAIT_LINK_CONSENT, AWAIT_PLATFORM_CHOICE,
                         global_btn_gate, record_btn)
 
-from tests._handler_harness import make_ctx, make_mapping, make_update
+from tests._handler_harness import make_ctx, make_link, make_update
 
 BACK = ("⬅️ Account", f"{HUB_OPEN}:account")
 
@@ -104,7 +104,7 @@ def _gate_update(user_id, message_id, chat_id=100):
 
 
 async def test_account_hub_unlinked_offers_link_only():
-    ctx = make_ctx(mapping=None)
+    ctx = make_ctx(link=None)
     upd = make_update(text="/account")
     await link_flow.cmd_account(upd, ctx)
     reply = upd.effective_message.reply_calls[0]
@@ -113,7 +113,7 @@ async def test_account_hub_unlinked_offers_link_only():
 
 
 async def test_account_hub_linked_offers_unlink_only():
-    ctx = make_ctx(mapping=make_mapping())
+    ctx = make_ctx(link=make_link())
     upd = make_update(text="/account")
     await link_flow.cmd_account(upd, ctx)
     reply = upd.effective_message.reply_calls[0]
@@ -123,8 +123,8 @@ async def test_account_hub_linked_offers_unlink_only():
 
 
 async def test_account_hub_escapes_name_and_falls_back_to_plex_username():
-    m = dataclasses.replace(make_mapping(plex_username="plex<b>"), seerr_display="")
-    ctx = make_ctx(mapping=m)
+    link = dataclasses.replace(make_link(plex_username="plex<b>"), seerr_display="")
+    ctx = make_ctx(link=link)
     upd = make_update(text="/account")
     await link_flow.cmd_account(upd, ctx)
     assert upd.effective_message.reply_calls[0]["text"] == \
@@ -132,7 +132,7 @@ async def test_account_hub_escapes_name_and_falls_back_to_plex_username():
 
 
 async def test_account_hub_message_recorded_with_gate():
-    ctx = make_ctx(mapping=None)
+    ctx = make_ctx(link=None)
     for mid in (900, 901, 902):
         record_btn(ctx.application, 42, SimpleNamespace(message_id=mid, chat_id=100))
     upd = make_update(text="/account")
@@ -144,7 +144,7 @@ async def test_account_hub_message_recorded_with_gate():
 
 
 async def test_hub_unlink_ends_with_back_button_then_shows_unlinked_hub():
-    ctx = make_ctx(mapping=make_mapping())
+    ctx = make_ctx(link=make_link())
     upd = make_update(callback_data=ACCOUNT_UNLINK)
     ctx.user_data["relink_resume"] = {"kind": "x"}
     await link_flow.account_unlink(upd, ctx)
@@ -163,7 +163,7 @@ async def test_hub_unlink_ends_with_back_button_then_shows_unlinked_hub():
 
 
 async def test_hub_unlink_when_not_linked_says_so_with_back():
-    ctx = make_ctx(mapping=None)
+    ctx = make_ctx(link=None)
     ctx.bot_data["store"].unlink.return_value = False
     upd = make_update(callback_data=ACCOUNT_UNLINK)
     await link_flow.account_unlink(upd, ctx)

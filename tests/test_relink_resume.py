@@ -14,7 +14,7 @@ from bot.resolve_flow import resolve_comment, resolve_start
 from bot.shared import RELINK_RESUME_EXECUTORS, run_relink_resume
 from bot.tickets import tk_reply_text
 from seerr import CreatedIssue, PlexTokenInvalidError
-from tests._handler_harness import make_ctx, make_mapping, make_update
+from tests._handler_harness import make_ctx, make_link, make_update
 
 
 def _fresh_marker(kind: str, payload: dict) -> dict:
@@ -65,7 +65,7 @@ async def test_resume_unknown_kind_is_dropped():
 
 async def test_gated_close_stashes_resume_marker():
     upd = make_update(callback_data="resolve:42:yes", user_id=42)
-    ctx = make_ctx(admin_id=999, mapping=make_mapping(plex_token="plex-abc"))
+    ctx = make_ctx(admin_id=999, link=make_link(plex_token="plex-abc"))
     ctx.bot_data["seerr"].resolve_issue.side_effect = PlexTokenInvalidError()
     await resolve_start(upd, ctx)
     marker = ctx.user_data["relink_resume"]
@@ -76,7 +76,7 @@ async def test_gated_close_stashes_resume_marker():
 
 async def test_gated_comment_stashes_typed_text():
     upd = make_update(text="the audio is still german", user_id=42)
-    ctx = make_ctx(admin_id=999, mapping=make_mapping(plex_token="plex-abc"),
+    ctx = make_ctx(admin_id=999, link=make_link(plex_token="plex-abc"),
                    user_data={"awaiting_comment_for": 42})
     ctx.bot_data["seerr"].add_issue_comment.side_effect = PlexTokenInvalidError()
     await resolve_comment(upd, ctx)
@@ -88,7 +88,7 @@ async def test_gated_comment_stashes_typed_text():
 
 async def test_gated_ticket_reply_stashes_typed_text():
     upd = make_update(text="any update on this?", user_id=42)
-    ctx = make_ctx(admin_id=999, mapping=make_mapping(plex_token="plex-abc"),
+    ctx = make_ctx(admin_id=999, link=make_link(plex_token="plex-abc"),
                    user_data={"tk_reply_id": 7})
     ctx.bot_data["seerr"].add_issue_comment.side_effect = PlexTokenInvalidError()
     await tk_reply_text(upd, ctx)
@@ -102,7 +102,7 @@ async def test_gated_ticket_reply_stashes_typed_text():
 
 async def test_resume_close_uses_fresh_token():
     upd = make_update(text="", user_id=42)
-    ctx = make_ctx(admin_id=999, mapping=make_mapping(plex_token="fresh-tok"),
+    ctx = make_ctx(admin_id=999, link=make_link(plex_token="fresh-tok"),
                    user_data={"relink_resume": _fresh_marker(
                        "resolve_close", {"issue_id": 42})})
     assert await run_relink_resume(upd, ctx) is True
@@ -113,7 +113,7 @@ async def test_resume_close_uses_fresh_token():
 
 async def test_resume_comment_posts_saved_text():
     upd = make_update(text="", user_id=42)
-    ctx = make_ctx(admin_id=999, mapping=make_mapping(plex_token="fresh-tok"),
+    ctx = make_ctx(admin_id=999, link=make_link(plex_token="fresh-tok"),
                    user_data={"relink_resume": _fresh_marker(
                        "resolve_comment", {"issue_id": 42, "comment": "still bad"})})
     assert await run_relink_resume(upd, ctx) is True
@@ -123,7 +123,7 @@ async def test_resume_comment_posts_saved_text():
 
 async def test_resume_ticket_reply_posts_saved_text():
     upd = make_update(text="", user_id=42)
-    ctx = make_ctx(admin_id=999, mapping=make_mapping(plex_token="fresh-tok"),
+    ctx = make_ctx(admin_id=999, link=make_link(plex_token="fresh-tok"),
                    user_data={"relink_resume": _fresh_marker(
                        "ticket_reply", {"issue_id": 7, "text": "any update?"})})
     assert await run_relink_resume(upd, ctx) is True
@@ -134,7 +134,7 @@ async def test_resume_ticket_reply_posts_saved_text():
 
 async def test_resume_submit_issue_reuses_draft_from_user_data():
     upd = make_update(text="", user_id=42)
-    ctx = make_ctx(admin_id=999, mapping=make_mapping(plex_token="fresh-tok"),
+    ctx = make_ctx(admin_id=999, link=make_link(plex_token="fresh-tok"),
                    user_data={
                        "relink_resume": _fresh_marker("submit_issue",
                                                       {"autofix": False}),

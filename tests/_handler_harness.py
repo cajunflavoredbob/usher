@@ -19,7 +19,7 @@ from typing import Any, Optional
 from unittest.mock import AsyncMock
 
 from seerr import Quota, QuotaBucket
-from store import Mapping
+from store import Link
 
 
 # --- Telegram object fakes --------------------------------------------------
@@ -114,10 +114,10 @@ def make_update(*, text: Optional[str] = None, callback_data: Optional[str] = No
 
 # --- Context fakes ----------------------------------------------------------
 
-def make_mapping(*, telegram_id: int = 42, plex_token: str = "plex-abc",
+def make_link(*, telegram_id: int = 42, plex_token: str = "plex-abc",
                  plex_username: str = "user1plex",
-                 decrypt_failed: bool = False) -> Mapping:
-    return Mapping(
+                 decrypt_failed: bool = False) -> Link:
+    return Link(
         telegram_id=telegram_id,
         seerr_id=7,
         seerr_display="User1",
@@ -130,14 +130,14 @@ def make_mapping(*, telegram_id: int = 42, plex_token: str = "plex-abc",
 
 def make_ctx(*, admin_id: int = 999, user_data: Optional[dict] = None,
              bot_data_overrides: Optional[dict] = None,
-             mapping: Optional[Mapping] = None):
+             link: Optional[Link] = None):
     """Fake CallbackContext with sensible bot_data defaults.
 
     seerr/radarr/sonarr clients are SimpleNamespaces of AsyncMocks so tests
     can override return values via `ctx.bot_data["seerr"].get_issue.return_value = ...`
     or use `.side_effect = SomeException`.
 
-    `mapping` (if provided) is what `store.get(telegram_id)` returns; default
+    `link` (if provided) is what `store.get(telegram_id)` returns; default
     None means "user is unlinked."
     """
     seerr = SimpleNamespace(
@@ -182,7 +182,7 @@ def make_ctx(*, admin_id: int = 999, user_data: Optional[dict] = None,
         get_queue_progress=AsyncMock(return_value=None),
     )
     store = SimpleNamespace(
-        get=AsyncMock(return_value=mapping),
+        get=AsyncMock(return_value=link),
         find_by_seerr_id=AsyncMock(return_value=None),
         add_subscription=AsyncMock(return_value=True),
         remove_subscription=AsyncMock(return_value=True),

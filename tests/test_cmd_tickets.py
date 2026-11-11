@@ -9,7 +9,7 @@ import pytest
 
 from bot.tickets import tickets_hub_list
 from seerr import IssueListItem
-from tests._handler_harness import make_ctx, make_mapping, make_update
+from tests._handler_harness import make_ctx, make_link, make_update
 
 
 def _issue(id: int = 1, **kwargs) -> IssueListItem:
@@ -46,9 +46,9 @@ async def test_admin_lists_all_issues():
 
 
 async def test_user_lists_only_their_issues():
-    mapping = make_mapping(telegram_id=42, plex_token="user-token")
+    link = make_link(telegram_id=42, plex_token="user-token")
     upd = make_update(callback_data="tkhl", user_id=42)
-    ctx = make_ctx(admin_id=999, mapping=mapping)
+    ctx = make_ctx(admin_id=999, link=link)
     ctx.bot_data["seerr"].list_issues.return_value = ([_issue(id=7)], 1)
     await tickets_hub_list(upd, ctx)
     text = upd.callback_query.edits[0]["text"]
@@ -64,7 +64,7 @@ async def test_user_lists_only_their_issues():
 
 async def test_unlinked_non_admin_gets_link_prompt():
     upd = make_update(callback_data="tkhl", user_id=42)
-    ctx = make_ctx(admin_id=999, mapping=None)  # not linked
+    ctx = make_ctx(admin_id=999, link=None)  # not linked
     await tickets_hub_list(upd, ctx)
     text = upd.callback_query.edits[0]["text"]
     assert "/link" in text
@@ -81,9 +81,9 @@ async def test_empty_list_for_admin():
 
 
 async def test_empty_list_for_user():
-    mapping = make_mapping(telegram_id=42, plex_token="t")
+    link = make_link(telegram_id=42, plex_token="t")
     upd = make_update(callback_data="tkhl", user_id=42)
-    ctx = make_ctx(admin_id=999, mapping=mapping)
+    ctx = make_ctx(admin_id=999, link=link)
     ctx.bot_data["seerr"].list_issues.return_value = ([], 0)
     await tickets_hub_list(upd, ctx)
     assert "No open tickets" in upd.callback_query.edits[0]["text"]

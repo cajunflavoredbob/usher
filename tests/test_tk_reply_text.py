@@ -8,7 +8,7 @@ from telegram.ext import ConversationHandler
 
 from bot.tickets import tk_reply_text
 from bot.shared import AWAIT_TICKET_REPLY
-from tests._handler_harness import make_ctx, make_mapping, make_update
+from tests._handler_harness import make_ctx, make_link, make_update
 
 
 # --- happy: admin reply ---
@@ -36,9 +36,9 @@ async def test_admin_reply_posts_comment_no_token():
 
 
 async def test_user_reply_with_token():
-    mapping = make_mapping(telegram_id=42, plex_token="user-token-abc")
+    link = make_link(telegram_id=42, plex_token="user-token-abc")
     upd = make_update(text="this is my reply", user_id=42)
-    ctx = make_ctx(admin_id=999, mapping=mapping,
+    ctx = make_ctx(admin_id=999, link=link,
                    user_data={"tk_reply_id": 7, "tk_close_after": False})
     state = await tk_reply_text(upd, ctx)
     assert state == ConversationHandler.END
@@ -49,10 +49,10 @@ async def test_user_reply_with_token():
 # --- decrypt_failed branch ---
 
 
-async def test_user_with_decrypt_failed_mapping():
-    mapping = make_mapping(telegram_id=42, decrypt_failed=True)
+async def test_user_with_decrypt_failed_link():
+    link = make_link(telegram_id=42, decrypt_failed=True)
     upd = make_update(text="hi", user_id=42)
-    ctx = make_ctx(admin_id=999, mapping=mapping,
+    ctx = make_ctx(admin_id=999, link=link,
                    user_data={"tk_reply_id": 1, "tk_close_after": False})
     state = await tk_reply_text(upd, ctx)
     assert state == ConversationHandler.END

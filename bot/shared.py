@@ -370,14 +370,14 @@ async def token_for(
     if tg_id == admin_id:
         return True, None, False
     store: UserStore = ctx.bot_data["store"]
-    mapping = await store.get(tg_id)
-    if mapping is None:
+    link = await store.get(tg_id)
+    if link is None:
         return False, None, False
-    if mapping.plex_token_decrypt_failed:
+    if link.plex_token_decrypt_failed:
         return False, None, True
-    if not mapping.plex_token:
+    if not link.plex_token:
         return False, None, False
-    return False, mapping.plex_token, False
+    return False, link.plex_token, False
 
 
 # --- Button bookkeeping -----------------------------------------------------

@@ -1,10 +1,10 @@
-"""SQLite-backed store mapping Telegram user IDs to Seerr user IDs.
+"""SQLite-backed store of Links, each tying a Telegram user ID to a Seerr user ID.
 
 All public methods are async and run their SQLite work in a thread pool
 so they don't block the event loop. Connections enable WAL mode and a
 5-second busy_timeout; locked-database errors are retried with backoff.
 
-Token decryption distinguishes three states on the Mapping it returns:
+Token decryption distinguishes three states on the Link it returns:
   - plex_token=str, decrypt_failed=False  -> usable link
   - plex_token=None, decrypt_failed=False -> no token stored (legacy)
   - plex_token=None, decrypt_failed=True  -> token row exists but won't
@@ -40,7 +40,7 @@ _LOCKED_BASE_DELAY_S = 0.05
 
 
 @dataclass
-class Mapping:
+class Link:
     telegram_id: int
     seerr_id: int
     seerr_display: str
@@ -366,7 +366,7 @@ class UserStore:
             logger.warning("Couldn't decrypt Plex token (key rotated or row corrupted)")
             return None, True
 
-    # --- Mapping CRUD ----------------------------------------------------
+    # --- Link CRUD -------------------------------------------------------
 
     async def link_with_plex(
         self,
@@ -400,7 +400,7 @@ class UserStore:
 
         await self._run(_do)
 
-    async def find_by_seerr_id(self, seerr_id: int) -> Optional[Mapping]:
+    async def find_by_seerr_id(self, seerr_id: int) -> Optional[Link]:
         """Lookup by Seerr user id. The robust join key for webhook events
         whose requester was resolved via the Seerr API (display names are
         user-editable in Seerr; the numeric id is not). Newest link wins,
@@ -426,7 +426,7 @@ class UserStore:
         if row is None:
             return None
         token, failed = self._decrypt_field(row[3])
-        return Mapping(
+        return Link(
             telegram_id=row[0],
             seerr_id=row[1],
             seerr_display=row[2],
@@ -436,7 +436,7 @@ class UserStore:
             plex_token_decrypt_failed=failed,
         )
 
-    async def find_by_plex_username(self, plex_username: str) -> Optional[Mapping]:
+    async def find_by_plex_username(self, plex_username: str) -> Optional[Link]:
         """Lookup by Plex username (case-insensitive). Maps Seerr webhook
         payloads (which carry reportedBy_username) back to a linked TG user.
         Nothing stops two Telegram accounts from linking the same Plex
@@ -464,7 +464,7 @@ class UserStore:
         if row is None:
             return None
         token, failed = self._decrypt_field(row[3])
-        return Mapping(
+        return Link(
             telegram_id=row[0],
             seerr_id=row[1],
             seerr_display=row[2],
@@ -654,7 +654,7 @@ class UserStore:
 
         return await self._run(_do)
 
-    async def get(self, telegram_id: int) -> Optional[Mapping]:
+    async def get(self, telegram_id: int) -> Optional[Link]:
         def _do() -> Optional[tuple]:
             with self._conn() as c:
                 return c.execute(
@@ -670,7 +670,7 @@ class UserStore:
         if row is None:
             return None
         token, failed = self._decrypt_field(row[3])
-        return Mapping(
+        return Link(
             telegram_id=row[0],
             seerr_id=row[1],
             seerr_display=row[2],

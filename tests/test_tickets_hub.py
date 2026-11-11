@@ -24,7 +24,7 @@ from bot.tickets_hub import TICKETS_HUB, render_tickets_hub
 from fix_result import FixResult
 from seerr import CreatedIssue, IssueListItem
 
-from tests._handler_harness import make_ctx, make_mapping, make_update
+from tests._handler_harness import make_ctx, make_link, make_update
 
 USER_ID = 42
 ADMIN_ID = 999
@@ -52,7 +52,7 @@ def _issue(id: int = 1, **kwargs) -> IssueListItem:
 
 def _linked_ctx(**kwargs):
     return make_ctx(admin_id=ADMIN_ID,
-                    mapping=make_mapping(telegram_id=USER_ID), **kwargs)
+                    link=make_link(telegram_id=USER_ID), **kwargs)
 
 
 def _hub_ctx(**kwargs):
@@ -97,7 +97,7 @@ def _async_return(value=None, exc=None):
 # --- the Hub itself ------------------------------------------------------------
 
 async def test_tickets_shows_two_button_hub():
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=None)  # no gate for the Hub
+    ctx = make_ctx(admin_id=ADMIN_ID, link=None)  # no gate for the Hub
     upd = make_update(text="/tickets", user_id=USER_ID)
     await cmd_tickets(upd, ctx)
     reply = upd.effective_message.reply_calls[0]
@@ -184,7 +184,7 @@ async def test_typed_issue_clears_hub_origin():
 
 
 async def test_hub_report_unlinked_ends_with_back_only():
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=None)
+    ctx = make_ctx(admin_id=ADMIN_ID, link=None)
     upd = make_update(callback_data=TICKETS_REPORT, user_id=USER_ID)
     state = await issue_hub_report(upd, ctx)
     assert state == ConversationHandler.END
@@ -301,7 +301,7 @@ def test_hub_report_is_issue_conversation_entry():
 
 async def test_hub_list_shows_user_tickets():
     ctx = make_ctx(admin_id=ADMIN_ID,
-                   mapping=make_mapping(telegram_id=USER_ID, plex_token="user-token"))
+                   link=make_link(telegram_id=USER_ID, plex_token="user-token"))
     ctx.bot_data["seerr"].list_issues.return_value = ([_issue(id=7)], 1)
     upd = make_update(callback_data=TICKETS_LIST, user_id=USER_ID)
     await tickets_hub_list(upd, ctx)
@@ -343,7 +343,7 @@ async def test_hub_list_empty_ends_with_back_only():
 
 
 async def test_hub_list_unlinked_ends_with_back_only():
-    ctx = make_ctx(admin_id=ADMIN_ID, mapping=None)
+    ctx = make_ctx(admin_id=ADMIN_ID, link=None)
     upd = make_update(callback_data=TICKETS_LIST, user_id=USER_ID)
     await tickets_hub_list(upd, ctx)
     edit = upd.callback_query.edits[0]
