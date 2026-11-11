@@ -34,6 +34,8 @@ from _version import __version__ as USHER_VERSION
 from bot.autofix_poll import poll_pending_autofixes
 from bot.request_watch import poll_request_watches
 from bot.callback_prefixes import (
+    ACCOUNT_UNLINK,
+    HUB_OPEN,
     DV_CATEGORY,
     DV_INFO,
     DV_PAGE,
@@ -53,7 +55,9 @@ from bot.callback_prefixes import (
     TK_OPEN,
 )
 from bot.issue_flow import _issue_conversation
-from bot.link_flow import _link_conversation, cmd_link_didnt_work, cmd_unlink
+from bot.hub import hub_open_callback
+from bot.link_flow import (_link_conversation, account_unlink, cmd_account,
+                           cmd_link_didnt_work, cmd_unlink)
 from bot.discover_cmd import cmd_trending, dv_category, dv_info, dv_page
 from bot.invite_flow import (_INV_KEYS, _invite_conversation, cmd_uninvite,
                              uninvite_cancel, uninvite_go)
@@ -242,19 +246,19 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     if not is_admin:
         # Non-admins see ONLY greeting + commands. No connection diagnostics,
-        # no inline "DM me /link" directive (the command is listed below).
+        # no inline "DM me /link" directive (/account is listed below).
         await update.effective_message.reply_text(
             "Hi! I take movie/TV requests and forward issue reports to Seerr.\n\n"
             "*Commands*\n"
-            "  /link — sign in with Plex (DM only)\n"
-            "  /unlink — remove your link\n"
+            "  /account — link or unlink your Plex account\n"
             "  /issue — report a problem with a movie or TV show\n"
             "  /request — request a movie or TV show\n"
             "  /requests — list your requests\n"
             "  /trending — browse trending, popular, and upcoming\n"
             "  /subscriptions — titles you're watching for availability\n"
             "  /tickets — list your open tickets\n"
-            "  /help — show this",
+            "  /help — show this\n\n"
+            "(/link and /unlink still work when typed.)",
             parse_mode="Markdown",
         )
         return
@@ -270,8 +274,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         format_status(summary),
         "",
         "<b>Commands</b>",
-        "  /link — sign in with Plex (DM only)",
-        "  /unlink — remove your link",
+        "  /account — link or unlink your Plex account",
         "  /issue — report a problem with a movie or TV show",
         "  /request — request a movie or TV show",
         "  /requests — list your requests",
@@ -282,6 +285,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "  /uninvite — revoke someone's access (admin only)",
         "  /status — connection diagnostics (admin only)",
         "  /help — show this",
+        "",
+        "(/link and /unlink still work when typed.)",
     ]
     await update.effective_message.reply_text(
         "\n".join(lines), parse_mode="HTML"
@@ -364,6 +369,7 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(link_conv)
     app.add_handler(CommandHandler("unlink", cmd_unlink))
+    app.add_handler(CommandHandler("account", cmd_account))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("tickets", cmd_tickets))
     app.add_handler(CommandHandler("requests", cmd_requests))
@@ -403,6 +409,11 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CallbackQueryHandler(tk_back, pattern=fr"^{TK_BACK}:\d+$"))
     app.add_handler(ticket_conv)
     app.add_handler(CallbackQueryHandler(cmd_link_didnt_work, pattern=fr"^{LINK_HELP}$"))
+    # Hub back button + Account Hub Unlink (Link is a link-conversation entry).
+    app.add_handler(CallbackQueryHandler(hub_open_callback,
+                                         pattern=fr"^{HUB_OPEN}:[a-z]+$"))
+    app.add_handler(CallbackQueryHandler(account_unlink,
+                                         pattern=fr"^{ACCOUNT_UNLINK}$"))
     # MUST stay the last callback handler in the default group:
     # catches taps on keyboards whose conversation has timed out or ended.
     app.add_handler(CallbackQueryHandler(unmatched_callback))
@@ -447,8 +458,7 @@ async def _prune_autofix_history_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 # by hand and silently goes stale when commands are added (0.15.0 shipped
 # /request with no menu entry).
 _BOT_COMMANDS = [
-    ("link", "sign in with Plex (DM only)"),
-    ("unlink", "remove your link"),
+    ("account", "your Plex link: link or unlink"),
     ("request", "request a movie or TV show"),
     ("requests", "list your requests"),
     ("trending", "browse trending, popular, and upcoming"),
@@ -666,7 +676,7 @@ async def _post_shutdown(app: Application) -> None:
 # mid-conversation crash doesn't leak half-state into the next flow.
 _CONVERSATION_USER_DATA_KEYS = (
     "tk_reply_id", "tk_close_after",
-    "link_active_loop",
+    "link_active_loop", "hub_origin",
     "media", "search_results", "seasons", "season",
     "episode", "issue_type", "description",
     "search_version", "submitting_issue",

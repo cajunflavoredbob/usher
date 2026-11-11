@@ -83,7 +83,9 @@ def test_derive_parent_name_returns_none(query):
 
 def test_bot_command_menu_covers_registered_commands():
     """The startup-registered menu must list every user-facing command the
-    app registers (menu drift shipped 0.15.0 with /request invisible)."""
+    app registers (menu drift shipped 0.15.0 with /request invisible).
+    Typed-only commands that left the menu under ADR 0009 (link, unlink;
+    /account replaces them) are excluded."""
     import re
     from bot.app import _BOT_COMMANDS, _ADMIN_BOT_COMMANDS
     src = open("bot/app.py").read()
@@ -91,5 +93,5 @@ def test_bot_command_menu_covers_registered_commands():
     registered |= {"request"}  # conversation entry lives in request_flow
     menu = {c for c, _ in _ADMIN_BOT_COMMANDS}
     # cancel is deliberately unlisted (contextual); start aliases help.
-    missing = registered - menu - {"cancel", "start"}
+    missing = registered - menu - {"cancel", "start", "link", "unlink"}
     assert not missing, f"commands missing from the Telegram menu: {missing}"

@@ -308,22 +308,27 @@ async def format_media_title_line(
 
 # --- Seerr-required gate ----------------------------------------------------
 
-async def require_seerr(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Optional[SeerrClient]:
+async def require_seerr(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
+                        *, reply_markup=None) -> Optional[SeerrClient]:
     """Bail out gracefully if Seerr isn't configured yet. The admin gets the
     settings URL hint; regular users get a next step they can actually take
-    (a placeholder URL and port number are useless to them)."""
+    (a placeholder URL and port number are useless to them). A flow started
+    from a Hub passes `reply_markup` (its back button); the sent message is
+    then recorded with the button gate."""
     seerr: Optional[SeerrClient] = ctx.bot_data.get("seerr")
     if seerr is None:
         if update.effective_user.id == ctx.bot_data.get("admin_id"):
             port = ctx.bot_data.get("http_port", 8765)
-            await update.effective_message.reply_text(
-                f"Usher isn't configured yet. Fill in Seerr settings at "
-                f"http://<host>:{port}/admin",
-            )
+            text = (f"Usher isn't configured yet. Fill in Seerr settings at "
+                    f"http://<host>:{port}/admin")
         else:
-            await update.effective_message.reply_text(
-                "Usher isn't set up yet — ask the admin to finish configuration.",
-            )
+            text = "Usher isn't set up yet — ask the admin to finish configuration."
+        if reply_markup is None:
+            await update.effective_message.reply_text(text)
+        else:
+            sent = await update.effective_message.reply_text(
+                text, reply_markup=reply_markup)
+            record_btn(ctx.application, update.effective_user.id, sent)
     return seerr
 
 

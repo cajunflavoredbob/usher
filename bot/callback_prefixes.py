@@ -76,3 +76,13 @@ UNINV_KEEP: Final = "uninvk"          # dismiss the /uninvite confirm card
 
 # --- Post-autofix resolve follow-up ----------------------------------------
 RESOLVE: Final = "resolve"            # resolve:<issue_id>:yes|no|skip
+
+# --- Hubs (shared by every Hub; see bot.hub) --------------------------------
+HUB_OPEN: Final = "hubo"              # hubo:<hub> "⬅️ <Hub>" back button:
+                                      # re-render that Hub in place
+HUB_RETRY: Final = "hubry"            # hubry:<step>[:<arg>] Try again for steps
+                                      # re-run by hub_retry_*; other Try again
+                                      # buttons reuse their entry callback
+ACCOUNT_LINK: Final = "acclk"         # Account Hub "Link" button (enters the
+                                      # link conversation)
+ACCOUNT_UNLINK: Final = "accul"       # Account Hub "Unlink" button

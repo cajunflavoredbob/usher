@@ -1,4 +1,5 @@
-"""Plex /link flow + /unlink command."""
+"""Plex /link flow + /unlink command, and the Account Hub (/account) with its
+Link and Unlink buttons."""
 from __future__ import annotations
 
 import asyncio
@@ -27,10 +28,27 @@ from plex import PlexClient
 from seerr import SeerrClient
 from store import UserStore
 
-from bot.callback_prefixes import LINK_CONSENT, LINK_HELP, LINK_PLATFORM, RELINK
+from bot.callback_prefixes import (
+    ACCOUNT_LINK,
+    ACCOUNT_UNLINK,
+    HUB_RETRY,
+    LINK_CONSENT,
+    LINK_HELP,
+    LINK_PLATFORM,
+    RELINK,
+)
+from bot.hub import (
+    HubView,
+    end_markup,
+    hub_origin,
+    register_hub,
+    send_hub,
+    set_hub_origin,
+)
 from bot.shared import (
     AWAIT_LINK_CONSENT,
     AWAIT_PLATFORM_CHOICE,
+    edit_or_send,
     require_seerr,
     record_btn,
     run_relink_resume,
@@ -50,6 +68,7 @@ async def _link_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Conversation_timeout handler. Clears link_active_loop so an abandoned
     link flow doesn't keep an orphaned poll alive in user_data."""
     ctx.user_data.pop("link_active_loop", None)
+    set_hub_origin(ctx, None)
     return ConversationHandler.END
 
 
@@ -57,6 +76,11 @@ def _link_conversation() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[
             CommandHandler("link", cmd_link),
+            # Account Hub buttons: Link, and Try again after a PIN failure.
+            CallbackQueryHandler(account_link, pattern=fr"^{ACCOUNT_LINK}$"),
+            CallbackQueryHandler(
+                hub_retry_linkplat,
+                pattern=fr"^{HUB_RETRY}:linkplat:(desktop|mobile)$"),
             # Revoked-token recovery button (bot.shared.prompt_plex_relink)
             CallbackQueryHandler(cmd_relink, pattern=fr"^{RELINK}$"),
         ],
@@ -78,27 +102,68 @@ def _link_conversation() -> ConversationHandler:
     )
 
 
+def _consent_prompt() -> tuple[str, InlineKeyboardMarkup]:
+    rows = [[
+        InlineKeyboardButton("✅ Yes, continue", callback_data=f"{LINK_CONSENT}:yes"),
+        InlineKeyboardButton("🛑 Cancel", callback_data=f"{LINK_CONSENT}:no"),
+    ]]
+    return (
+        "Sign in with Plex so issues you submit are tagged as you.\n\n"
+        "You can use /unlink anytime to remove access.\n\n"
+        "Continue?",
+        InlineKeyboardMarkup(rows),
+    )
+
+
 async def cmd_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    # A typed /link is never a Hub flow, even if a Hub left its mark behind.
+    set_hub_origin(ctx, None)
     msg = update.effective_message
     if msg.chat.type != ChatType.PRIVATE:
         await msg.reply_text("Please DM me to link your account.")
         return ConversationHandler.END
     if await require_seerr(update, ctx) is None:
         return ConversationHandler.END
-    rows = [[
-        InlineKeyboardButton("✅ Yes, continue", callback_data=f"{LINK_CONSENT}:yes"),
-        InlineKeyboardButton("🛑 Cancel", callback_data=f"{LINK_CONSENT}:no"),
-    ]]
+    text, markup = _consent_prompt()
     # Record with the button gate, or it rejects every tap as stale for any
     # user who already has recorded button messages (e.g. ticket DMs).
-    sent = await msg.reply_text(
-        "Sign in with Plex so issues you submit are tagged as you.\n\n"
-        "You can use /unlink anytime to remove access.\n\n"
-        "Continue?",
-        reply_markup=InlineKeyboardMarkup(rows),
-    )
+    sent = await msg.reply_text(text, reply_markup=markup)
     record_btn(ctx.application, update.effective_user.id, sent)
     return AWAIT_LINK_CONSENT
+
+
+async def account_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Account Hub 'Link' tap: the same consent step as /link, edited into
+    the Hub message, with the Hub recorded as this flow's origin."""
+    q = update.callback_query
+    await q.answer()
+    if update.effective_message.chat.type != ChatType.PRIVATE:
+        sent = await edit_or_send(q, "Please DM me to link your account.",
+                                  reply_markup=end_markup("account"))
+        record_btn(ctx.application, update.effective_user.id, sent)
+        return ConversationHandler.END
+    if await require_seerr(update, ctx, reply_markup=end_markup("account")) is None:
+        return ConversationHandler.END
+    set_hub_origin(ctx, "account")
+    text, markup = _consent_prompt()
+    sent = await edit_or_send(q, text, reply_markup=markup)
+    record_btn(ctx.application, update.effective_user.id, sent)
+    return AWAIT_LINK_CONSENT
+
+
+async def _end_step(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: str,
+                    hub: Optional[str], retry: Optional[str] = None, *,
+                    typed_text: Optional[str] = None) -> None:
+    """Final edit of the tapped message. Typed flows keep a plain edit (of
+    `typed_text` when given, else `text`); a flow started from a Hub gets
+    `text` with that Hub's back button (and Try again when `retry` is given),
+    recorded with the button gate."""
+    q = update.callback_query
+    if hub is None:
+        await q.edit_message_text(text if typed_text is None else typed_text)
+        return
+    sent = await edit_or_send(q, text, reply_markup=end_markup(hub, retry))
+    record_btn(ctx.application, update.effective_user.id, sent)
 
 
 async def cmd_relink(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
@@ -107,6 +172,7 @@ async def cmd_relink(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     is skipped -- tapping the recovery button IS the consent."""
     q = update.callback_query
     await q.answer()
+    set_hub_origin(ctx, None)
     if await require_seerr(update, ctx) is None:
         return ConversationHandler.END
     store: UserStore = ctx.bot_data["store"]
@@ -129,7 +195,8 @@ async def cmd_link_consent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
     await q.answer()
     choice = q.data.split(":")[1]
     if choice == "no":
-        await q.edit_message_text("Cancelled. /link to try again later.")
+        await _end_step(update, ctx, "Cancelled.", hub_origin(ctx),
+                        typed_text="Cancelled. /link to try again later.")
         return ConversationHandler.END
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("💻 Desktop", callback_data=f"{LINK_PLATFORM}:desktop"),
@@ -191,8 +258,14 @@ async def _poll_with_cancel(plex: PlexClient, pin_id: int, max_iters: int,
     return None
 
 
+def _end_kwargs(hub: Optional[str], retry: Optional[str] = None) -> dict:
+    """send_message kwargs for a message that ends a flow: the Hub's end
+    markup, or nothing for a typed flow."""
+    return {} if hub is None else {"reply_markup": end_markup(hub, retry)}
+
+
 async def _finalize_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
-                         auth_token: str) -> None:
+                         auth_token: str, *, hub: Optional[str] = None) -> None:
     """Shared post-auth path: Seerr login + persist mapping + success/failure reply."""
     plex: PlexClient = ctx.bot_data["plex"]
     seerr: SeerrClient = ctx.bot_data["seerr"]
@@ -204,7 +277,7 @@ async def _finalize_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         seerr_id, display = await seerr.login_with_plex(auth_token)
     except Exception as exc:
         logger.exception("seerr login_with_plex failed")
-        await ctx.bot.send_message(
+        sent = await ctx.bot.send_message(
             chat_id=chat_id,
             text=(
                 "✓ Plex authorized you, but Seerr rejected the sign-in.\n"
@@ -212,7 +285,10 @@ async def _finalize_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                 "Your Plex account probably isn't shared in Seerr yet. "
                 "Ask the admin to invite you."
             ),
+            **_end_kwargs(hub, ACCOUNT_LINK),
         )
+        if hub is not None:
+            record_btn(ctx.application, tg_id, sent)
         return
 
     try:
@@ -234,14 +310,17 @@ async def _finalize_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     # Telegram reject the Markdown send. The link is ALREADY STORED at this
     # point -- a lost message here left the user assuming failure and
     # retrying.
-    await ctx.bot.send_message(
+    sent = await ctx.bot.send_message(
         chat_id=chat_id,
         text=(
             f"✅ Linked as <b>{html.escape(display)}</b>.\n\n"
             "You can now /issue and /tickets."
         ),
         parse_mode="HTML",
+        **_end_kwargs(hub),
     )
+    if hub is not None:
+        record_btn(ctx.application, tg_id, sent)
 
     # If a revoked token interrupted an action (issue submit, close, comment),
     # pick it back up now that the fresh token is stored.
@@ -253,12 +332,33 @@ async def cmd_link_platform(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     q = update.callback_query
     await q.answer()
     platform = q.data.split(":")[1]  # "desktop" or "mobile"
+    return await _start_plex_auth(update, ctx, platform)
+
+
+async def hub_retry_linkplat(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """'Try again' after a strong-PIN failure or timeout in a flow started from
+    the Account Hub: re-run the PIN step for the same platform."""
+    q = update.callback_query
+    await q.answer()
+    platform = q.data.split(":")[2]
+    set_hub_origin(ctx, "account")
+    return await _start_plex_auth(update, ctx, platform)
+
+
+async def _start_plex_auth(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
+                           platform: str) -> int:
+    """Issue a strong PIN for `platform` ("desktop" or "mobile") and poll."""
+    q = update.callback_query
+    hub = hub_origin(ctx)
+    retry = f"{HUB_RETRY}:linkplat:{platform}"
     plex: PlexClient = ctx.bot_data["plex"]
     try:
         pin = await plex.request_pin(strong=True)
     except Exception as exc:
         logger.exception("plex request_pin failed")
-        await q.edit_message_text(f"Couldn't start Plex auth. {user_friendly_message(exc)}")
+        await _end_step(update, ctx,
+                        f"Couldn't start Plex auth. {user_friendly_message(exc)}",
+                        hub, retry)
         return ConversationHandler.END
 
     loop_id = secrets.token_hex(8)
@@ -293,10 +393,11 @@ async def cmd_link_platform(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
         if ctx.user_data.get("link_active_loop") != loop_id:
             # A newer loop (didnt_work fallback) has taken ownership; exit silently
             return ConversationHandler.END
-        await q.edit_message_text("⏱️ Plex auth timed out. /link to try again.")
+        await _end_step(update, ctx, "⏱️ Plex auth timed out.", hub, retry,
+                        typed_text="⏱️ Plex auth timed out. /link to try again.")
         return ConversationHandler.END
 
-    await _finalize_link(update, ctx, auth_token)
+    await _finalize_link(update, ctx, auth_token, hub=hub)
     try:
         await q.edit_message_reply_markup(reply_markup=None)
     except Exception:
@@ -310,13 +411,15 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     and starts a fresh poll loop."""
     q = update.callback_query
     await q.answer()
+    hub = hub_origin(ctx)
 
     plex: PlexClient = ctx.bot_data["plex"]
     try:
         pin = await plex.request_pin(strong=False)
     except Exception as exc:
         logger.exception("plex request_pin failed (fallback)")
-        await q.edit_message_text(f"Couldn't get a fresh code. {user_friendly_message(exc)}")
+        text = f"Couldn't get a fresh code. {user_friendly_message(exc)}"
+        await _end_step(update, ctx, text, hub, LINK_HELP)
         return
 
     # Claim a new loop ID -- any prior poll will see this and exit on its
@@ -352,10 +455,11 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         # Clear the loop key explicitly so the parent /link conversation
         # doesn't think it's still polling.
         ctx.user_data.pop("link_active_loop", None)
-        await q.edit_message_text("⏱️ Plex auth timed out. /link to try again.")
+        await _end_step(update, ctx, "⏱️ Plex auth timed out.", hub, LINK_HELP,
+                        typed_text="⏱️ Plex auth timed out. /link to try again.")
         return
 
-    await _finalize_link(update, ctx, auth_token)
+    await _finalize_link(update, ctx, auth_token, hub=hub)
     # Successful link -- clear the loop key so a later /link is a fresh start.
     ctx.user_data.pop("link_active_loop", None)
     try:
@@ -369,23 +473,67 @@ async def link_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     # otherwise it kept polling for up to 28 minutes and a late success or
     # timeout DM landed after "Cancelled".
     ctx.user_data.pop("link_active_loop", None)
-    await update.effective_message.reply_text("Cancelled. /link to try again later.")
+    hub = hub_origin(ctx)
+    if hub is None:
+        await update.effective_message.reply_text("Cancelled. /link to try again later.")
+    else:
+        sent = await update.effective_message.reply_text(
+            "Cancelled.", reply_markup=end_markup(hub))
+        record_btn(ctx.application, update.effective_user.id, sent)
     return ConversationHandler.END
 
 
-async def cmd_unlink(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+async def _do_unlink(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> str:
+    """Shared by /unlink and the Account Hub's Unlink button: unlink the user
+    and return the reply text."""
     store: UserStore = ctx.bot_data["store"]
     # A voluntary unlink is an intent to abandon whatever was interrupted;
     # only the recovery-button path (cmd_relink) keeps the resume marker.
     ctx.user_data.pop("relink_resume", None)
     removed = await store.unlink(update.effective_user.id)
     if removed:
-        await update.effective_message.reply_text(
+        return (
             "🔓 Unlinked. I've removed your Plex token from my storage.\n\n"
             "For extra safety, you can also remove 'Usher' from your Plex "
             "authorized devices at app.plex.tv → Settings → Authorized Devices."
         )
-    else:
-        await update.effective_message.reply_text("You weren't linked.")
+    return "You weren't linked."
 
 
+async def cmd_unlink(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.effective_message.reply_text(await _do_unlink(update, ctx))
+
+
+# --- Account Hub (/account) ---------------------------------------------------
+
+async def render_account(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> HubView:
+    store: UserStore = ctx.bot_data["store"]
+    mapping = await store.get(update.effective_user.id)
+    if mapping is None:
+        return HubView(
+            "Not linked. Link your Plex account so your requests and issues "
+            "are tagged as you.",
+            [InlineKeyboardButton("🔗 Link", callback_data=ACCOUNT_LINK)],
+        )
+    name = mapping.seerr_display or mapping.plex_username or ""
+    return HubView(
+        f"🔗 Linked as <b>{html.escape(name)}</b>.",
+        [InlineKeyboardButton("🔓 Unlink", callback_data=ACCOUNT_UNLINK)],
+    )
+
+
+register_hub("account", "Account", render_account)
+
+
+async def cmd_account(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await send_hub(update, ctx, "account")
+
+
+async def account_unlink(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Account Hub 'Unlink' tap: same work as /unlink, result edited into the
+    Hub message with a back button."""
+    q = update.callback_query
+    await q.answer()
+    text = await _do_unlink(update, ctx)
+    sent = await edit_or_send(q, text, reply_markup=end_markup("account"))
+    record_btn(ctx.application, update.effective_user.id, sent)
