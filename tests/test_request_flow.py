@@ -54,19 +54,21 @@ def _quota(remaining=4, limit=10):
 
 async def test_start_unlinked_user_is_gated():
     ctx = make_ctx(admin_id=ADMIN_ID, mapping=None)
-    ctx.args = []
+    ctx.args = ["dune"]
     upd = make_update(text="/request", user_id=USER_ID)
     state = await request_start(upd, ctx)
     assert state == ConversationHandler.END
     assert "link" in upd.effective_message.reply_calls[0]["text"]
 
 
-async def test_start_prompts_for_title():
+async def test_start_without_title_shows_hub_not_prompt():
     ctx = _linked_ctx()
     upd = make_update(text="/request", user_id=USER_ID)
     state = await request_start(upd, ctx)
-    assert state == RQ_TITLE
-    assert "What movie or show" in upd.effective_message.reply_calls[0]["text"]
+    assert state == ConversationHandler.END
+    text = upd.effective_message.reply_calls[0]["text"]
+    assert text.startswith("🎬 <b>Requests</b>")
+    assert "What movie or show" not in text
 
 
 async def test_start_with_args_searches_immediately():
@@ -562,7 +564,7 @@ async def test_submit_4k_passes_flag_and_labels():
 
 async def test_entry_caches_permissions():
     ctx = make_ctx(admin_id=ADMIN_ID, mapping=make_mapping(telegram_id=USER_ID))
-    ctx.args = []
+    ctx.args = ["dune"]
     ctx.bot_data["seerr"].get_my_permissions.return_value = 1026
     upd = make_update(text="/request", user_id=USER_ID)
     await request_start(upd, ctx)

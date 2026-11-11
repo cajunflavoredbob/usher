@@ -469,9 +469,10 @@ class UserStore:
             plex_token_decrypt_failed=failed,
         )
 
-    # --- Request progress watches --------------------------------------------
-    # One row per /request confirmation message that morphs through the
-    # download. status: waiting (pending approval) -> grabbing -> gone
+    # --- Request Progress cards ----------------------------------------------
+    # One row per /request Progress card (the message sent after the
+    # confirmation) that edits itself through the download.
+    # status: waiting (pending approval) -> grabbing -> gone
     # (finalized rows are deleted, not kept).
 
     async def add_request_watch(self, *, chat_id: int, message_id: int,

@@ -1,5 +1,7 @@
 """/trending: text-forward discovery browsing (trending / popular /
-upcoming), reusing the /request pick-list idiom. Every result is
+upcoming), reusing the /request pick-list idiom. The Requests Hub's
+"Trending" button opens the same list edited into the Hub message, with a
+back row (trending_hub). Every result is
 immediately requestable via the request conversation's jump entry point,
 and the 🖼 detail cards are the same ones /request search shows.
 
@@ -21,10 +23,20 @@ from bot.callback_prefixes import (
     DV_CATEGORY,
     DV_INFO,
     DV_PAGE,
+    REQUESTS_TRENDING,
     RQ_FROM_ISSUE,
 )
+from bot.hub import back_button, came_from_hub, end_markup
 from bot.media_card import STATUS_NOTES, send_detail_card
-from bot.shared import KEYCAP_DIGITS, record_btn, require_seerr, send_typing
+from bot.requests_hub import REQUESTS_HUB
+from bot.shared import (
+    KEYCAP_DIGITS,
+    edit_or_send,
+    force_end_flow_conversations,
+    record_btn,
+    require_seerr,
+    send_typing,
+)
 from const import (
     KB_BUTTONS_PER_ROW,
     REQUEST_RESULTS_PER_PAGE,
@@ -59,7 +71,8 @@ def _result_line(index: int, r: MediaResult) -> str:
     return line
 
 
-def _render(ctx: ContextTypes.DEFAULT_TYPE) -> tuple[str, InlineKeyboardMarkup]:
+def _render(ctx: ContextTypes.DEFAULT_TYPE,
+            hub=None) -> tuple[str, InlineKeyboardMarkup]:
     results: list = ctx.user_data["dv_results"]
     category: str = ctx.user_data["dv_cat"]
     version: int = _current_version(ctx)
@@ -114,30 +127,61 @@ def _render(ctx: ContextTypes.DEFAULT_TYPE) -> tuple[str, InlineKeyboardMarkup]:
     rows.append(cat_row[:3])
     if cat_row[3:]:
         rows.append(cat_row[3:])
+    if hub:
+        rows.append([back_button(hub)])
     return "\n".join(lines), InlineKeyboardMarkup(rows)
 
 
 async def _load_and_render(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                            reply_method, category: str, *,
-                           user_id: int) -> None:
+                           user_id: int, hub=None) -> None:
     seerr: SeerrClient = ctx.bot_data["seerr"]
     try:
         results = await seerr.discover(category,
                                        limit=REQUEST_SEARCH_FETCH_LIMIT)
     except Exception as exc:
         logger.exception("discover fetch failed")
-        await reply_method(f"Couldn't fetch the list. {user_friendly_message(exc)}")
+        text = f"Couldn't fetch the list. {user_friendly_message(exc)}"
+        if hub:
+            sent = await reply_method(
+                text, reply_markup=end_markup(hub, REQUESTS_TRENDING))
+            record_btn(ctx.application, user_id, sent)
+        else:
+            await reply_method(text)
         return
     if not results:
-        await reply_method("Nothing in that list right now. Try another category.")
+        text = "Nothing in that list right now. Try another category."
+        if hub:
+            sent = await reply_method(text, reply_markup=end_markup(hub))
+            record_btn(ctx.application, user_id, sent)
+        else:
+            await reply_method(text)
         return
     ctx.user_data["dv_version"] = _current_version(ctx) + 1
     ctx.user_data["dv_results"] = results
     ctx.user_data["dv_cat"] = category
     ctx.user_data["dv_screen"] = 0
-    text, markup = _render(ctx)
+    text, markup = _render(ctx, hub)
     sent = await reply_method(text, reply_markup=markup)
     record_btn(ctx.application, user_id, sent)
+
+
+async def trending_hub(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Requests Hub "Trending" button: the mixed trending list, edited into
+    the tapped Hub message."""
+    q = update.callback_query
+    await q.answer()
+    force_end_flow_conversations(ctx, update)
+    if await require_seerr(update, ctx,
+                           reply_markup=end_markup(REQUESTS_HUB)) is None:
+        return
+    await send_typing(update, ctx)
+
+    async def edit_into_hub(text, **kwargs):
+        return await edit_or_send(q, text, **kwargs)
+
+    await _load_and_render(update, ctx, edit_into_hub, "trending",
+                           user_id=update.effective_user.id, hub=REQUESTS_HUB)
 
 
 async def cmd_trending(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -164,8 +208,9 @@ async def dv_category(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await q.answer()
     await send_typing(update, ctx)
+    hub = REQUESTS_HUB if came_from_hub(q.message, REQUESTS_HUB) else None
     await _load_and_render(update, ctx, q.edit_message_text, category,
-                           user_id=update.effective_user.id)
+                           user_id=update.effective_user.id, hub=hub)
 
 
 async def dv_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -182,7 +227,8 @@ async def dv_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await q.answer()
     ctx.user_data["dv_screen"] = screen
-    text, markup = _render(ctx)
+    hub = REQUESTS_HUB if came_from_hub(q.message, REQUESTS_HUB) else None
+    text, markup = _render(ctx, hub)
     sent = await q.edit_message_text(text, reply_markup=markup)
     record_btn(ctx.application, update.effective_user.id, sent)
 

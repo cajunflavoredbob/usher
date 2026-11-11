@@ -86,3 +86,8 @@ HUB_RETRY: Final = "hubry"            # hubry:<step>[:<arg>] Try again for steps
 ACCOUNT_LINK: Final = "acclk"         # Account Hub "Link" button (enters the
                                       # link conversation)
 ACCOUNT_UNLINK: Final = "accul"       # Account Hub "Unlink" button
+REQUESTS_NEW: Final = "rqhn"          # Requests Hub "New request" (request
+                                      # conversation entry point)
+REQUESTS_MINE: Final = "rqhm"         # Requests Hub "My requests" (global handler)
+REQUESTS_TRENDING: Final = "rqht"     # Requests Hub "Trending" (global handler)
+REQUESTS_SUBS: Final = "rqhs"         # Requests Hub "Subscriptions" (global handler)

@@ -1,5 +1,10 @@
 """/request conversation: search, pick media, pick seasons (TV), confirm,
-submit to Seerr as the linked user.
+submit to Seerr as the linked user. Bare /request opens the Requests Hub; the
+Hub's "New request" button (request_hub_new) and a pick from a Hub-opened list
+(request_from_issue) start the conversation with the Hub as its origin, so its
+ends carry a back button (and Try again on failures). A typed /request <title>
+keeps its old error and cancel texts with no buttons; a successful submit ends
+with the back button and a Progress card, the same as from the Hub.
 
 Seerr is the sole authority on who may request and how much: the bot adds no
 allowlist or quota of its own. Requests ride the per-user session client, so
@@ -76,8 +81,18 @@ from bot.callback_prefixes import (
     RQ_SEASON_ALL,
     RQ_SEASON_DONE,
     RQ_SEASON_NA,
+    REQUESTS_NEW,
+)
+from bot.hub import (
+    came_from_hub,
+    end_markup,
+    hub_origin,
+    send_hub,
+    set_hub_origin,
 )
 from bot.media_card import send_detail_card
+from bot.request_watch import APPROVED_LINE, _card_text
+from bot.requests_hub import REQUESTS_HUB
 from bot.shared import (
     DECRYPT_FAILED_MSG,
     KEYCAP_DIGITS,
@@ -86,6 +101,7 @@ from bot.shared import (
     RQ_PICK_SEASONS,
     RQ_TITLE,
     RELINK_RESUME_EXECUTORS,
+    edit_or_send,
     force_end_flow_conversations,
     prompt_plex_relink,
     record_btn,
@@ -134,14 +150,50 @@ def _current_version(ctx: ContextTypes.DEFAULT_TYPE) -> int:
     return ctx.user_data.get("rq_search_version") or 0
 
 
+async def _end(update, ctx: ContextTypes.DEFAULT_TYPE, text: str,
+               hub: Optional[str], retry: Optional[str] = None, *,
+               typed_text: Optional[str] = None,
+               parse_mode: Optional[str] = None, edit: bool = True) -> None:
+    """Say how a flow step ended. Without a Hub (`hub` None) the message is
+    `typed_text or text` with no buttons, as for a typed /request. With one it
+    is `text` carrying the back button (plus Try again when `retry` is set).
+    Callback updates edit the tapped message unless `edit` is False; message
+    updates reply."""
+    q = update.callback_query
+    kwargs = {"parse_mode": parse_mode} if parse_mode else {}
+    if hub is None:
+        shown = typed_text or text
+        if q is not None and edit:
+            await q.edit_message_text(shown, **kwargs)
+        else:
+            await update.effective_message.reply_text(shown, **kwargs)
+        return
+    markup = end_markup(hub, retry)
+    if q is not None and edit:
+        sent = await edit_or_send(q, text, reply_markup=markup, **kwargs)
+    else:
+        sent = await update.effective_message.reply_text(
+            text, reply_markup=markup, **kwargs)
+    record_btn(ctx.application, update.effective_user.id, sent)
+
+
 async def _request_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    hub = hub_origin(ctx)
     _clear_rq_state(ctx)
     try:
         if update is not None and update.effective_chat is not None:
-            await ctx.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text="⏱️ The /request flow timed out. Start again with /request.",
-            )
+            if hub is None:
+                await ctx.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text="⏱️ The /request flow timed out. Start again with /request.",
+                )
+            else:
+                sent = await ctx.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text="⏱️ The request timed out.",
+                    reply_markup=end_markup(hub, REQUESTS_NEW),
+                )
+                record_btn(ctx.application, update.effective_user.id, sent)
     except Exception:
         logger.debug("request-timeout notice failed (non-fatal)", exc_info=True)
     return ConversationHandler.END
@@ -157,6 +209,8 @@ def _request_conversation() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[
             CommandHandler("request", request_start),
+            # Requests Hub "New request" button.
+            CallbackQueryHandler(request_hub_new, pattern=fr"^{REQUESTS_NEW}$"),
             # Jump-in from the /issue not-in-library dead-end.
             CallbackQueryHandler(request_from_issue, pattern=fr"^{RQ_FROM_ISSUE}:"),
         ],
@@ -197,24 +251,30 @@ def _request_conversation() -> ConversationHandler:
     )
 
 
-async def _gate_entry(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
+async def _gate_entry(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *,
+                      hub: Optional[str] = None) -> bool:
     """Shared /request entry gate: Seerr configured + a usable link. The
     admin passes without a mapping (admin-key attribution, like /issue's
     admin paths). On success, the user's Seerr permission bitmask is cached
     in user_data so pick/confirm can decide whether to offer 4K without a
-    round-trip per screen."""
-    if await require_seerr(update, ctx) is None:
+    round-trip per screen. With `hub` set (entry from a Hub button) the link
+    guards edit the tapped message and the Seerr-not-set-up guard replies with
+    a new message; both carry the back button."""
+    if await require_seerr(
+            update, ctx,
+            reply_markup=end_markup(hub) if hub else None) is None:
         return False
     is_admin, token, decrypt_failed = await token_for(ctx, update.effective_user.id)
     if not is_admin:
         if decrypt_failed:
-            await update.effective_message.reply_text(DECRYPT_FAILED_MSG)
+            await _end(update, ctx, DECRYPT_FAILED_MSG, hub, edit=hub is not None)
             return False
         if not token:
-            await update.effective_message.reply_text(
+            await _end(
+                update, ctx,
                 "DM me /link first so requests are filed as you. It's a quick "
-                "Plex sign-in - no username needed."
-            )
+                "Plex sign-in - no username needed.",
+                hub, edit=hub is not None)
             return False
     seerr: SeerrClient = ctx.bot_data["seerr"]
     try:
@@ -228,6 +288,14 @@ async def _gate_entry(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
 
 
 async def request_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    # A typed /request is never a Hub flow, even if a Hub left its mark behind.
+    set_hub_origin(ctx, None)
+    # Bare `/request` opens the Requests Hub; it needs no gate (each button
+    # runs the same checks as its typed command).
+    query = " ".join(ctx.args or ()).strip()
+    if not query:
+        await send_hub(update, ctx, REQUESTS_HUB)
+        return ConversationHandler.END
     # Typing indicator BEFORE the gate: its permission fetch can ride a cold
     # per-user auth (retry chain 60s+ on a degraded Seerr) and the bot
     # otherwise looks frozen before its first reply.
@@ -235,15 +303,23 @@ async def request_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if not await _gate_entry(update, ctx):
         return ConversationHandler.END
     # `/request dune part two` skips the title prompt.
-    query = " ".join(ctx.args or ()).strip()
-    if query:
-        return await _run_search(
-            update.effective_message.reply_text, ctx, query,
-            user_id=update.effective_user.id,
-        )
-    await update.effective_message.reply_text(
-        "What movie or show do you want? (Reply with the title.)"
+    return await _run_search(
+        update, ctx, update.effective_message.reply_text, query,
+        user_id=update.effective_user.id, hub=None,
     )
+
+
+async def request_hub_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Requests Hub "New request" button: the title prompt, edited into the
+    tapped Hub message."""
+    q = update.callback_query
+    await q.answer()
+    force_end_flow_conversations(ctx, update)
+    set_hub_origin(ctx, REQUESTS_HUB)
+    await send_typing(update, ctx)
+    if not await _gate_entry(update, ctx, hub=REQUESTS_HUB):
+        return ConversationHandler.END
+    await edit_or_send(q, "What movie or show do you want? (Reply with the title.)")
     return RQ_TITLE
 
 
@@ -256,14 +332,19 @@ async def request_from_issue(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     # conversation isn't active yet, so it's untouched) so no stale flow can
     # fire a timeout notice mid-request.
     force_end_flow_conversations(ctx, update)
+    # A pick from a Hub's list (the tapped message carries the back button)
+    # ends back at that Hub; any other pick behaves like a typed /request.
+    hub = REQUESTS_HUB if came_from_hub(q.message, REQUESTS_HUB) else None
+    set_hub_origin(ctx, hub)
     await send_typing(update, ctx)  # gate + title fetch can be slow
-    if not await _gate_entry(update, ctx):
+    if not await _gate_entry(update, ctx, hub=hub):
         return ConversationHandler.END
     try:
         _, media_type, tmdb_id_s = q.data.split(":")
         tmdb_id = int(tmdb_id_s)
     except (ValueError, AttributeError):
-        await q.edit_message_text("Couldn't parse selection. /request to start over.")
+        await _end(update, ctx, "Couldn't parse selection.", hub, REQUESTS_NEW,
+                   typed_text="Couldn't parse selection. /request to start over.")
         return ConversationHandler.END
     # Title travels via user_data (stashed by issue_flow when it renders the
     # button); fall back to a TMDb lookup if it got clobbered.
@@ -292,19 +373,21 @@ async def request_title(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.effective_message.text.strip()
     await send_typing(update, ctx)
     return await _run_search(
-        update.effective_message.reply_text, ctx, query,
-        user_id=update.effective_user.id,
+        update, ctx, update.effective_message.reply_text, query,
+        user_id=update.effective_user.id, hub=hub_origin(ctx),
     )
 
 
 # --- Search + result screens --------------------------------------------------
 
 async def _run_search(
-    reply_method,
+    update: Update,
     ctx: ContextTypes.DEFAULT_TYPE,
+    reply_method,
     query: str,
     *,
     user_id: int,
+    hub: Optional[str] = None,
 ) -> int:
     """One Seerr fetch (a full server page, up to 20 results); screens of 5
     render from the stored batch so paging never re-queries."""
@@ -313,7 +396,8 @@ async def _run_search(
         results = await seerr.search(query, limit=REQUEST_SEARCH_FETCH_LIMIT)
     except Exception as exc:
         logger.exception("request search failed")
-        await reply_method(f"Search failed. {user_friendly_message(exc)}")
+        await _end(update, ctx, f"Search failed. {user_friendly_message(exc)}",
+                   hub, REQUESTS_NEW)
         return ConversationHandler.END
     if not results:
         await reply_method(
@@ -480,13 +564,15 @@ async def request_info_dismiss(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
 
 async def request_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
+    hub = hub_origin(ctx)
     try:
         _, version_s, media_type, tmdb_id_s = q.data.split(":")
         version = int(version_s)
         tmdb_id = int(tmdb_id_s)
     except (ValueError, AttributeError):
         await q.answer()
-        await q.edit_message_text("Couldn't parse selection. /request to start over.")
+        await _end(update, ctx, "Couldn't parse selection.", hub, REQUESTS_NEW,
+                   typed_text="Couldn't parse selection. /request to start over.")
         return ConversationHandler.END
     current = ctx.user_data.get("rq_search_results") or {}
     if version != _current_version(ctx) or current.get("version") != version:
@@ -497,7 +583,8 @@ async def request_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     selected = (current.get("by_key") or {}).get((media_type, tmdb_id))
     if selected is None:
         await q.answer()
-        await q.edit_message_text("Lost that selection. /request to start over.")
+        await _end(update, ctx, "Lost that selection.", hub, REQUESTS_NEW,
+                   typed_text="Lost that selection. /request to start over.")
         return ConversationHandler.END
 
     status = selected.status or 0
@@ -594,19 +681,22 @@ async def _show_season_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     q = update.callback_query
     seerr: SeerrClient = ctx.bot_data["seerr"]
     media = ctx.user_data["rq_media"]
+    hub = hub_origin(ctx)
 
-    async def _dead_end(text: str) -> int:
+    async def _dead_end(text: str, retry: Optional[str] = None) -> int:
         if keep_list:
             await q.message.reply_text(text)
             return RQ_PICK_MEDIA
-        await q.edit_message_text(text)
+        await _end(update, ctx, text, hub, retry)
         return ConversationHandler.END
 
     try:
         seasons = await seerr.get_tv_season_availability(media["tmdb_id"])
     except Exception as exc:
         logger.exception("get_tv_season_availability failed")
-        return await _dead_end(f"Couldn't fetch seasons. {user_friendly_message(exc)}")
+        return await _dead_end(
+            f"Couldn't fetch seasons. {user_friendly_message(exc)}",
+            REQUESTS_NEW)
     if not seasons:
         return await _dead_end("No seasons found for this show.")
     if not any(s.requestable for s in seasons):
@@ -652,7 +742,9 @@ async def request_toggle_season(update: Update, ctx: ContextTypes.DEFAULT_TYPE) 
     selected: Optional[set] = ctx.user_data.get("rq_selected")
     if seasons is None or selected is None:
         await q.answer()
-        await q.edit_message_text("That selection expired. /request to start over.")
+        await _end(update, ctx, "That selection expired.", hub_origin(ctx),
+                   REQUESTS_NEW,
+                   typed_text="That selection expired. /request to start over.")
         return ConversationHandler.END
     if n in selected:
         selected.discard(n)
@@ -699,7 +791,9 @@ async def request_select_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     seasons = ctx.user_data.get("rq_seasons")
     if seasons is None:
         await q.answer()
-        await q.edit_message_text("That selection expired. /request to start over.")
+        await _end(update, ctx, "That selection expired.", hub_origin(ctx),
+                   REQUESTS_NEW,
+                   typed_text="That selection expired. /request to start over.")
         return ConversationHandler.END
     selected = {s.season_number for s in seasons if s.requestable}
     ctx.user_data["rq_selected"] = selected
@@ -725,7 +819,9 @@ async def request_seasons_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
     selected: Optional[set] = ctx.user_data.get("rq_selected")
     if selected is None:
         await q.answer()
-        await q.edit_message_text("That selection expired. /request to start over.")
+        await _end(update, ctx, "That selection expired.", hub_origin(ctx),
+                   REQUESTS_NEW,
+                   typed_text="That selection expired. /request to start over.")
         return ConversationHandler.END
     if not selected:
         await q.answer("Pick at least one season first.", show_alert=True)
@@ -858,22 +954,26 @@ async def request_submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                           *, is4k: bool = False) -> int:
     q = update.callback_query
+    hub = hub_origin(ctx)
     media = ctx.user_data.get("rq_media")
     if not media:
-        await q.edit_message_text(
-            "Lost conversation state. /request to start over.")
+        await _end(update, ctx, "Lost conversation state.", hub, REQUESTS_NEW,
+                   typed_text="Lost conversation state. /request to start over.")
         return ConversationHandler.END
     is_admin, token, decrypt_failed = await token_for(ctx, update.effective_user.id)
     if not is_admin and (decrypt_failed or not token):
-        await q.edit_message_text(
-            "Your /link is incomplete. /link then /request to start over.")
+        await _end(update, ctx,
+                   "Your Plex link is incomplete. Link again from /account.",
+                   hub,
+                   typed_text="Your /link is incomplete. /link then /request to start over.")
         return ConversationHandler.END
 
     seasons = None
     if media["type"] == "tv":
         seasons = sorted(ctx.user_data.get("rq_selected") or ())
         if not seasons:
-            await q.edit_message_text("No seasons selected. /request to start over.")
+            await _end(update, ctx, "No seasons selected.", hub, REQUESTS_NEW,
+                       typed_text="No seasons selected. /request to start over.")
             return ConversationHandler.END
 
     label = _media_label(media)
@@ -907,40 +1007,46 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                                  resume_payload={})
         return ConversationHandler.END
     except NothingToRequestError:
-        await q.edit_message_text(
+        await _end(
+            update, ctx,
             f"Everything in <b>{html.escape(label)}</b> is already available "
             "or requested. Nothing to do 🎉",
-            parse_mode="HTML",
+            hub, parse_mode="HTML",
         )
         _clear_rq_state(ctx)
         return ConversationHandler.END
     except DuplicateRequestError:
-        await q.edit_message_text(
-            f"<b>{html.escape(label)}</b> is already requested — it's on its "
-            "way. See /requests for status.",
-            parse_mode="HTML",
+        await _end(
+            update, ctx,
+            f"<b>{html.escape(label)}</b> is already requested and on its way.",
+            hub, parse_mode="HTML",
+            typed_text=f"<b>{html.escape(label)}</b> is already requested — "
+                       "it's on its way. See /requests for status.",
         )
         _clear_rq_state(ctx)
         return ConversationHandler.END
     except QuotaExceededError as exc:
-        await q.edit_message_text(
+        await _end(
+            update, ctx,
             f"🙅 {html.escape(str(exc))} Your quota frees up as older "
             "requests age out of the window.",
-            parse_mode="HTML",
+            hub, parse_mode="HTML",
         )
         _clear_rq_state(ctx)
         return ConversationHandler.END
     except RequestPermissionError as exc:
-        await q.edit_message_text(
-            f"🚫 Seerr said no: {html.escape(str(exc))}",
-            parse_mode="HTML",
+        await _end(
+            update, ctx, f"🚫 Seerr said no: {html.escape(str(exc))}",
+            hub, parse_mode="HTML",
         )
         _clear_rq_state(ctx)
         return ConversationHandler.END
     except Exception as exc:
         logger.exception("create_request failed")
-        await q.edit_message_text(
-            f"Couldn't submit the request. {user_friendly_message(exc)}")
+        await _end(
+            update, ctx,
+            f"Couldn't submit the request. {user_friendly_message(exc)}",
+            hub, REQUESTS_NEW)
         return ConversationHandler.END
 
     # Word the outcome from what Seerr GRANTED: it silently drops seasons
@@ -957,35 +1063,48 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             dropped = sorted(set(seasons) - set(granted))
             dropped_note = (f"\n({_summarize_seasons(dropped)} was already "
                             "available or requested, so Seerr skipped it.)")
-    if created.status == REQUEST_STATUS_APPROVED:
+    approved = created.status == REQUEST_STATUS_APPROVED
+    if approved:
         text = (f"✅ Approved: <b>{html.escape(label)}</b> is being grabbed."
                 f"{html.escape(dropped_note)}\n"
                 "I'll DM you when it's available.")
     else:
         text = (f"📨 Requested: <b>{html.escape(label)}</b>."
                 f"{html.escape(dropped_note)}\n"
-                "Waiting for approval — I'll DM you when it moves.")
-    text += "\n\nUse /requests to check on it."
-    sent = await q.edit_message_text(text, parse_mode="HTML")
-    # Track the confirmation as a morphing card: the watch poller paints
-    # download progress onto THIS message, and lifecycle webhooks finish it.
+                "Waiting for approval. I'll DM you when it moves.")
+    # The result stays on the flow message, with the way back to the Hub.
+    sent = await edit_or_send(q, text, parse_mode="HTML",
+                              reply_markup=end_markup(REQUESTS_HUB))
+    record_btn(ctx.application, update.effective_user.id, sent)
+    # The Progress card is a separate new message: the watch poller paints
+    # download progress onto it and lifecycle webhooks finish it; for a new
+    # submit, neither edits the confirmation above.
     try:
-        # The watch row also drives the SABnzbd priority bump.
-        store: UserStore = ctx.bot_data["store"]
-        await store.add_request_watch(
+        card = await ctx.bot.send_message(
             chat_id=update.effective_chat.id,
-            message_id=getattr(sent, "message_id", None) or q.message.message_id,
-            user_id=update.effective_user.id,
-            media_type=media["type"],
-            tmdb_id=media["tmdb_id"],
-            label=label,
-            is4k=is4k,
-            status=("grabbing" if created.status == REQUEST_STATUS_APPROVED
-                    else "waiting"),
-            timeout_hours=REQUEST_WATCH_TIMEOUT_HOURS,
+            text=_card_text(label, APPROVED_LINE if approved
+                            else "⏳ Waiting for approval…"),
+            parse_mode="HTML",
         )
     except Exception:
-        logger.exception("couldn't enqueue request watch (card stays static)")
+        logger.exception("couldn't send the progress card (no watch added)")
+    else:
+        try:
+            # The watch row also drives the SABnzbd priority bump.
+            store: UserStore = ctx.bot_data["store"]
+            await store.add_request_watch(
+                chat_id=update.effective_chat.id,
+                message_id=card.message_id,
+                user_id=update.effective_user.id,
+                media_type=media["type"],
+                tmdb_id=media["tmdb_id"],
+                label=label,
+                is4k=is4k,
+                status="grabbing" if approved else "waiting",
+                timeout_hours=REQUEST_WATCH_TIMEOUT_HOURS,
+            )
+        except Exception:
+            logger.exception("couldn't enqueue request watch (progress card stays static)")
     _clear_rq_state(ctx)
     return ConversationHandler.END
 
@@ -1065,8 +1184,7 @@ async def request_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.answer(_STALE_MENU_TOAST, show_alert=True)
             return None
         await q.answer("Cancelled")
-        await q.edit_message_text("Cancelled. /request to start over.")
-    else:
-        await update.effective_message.reply_text("Cancelled. /request to start over.")
+    await _end(update, ctx, "Cancelled.", hub_origin(ctx),
+               typed_text="Cancelled. /request to start over.")
     _clear_rq_state(ctx)
     return ConversationHandler.END

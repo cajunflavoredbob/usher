@@ -1,6 +1,8 @@
 """/requests: list the user's media requests (admin sees everyone's) with
 status, plus cancel buttons for still-pending ones. Stateless against Seerr,
-same as /tickets -- nothing request-shaped is stored locally."""
+same as /tickets -- nothing request-shaped is stored locally. The Requests
+Hub's "My requests" button shows the same list edited into the Hub message,
+with a back row (requests_hub_mine)."""
 from __future__ import annotations
 
 import asyncio
@@ -22,9 +24,13 @@ from seerr import (
 )
 from store import UserStore
 
-from bot.callback_prefixes import RQ_LIST_CANCEL
+from bot.callback_prefixes import REQUESTS_MINE, RQ_LIST_CANCEL
+from bot.hub import back_button, came_from_hub, end_markup
+from bot.requests_hub import REQUESTS_HUB
 from bot.shared import (
     DECRYPT_FAILED_MSG,
+    edit_or_send,
+    force_end_flow_conversations,
     format_age,
     prompt_plex_relink,
     record_btn,
@@ -48,11 +54,13 @@ _STATUS_LABELS = {
 
 async def _render_requests(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                            reply_method, *, user_id: int,
-                           notice: str = "") -> None:
-    """Build and send/edit the requests list. Shared by /requests and the
-    post-cancel re-render; `notice` (already-escaped or plain text) is
-    prepended as a status line (cancel outcomes arrive this way because the
-    callback was answered up front)."""
+                           notice: str = "", hub=None) -> None:
+    """Build and send/edit the requests list. Shared by /requests, the Hub
+    button and the post-cancel re-render; `notice` (already-escaped or plain
+    text) is prepended as a status line (cancel outcomes arrive this way
+    because the callback was answered up front). With `hub` set the list
+    gets a last row holding the back button, and the error and empty texts
+    carry the end keyboard (Try again on the error)."""
     seerr: SeerrClient = ctx.bot_data["seerr"]
     admin_id = ctx.bot_data.get("admin_id")
     is_admin = user_id == admin_id
@@ -69,13 +77,25 @@ async def _render_requests(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         return
     except Exception as exc:
         logger.exception("list_requests failed")
-        await reply_method(f"Couldn't fetch requests. {user_friendly_message(exc)}")
+        if hub:
+            sent = await reply_method(
+                f"Couldn't fetch requests. {user_friendly_message(exc)}",
+                reply_markup=end_markup(hub, REQUESTS_MINE))
+            record_btn(ctx.application, user_id, sent)
+        else:
+            await reply_method(
+                f"Couldn't fetch requests. {user_friendly_message(exc)}")
         return
 
     if not requests:
         empty = ("No requests across all users yet." if is_admin
                  else "You haven't requested anything yet. /request to start!")
-        await reply_method(f"{notice}\n\n{empty}" if notice else empty)
+        empty_text = f"{notice}\n\n{empty}" if notice else empty
+        if hub:
+            sent = await reply_method(empty_text, reply_markup=end_markup(hub))
+            record_btn(ctx.application, user_id, sent)
+        else:
+            await reply_method(empty_text)
         return
 
     title_tasks = [seerr.get_media_title(r.media_type, r.tmdb_id) for r in requests]
@@ -121,6 +141,8 @@ async def _render_requests(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                 row = []
         if row:
             rows.append(row)
+    if hub:
+        rows.append([back_button(hub)])
 
     sent = await reply_method(
         truncate_message("\n".join(lines)),
@@ -154,12 +176,47 @@ async def cmd_requests(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                            user_id=user_id)
 
 
+async def requests_hub_mine(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Requests Hub "My requests" button: the /requests list, edited into the
+    tapped Hub message."""
+    q = update.callback_query
+    await q.answer()
+    force_end_flow_conversations(ctx, update)
+    back_only = end_markup(REQUESTS_HUB)
+    seerr = await require_seerr(update, ctx, reply_markup=back_only)
+    if seerr is None:
+        return
+    await send_typing(update, ctx)
+    user_id = update.effective_user.id
+    is_admin = user_id == ctx.bot_data.get("admin_id")
+    store: UserStore = ctx.bot_data["store"]
+    mapping = await store.get(user_id)
+    guard = None
+    if not is_admin:
+        if mapping and mapping.plex_token_decrypt_failed:
+            guard = DECRYPT_FAILED_MSG
+        elif not mapping or not mapping.plex_token:
+            guard = "DM me /link first so I know which Plex account is yours."
+    if guard is not None:
+        sent = await edit_or_send(q, guard, reply_markup=back_only)
+        record_btn(ctx.application, user_id, sent)
+        return
+
+    async def edit_into_hub(text, **kwargs):
+        return await edit_or_send(q, text, **kwargs)
+
+    await _render_requests(update, ctx, edit_into_hub, user_id=user_id,
+                           hub=REQUESTS_HUB)
+
+
 async def rq_list_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Cancel button on the /requests list. Seerr enforces ownership: a
     regular user may only delete their own request while it is PENDING, so
     a stale button (approved meanwhile, someone else's id) fails safely and
     the message says why."""
     q = update.callback_query
+    # Keep the back row when the tapped list carried it (opened from the Hub).
+    hub = REQUESTS_HUB if came_from_hub(q.message, REQUESTS_HUB) else None
     try:
         request_id = int(q.data.split(":")[1])
     except (ValueError, IndexError):
@@ -195,8 +252,10 @@ async def rq_list_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         logger.exception("delete_request failed")
         await _render_requests(
             update, ctx, q.edit_message_text, user_id=user_id,
-            notice=f"⚠️ Couldn't cancel #{request_id}. {user_friendly_message(exc)}")
+            notice=f"⚠️ Couldn't cancel #{request_id}. {user_friendly_message(exc)}",
+            hub=hub)
         return
     # Re-render the list in place so the cancelled entry disappears.
     await _render_requests(update, ctx, q.edit_message_text, user_id=user_id,
-                           notice=f"✅ Request #{request_id} cancelled.")
+                           notice=f"✅ Request #{request_id} cancelled.",
+                           hub=hub)

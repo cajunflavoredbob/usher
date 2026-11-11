@@ -36,6 +36,9 @@ from bot.request_watch import poll_request_watches
 from bot.callback_prefixes import (
     ACCOUNT_UNLINK,
     HUB_OPEN,
+    REQUESTS_MINE,
+    REQUESTS_SUBS,
+    REQUESTS_TRENDING,
     DV_CATEGORY,
     DV_INFO,
     DV_PAGE,
@@ -58,13 +61,15 @@ from bot.issue_flow import _issue_conversation
 from bot.hub import hub_open_callback
 from bot.link_flow import (_link_conversation, account_unlink, cmd_account,
                            cmd_link_didnt_work, cmd_unlink)
-from bot.discover_cmd import cmd_trending, dv_category, dv_info, dv_page
+from bot.discover_cmd import (cmd_trending, dv_category, dv_info, dv_page,
+                              trending_hub)
 from bot.invite_flow import (_INV_KEYS, _invite_conversation, cmd_uninvite,
                              uninvite_cancel, uninvite_go)
-from bot.subscriptions import cmd_subscriptions, sub_add, sub_del
+from bot.subscriptions import (cmd_subscriptions, sub_add, sub_del,
+                               subscriptions_hub)
 from bot.request_flow import (_RQ_KEYS, _request_conversation,
                               request_info_dismiss)
-from bot.requests_cmd import cmd_requests, rq_list_cancel
+from bot.requests_cmd import cmd_requests, requests_hub_mine, rq_list_cancel
 from bot.resolve_flow import _resolve_conversation
 from bot.shared import (
     format_status,
@@ -252,13 +257,11 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             "*Commands*\n"
             "  /account — link or unlink your Plex account\n"
             "  /issue — report a problem with a movie or TV show\n"
-            "  /request — request a movie or TV show\n"
-            "  /requests — list your requests\n"
-            "  /trending — browse trending, popular, and upcoming\n"
-            "  /subscriptions — titles you're watching for availability\n"
+            "  /request — new request, your requests, trending, subscriptions\n"
             "  /tickets — list your open tickets\n"
             "  /help — show this\n\n"
-            "(/link and /unlink still work when typed.)",
+            "(/link, /unlink, /requests, /trending and /subscriptions still "
+            "work when typed.)",
             parse_mode="Markdown",
         )
         return
@@ -276,17 +279,15 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "<b>Commands</b>",
         "  /account — link or unlink your Plex account",
         "  /issue — report a problem with a movie or TV show",
-        "  /request — request a movie or TV show",
-        "  /requests — list your requests",
-        "  /trending — browse trending, popular, and upcoming",
-        "  /subscriptions — titles you're watching for availability",
+        "  /request — new request, your requests, trending, subscriptions",
         "  /tickets — list your open tickets",
         "  /invite — share the Plex server with someone (admin only)",
         "  /uninvite — revoke someone's access (admin only)",
         "  /status — connection diagnostics (admin only)",
         "  /help — show this",
         "",
-        "(/link and /unlink still work when typed.)",
+        "(/link, /unlink, /requests, /trending and /subscriptions still "
+        "work when typed.)",
     ]
     await update.effective_message.reply_text(
         "\n".join(lines), parse_mode="HTML"
@@ -414,6 +415,13 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
                                          pattern=fr"^{HUB_OPEN}:[a-z]+$"))
     app.add_handler(CallbackQueryHandler(account_unlink,
                                          pattern=fr"^{ACCOUNT_UNLINK}$"))
+    # Requests Hub list buttons (New request is a request-conversation entry).
+    app.add_handler(CallbackQueryHandler(requests_hub_mine,
+                                         pattern=fr"^{REQUESTS_MINE}$"))
+    app.add_handler(CallbackQueryHandler(trending_hub,
+                                         pattern=fr"^{REQUESTS_TRENDING}$"))
+    app.add_handler(CallbackQueryHandler(subscriptions_hub,
+                                         pattern=fr"^{REQUESTS_SUBS}$"))
     # MUST stay the last callback handler in the default group:
     # catches taps on keyboards whose conversation has timed out or ended.
     app.add_handler(CallbackQueryHandler(unmatched_callback))
@@ -459,10 +467,7 @@ async def _prune_autofix_history_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 # /request with no menu entry).
 _BOT_COMMANDS = [
     ("account", "your Plex link: link or unlink"),
-    ("request", "request a movie or TV show"),
-    ("requests", "list your requests"),
-    ("trending", "browse trending, popular, and upcoming"),
-    ("subscriptions", "titles you're watching for availability"),
+    ("request", "new request, your requests, trending, subscriptions"),
     ("issue", "report a problem with a movie or TV show"),
     ("tickets", "list your open tickets"),
     ("help", "show commands and status"),

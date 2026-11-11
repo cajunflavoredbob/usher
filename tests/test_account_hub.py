@@ -415,7 +415,8 @@ async def test_start_lists_account_and_notes_typed_commands_for_user():
     await cmd_start(upd, ctx)
     text = upd.effective_message.reply_calls[0]["text"]
     assert "/account — link or unlink your Plex account" in text
-    assert "(/link and /unlink still work when typed.)" in text
+    assert ("(/link, /unlink, /requests, /trending and /subscriptions "
+            "still work when typed.)") in text
     assert "/link —" not in text and "/unlink —" not in text
 
 
@@ -429,7 +430,8 @@ async def test_start_lists_account_and_notes_typed_commands_for_admin(monkeypatc
     await app_mod.cmd_start(upd, ctx)
     text = upd.effective_message.reply_calls[0]["text"]
     assert "/account — link or unlink your Plex account" in text
-    assert "(/link and /unlink still work when typed.)" in text
+    assert ("(/link, /unlink, /requests, /trending and /subscriptions "
+            "still work when typed.)") in text
     assert "/link —" not in text and "/unlink —" not in text
 
 

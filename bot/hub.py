@@ -2,7 +2,7 @@
 
 A Hub is a message that summarises one area (Account, ...) and offers its
 actions as buttons. Flows started from a Hub normally end on a message with a
-back button to that Hub, plus a Try again button on PIN or sign-in failures. Each Hub
+back button to that Hub, plus a Try again button when a step failed. Each Hub
 registers a render function here; the back button re-renders it in place.
 """
 from __future__ import annotations
@@ -108,3 +108,13 @@ async def hub_open_callback(update, ctx) -> None:
     if hub not in HUBS:
         return
     await show_hub(update, ctx, hub)
+
+
+def came_from_hub(message, hub: str) -> bool:
+    """True when `message`'s inline keyboard holds the back button to `hub`."""
+    markup = getattr(message, "reply_markup", None)
+    return any(
+        getattr(btn, "callback_data", None) == f"{HUB_OPEN}:{hub}"
+        for row in getattr(markup, "inline_keyboard", ()) or ()
+        for btn in row
+    )

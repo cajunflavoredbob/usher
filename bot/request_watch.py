@@ -1,6 +1,8 @@
-"""Morphing request cards: the /request confirmation message edits in place
-through the download's life (waiting → grabbing with live percent/ETA →
-final state), plus the SABnzbd priority boost for bot-originated grabs.
+"""Progress cards for Requests: the Progress card, a message sent after the
+/request confirmation, edits in place through the download's life (waiting →
+grabbing with live percent/ETA → final state), plus the SABnzbd priority
+boost for bot-originated grabs. The poller and webhooks do not edit the
+confirmation of a new submit.
 
 The poller paints progress (including a download-failed holding line while
 the arr hunts for another release); the states that CLOSE a watch come only
@@ -137,6 +139,11 @@ def _card_text(label: str, body_line: str, *, footer: bool = True) -> str:
     if footer:
         text += "\n\nUse /requests to check on it."
     return text
+
+
+# Card line for an approved Request; also the Progress card's first line
+# when Seerr approves on submit (bot.request_flow).
+APPROVED_LINE = "✅ Approved — grabbing…"
 
 
 async def _edit_card(ctx, watch: dict, body_line: str, *,
@@ -333,7 +340,7 @@ async def apply_webhook_event(app, nt: str, media_type: str,
         for watch in watches:
             if watch["status"] != "grabbing":
                 await store.update_request_watch(watch["id"], status="grabbing")
-                await _edit_card(ctx, watch, "✅ Approved — grabbing…")
+                await _edit_card(ctx, watch, APPROVED_LINE)
         return
     final = _FINAL_LINES.get(nt)
     if (nt == "MEDIA_FAILED" and not

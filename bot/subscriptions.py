@@ -1,5 +1,7 @@
 """Availability subscriptions: 🔔 Notify-me buttons on detail cards, the
-/subscriptions list, and the MEDIA_AVAILABLE fan-out consumer.
+/subscriptions list (also opened by the Requests Hub's "Subscriptions"
+button, which edits it into the Hub message with a back row), and the
+MEDIA_AVAILABLE fan-out consumer.
 
 Strictly per-user: a user only ever sees their own list, unsubscribe only
 works on their own rows, and nothing anywhere shows who else (or how many
@@ -17,8 +19,12 @@ from seerr import SeerrClient
 from store import UserStore
 
 from bot.callback_prefixes import SUB_DEL
+from bot.hub import back_button, came_from_hub, end_markup
+from bot.requests_hub import REQUESTS_HUB
 from bot.shared import (
     DECRYPT_FAILED_MSG,
+    edit_or_send,
+    force_end_flow_conversations,
     record_btn,
     require_seerr,
     send_typing,
@@ -68,15 +74,38 @@ async def cmd_subscriptions(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
                        user_id=update.effective_user.id)
 
 
+async def subscriptions_hub(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Requests Hub "Subscriptions" button: the /subscriptions list, edited
+    into the tapped Hub message."""
+    q = update.callback_query
+    await q.answer()
+    force_end_flow_conversations(ctx, update)
+    if await require_seerr(update, ctx,
+                           reply_markup=end_markup(REQUESTS_HUB)) is None:
+        return
+
+    async def edit_into_hub(text, **kwargs):
+        return await edit_or_send(q, text, **kwargs)
+
+    await _render_subs(update, ctx, edit_into_hub,
+                       user_id=update.effective_user.id, hub=REQUESTS_HUB)
+
+
 async def _render_subs(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
-                       reply_method, *, user_id: int) -> None:
+                       reply_method, *, user_id: int, hub=None) -> None:
+    """With `hub` set the empty text carries the end keyboard and the list
+    gets a last row holding the back button."""
     store: UserStore = ctx.bot_data["store"]
     subs = await store.list_subscriptions(user_id)
     if not subs:
-        await reply_method(
-            "You're not watching anything. Tap 🔔 on a title's detail card "
-            "(🖼 in /request or /trending) to get a DM when it becomes "
-            "available.")
+        text = ("You're not watching anything. Tap 🔔 on a title's detail card "
+                "(🖼 in /request or /trending) to get a DM when it becomes "
+                "available.")
+        if hub:
+            sent = await reply_method(text, reply_markup=end_markup(hub))
+            record_btn(ctx.application, user_id, sent)
+        else:
+            await reply_method(text)
         return
     lines = [f"🔔 Your availability watches ({len(subs)}):", ""]
     rows: list[list[InlineKeyboardButton]] = []
@@ -91,6 +120,8 @@ async def _render_subs(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             row = []
     if row:
         rows.append(row)
+    if hub:
+        rows.append([back_button(hub)])
     lines.append("")
     lines.append("❌ = stop watching")
     sent = await reply_method(
@@ -113,7 +144,10 @@ async def sub_del(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     store: UserStore = ctx.bot_data["store"]
     # Owner-scoped delete: a forged id belonging to someone else is a no-op.
     await store.remove_subscription(sub_id, user_id)
-    await _render_subs(update, ctx, q.edit_message_text, user_id=user_id)
+    # Keep the back row when the tapped list carried it (opened from the Hub).
+    hub = REQUESTS_HUB if came_from_hub(q.message, REQUESTS_HUB) else None
+    await _render_subs(update, ctx, q.edit_message_text, user_id=user_id,
+                       hub=hub)
 
 
 async def fan_out_availability(app, media_type: str, tmdb_id: int,
