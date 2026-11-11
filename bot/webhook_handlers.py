@@ -501,7 +501,7 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
         except Exception:
             logger.exception("watch morph failed for %s", nt)
 
-    # Availability watches: one-shot fan-out to subscribers, minus whoever
+    # Subscriptions: one-shot fan-out to subscribers, minus whoever
     # this event already DMed as the requester.
     if nt == "MEDIA_AVAILABLE":
         tmdb_id = media.get("tmdbId")

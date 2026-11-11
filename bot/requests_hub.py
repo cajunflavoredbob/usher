@@ -11,7 +11,7 @@ from telegram import InlineKeyboardButton
 from bot.callback_prefixes import (
     REQUESTS_MINE,
     REQUESTS_NEW,
-    REQUESTS_SUBS,
+    REQUESTS_SUBSCRIPTIONS,
     REQUESTS_TRENDING,
 )
 from bot.hub import HubView, register_hub
@@ -28,7 +28,8 @@ async def render_requests_hub(update, ctx) -> HubView:
             InlineKeyboardButton("➕ New request", callback_data=REQUESTS_NEW),
             InlineKeyboardButton("📥 My requests", callback_data=REQUESTS_MINE),
             InlineKeyboardButton("🔥 Trending", callback_data=REQUESTS_TRENDING),
-            InlineKeyboardButton("🔔 Subscriptions", callback_data=REQUESTS_SUBS),
+            InlineKeyboardButton("🔔 Subscriptions",
+                                 callback_data=REQUESTS_SUBSCRIPTIONS),
         ],
     )
 

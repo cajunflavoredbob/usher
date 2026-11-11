@@ -10,8 +10,8 @@ from bot.media_card import card_keyboard
 from bot.subscriptions import (
     cmd_subscriptions,
     fan_out_availability,
-    sub_add,
-    sub_del,
+    subscription_add,
+    subscription_del,
 )
 
 from tests._handler_harness import make_ctx, make_link, make_update
@@ -35,29 +35,29 @@ def test_card_offers_notify_only_when_availability_can_change():
     assert not any(cb.startswith("subadd:") for cb in _callbacks(card_keyboard(blocked)))
 
 
-async def test_sub_add_stores_with_title():
+async def test_subscription_add_stores_with_title():
     ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
     upd = make_update(callback_data="subadd:movie:550", user_id=USER_ID)
-    await sub_add(upd, ctx)
+    await subscription_add(upd, ctx)
     args = ctx.bot_data["store"].add_subscription.call_args.args
     assert args == (USER_ID, "movie", 550, "Movie Title (2026)")
     assert any("notified" in a[0].lower() or "DMed" in a[0]
                for a in upd.callback_query.answers)
 
 
-async def test_sub_add_gated_for_unlinked():
+async def test_subscription_add_gated_for_unlinked():
     ctx = make_ctx(admin_id=ADMIN_ID, link=None)
     upd = make_update(callback_data="subadd:movie:550", user_id=USER_ID)
-    await sub_add(upd, ctx)
+    await subscription_add(upd, ctx)
     ctx.bot_data["store"].add_subscription.assert_not_awaited()
     assert any(alert for _, alert in upd.callback_query.answers)
 
 
-async def test_sub_add_duplicate_says_already_listed():
+async def test_subscription_add_duplicate_says_already_listed():
     ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
     ctx.bot_data["store"].add_subscription.return_value = False
     upd = make_update(callback_data="subadd:movie:550", user_id=USER_ID)
-    await sub_add(upd, ctx)
+    await subscription_add(upd, ctx)
     assert any("Already" in a[0] for a in upd.callback_query.answers)
 
 
@@ -74,7 +74,7 @@ async def test_subscriptions_list_and_delete_own_only():
     assert "subdel:7" in _callbacks(call["reply_markup"])
 
     del_upd = make_update(callback_data="subdel:7", user_id=USER_ID)
-    await sub_del(del_upd, ctx)
+    await subscription_del(del_upd, ctx)
     # Owner-scoped delete: telegram_id travels with the id.
     assert ctx.bot_data["store"].remove_subscription.call_args.args == (7, USER_ID)
 
@@ -124,17 +124,17 @@ async def test_store_subscription_round_trip(fresh_store):
     assert not await fresh_store.add_subscription(1, "movie", 550, "Fight Club")
     assert await fresh_store.add_subscription(2, "movie", 550, "Fight Club")
     assert await fresh_store.add_subscription(1, "tv", 1399, "GoT")
-    subs = await fresh_store.list_subscriptions(1)
-    assert [(s[1], s[2]) for s in subs] == [("movie", 550), ("tv", 1399)]
+    subscriptions = await fresh_store.list_subscriptions(1)
+    assert [(s[1], s[2]) for s in subscriptions] == [("movie", 550), ("tv", 1399)]
     # one-shot pop consumes every subscriber of the title, both users
     popped = await fresh_store.pop_subscribers("movie", 550)
     assert sorted(popped) == [1, 2]
     assert await fresh_store.pop_subscribers("movie", 550) == []
     # remove is owner-scoped
-    subs = await fresh_store.list_subscriptions(1)
-    sub_id = subs[0][0]
-    assert not await fresh_store.remove_subscription(sub_id, telegram_id=2)
-    assert await fresh_store.remove_subscription(sub_id, telegram_id=1)
+    subscriptions = await fresh_store.list_subscriptions(1)
+    subscription_id = subscriptions[0][0]
+    assert not await fresh_store.remove_subscription(subscription_id, telegram_id=2)
+    assert await fresh_store.remove_subscription(subscription_id, telegram_id=1)
     assert await fresh_store.list_subscriptions(1) == []
 
 

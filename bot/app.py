@@ -39,14 +39,14 @@ from bot.callback_prefixes import (
     ADMIN_STATUS,
     HUB_OPEN,
     REQUESTS_MINE,
-    REQUESTS_SUBS,
+    REQUESTS_SUBSCRIPTIONS,
     REQUESTS_TRENDING,
     TICKETS_LIST,
     DV_CATEGORY,
     DV_INFO,
     DV_PAGE,
-    SUB_ADD,
-    SUB_DEL,
+    SUBSCRIPTION_ADD,
+    SUBSCRIPTION_DEL,
     UNINV_GO,
     UNINV_KEEP,
     RQ_INFO_DISMISS,
@@ -74,8 +74,8 @@ from bot.discover_cmd import (cmd_trending, dv_category, dv_info, dv_page,
 from bot.invite_flow import (_INV_KEYS, _invite_conversation, admin_shares,
                              cmd_uninvite, share_matches, share_remove,
                              share_view, uninvite_cancel, uninvite_go)
-from bot.subscriptions import (cmd_subscriptions, sub_add, sub_del,
-                               subscriptions_hub)
+from bot.subscriptions import (cmd_subscriptions, subscription_add,
+                               subscription_del, subscriptions_hub)
 from bot.request_flow import (_RQ_KEYS, _request_conversation,
                               request_info_dismiss)
 from bot.requests_cmd import cmd_requests, requests_hub_mine, rq_list_cancel
@@ -416,9 +416,11 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CallbackQueryHandler(dv_category, pattern=fr"^{DV_CATEGORY}:"))
     app.add_handler(CallbackQueryHandler(dv_page, pattern=fr"^{DV_PAGE}:"))
     app.add_handler(CallbackQueryHandler(dv_info, pattern=fr"^{DV_INFO}:"))
-    # Availability-watch callbacks (detail-card 🔔 + /subscriptions ❌).
-    app.add_handler(CallbackQueryHandler(sub_add, pattern=fr"^{SUB_ADD}:"))
-    app.add_handler(CallbackQueryHandler(sub_del, pattern=fr"^{SUB_DEL}:"))
+    # Subscription callbacks (detail-card 🔔 + /subscriptions ❌).
+    app.add_handler(CallbackQueryHandler(subscription_add,
+                                         pattern=fr"^{SUBSCRIPTION_ADD}:"))
+    app.add_handler(CallbackQueryHandler(subscription_del,
+                                         pattern=fr"^{SUBSCRIPTION_DEL}:"))
     # /uninvite confirm card (its own prefixes -- never collides with the
     # invite conversation's versioned invx:<v> cancel).
     app.add_handler(CallbackQueryHandler(uninvite_go,
@@ -448,7 +450,7 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CallbackQueryHandler(trending_hub,
                                          pattern=fr"^{REQUESTS_TRENDING}$"))
     app.add_handler(CallbackQueryHandler(subscriptions_hub,
-                                         pattern=fr"^{REQUESTS_SUBS}$"))
+                                         pattern=fr"^{REQUESTS_SUBSCRIPTIONS}$"))
     # Tickets Hub list button, also a detail card's "⬅️ Tickets" (Report a
     # problem is an issue-conversation entry).
     app.add_handler(CallbackQueryHandler(tickets_hub_list,

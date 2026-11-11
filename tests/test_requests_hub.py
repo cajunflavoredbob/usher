@@ -10,7 +10,7 @@ from telegram.ext import ConversationHandler
 
 from bot import hub
 from bot.callback_prefixes import (HUB_OPEN, REQUESTS_MINE, REQUESTS_NEW,
-                                   REQUESTS_SUBS, REQUESTS_TRENDING)
+                                   REQUESTS_SUBSCRIPTIONS, REQUESTS_TRENDING)
 from bot.discover_cmd import cmd_trending, dv_page, trending_hub
 from bot.request_flow import (_request_conversation, _request_timeout,
                               request_cancel, request_from_issue,
@@ -18,7 +18,7 @@ from bot.request_flow import (_request_conversation, _request_timeout,
                               request_title)
 from bot.requests_cmd import cmd_requests, requests_hub_mine, rq_list_cancel
 from bot.requests_hub import REQUESTS_HUB, render_requests_hub
-from bot.subscriptions import (cmd_subscriptions, sub_del,
+from bot.subscriptions import (cmd_subscriptions, subscription_del,
                                subscriptions_hub)
 from bot.shared import RQ_CONFIRM, RQ_PICK_MEDIA, RQ_TITLE
 from seerr import (REQUEST_STATUS_APPROVED, REQUEST_STATUS_PENDING,
@@ -116,7 +116,7 @@ async def test_request_without_title_shows_four_button_hub():
     assert reply["parse_mode"] == "HTML"
     assert _flat(reply["reply_markup"]) == [
         ("➕ New request", REQUESTS_NEW), ("📥 My requests", REQUESTS_MINE),
-        ("🔥 Trending", REQUESTS_TRENDING), ("🔔 Subscriptions", REQUESTS_SUBS)]
+        ("🔥 Trending", REQUESTS_TRENDING), ("🔔 Subscriptions", REQUESTS_SUBSCRIPTIONS)]
     ctx.bot_data["seerr"].get_my_permissions.assert_not_awaited()
 
 
@@ -145,7 +145,7 @@ async def test_requests_back_button_shows_hub():
     edit = upd.callback_query.edits[0]
     assert edit["text"].startswith("🎬 <b>Requests</b>")
     assert [c for _, c in _flat(edit["reply_markup"])] == [
-        REQUESTS_NEW, REQUESTS_MINE, REQUESTS_TRENDING, REQUESTS_SUBS]
+        REQUESTS_NEW, REQUESTS_MINE, REQUESTS_TRENDING, REQUESTS_SUBSCRIPTIONS]
 
 
 # --- Hub buttons reach the same result as the typed commands -------------------
@@ -200,7 +200,7 @@ async def test_hub_subscriptions_matches_typed_list():
     typed = make_update(text="/subscriptions", user_id=USER_ID)
     await cmd_subscriptions(typed, ctx)
     typed_reply = typed.effective_message.reply_calls[-1]
-    upd = make_update(callback_data=REQUESTS_SUBS, user_id=USER_ID)
+    upd = make_update(callback_data=REQUESTS_SUBSCRIPTIONS, user_id=USER_ID)
     await subscriptions_hub(upd, ctx)
     edit = upd.callback_query.edits[0]
     assert upd.callback_query.message.reply_calls == []
@@ -261,11 +261,11 @@ async def test_hub_subscriptions_list_ends_with_back():
     ctx = _linked_ctx()
     ctx.bot_data["store"].list_subscriptions.return_value = [
         (1, "movie", 550, "Title A")]
-    upd = make_update(callback_data=REQUESTS_SUBS, user_id=USER_ID)
+    upd = make_update(callback_data=REQUESTS_SUBSCRIPTIONS, user_id=USER_ID)
     await subscriptions_hub(upd, ctx)
     assert _flat(upd.callback_query.edits[0]["reply_markup"])[-1] == BACK
     ctx.bot_data["store"].list_subscriptions.return_value = []
-    empty = make_update(callback_data=REQUESTS_SUBS, user_id=USER_ID)
+    empty = make_update(callback_data=REQUESTS_SUBSCRIPTIONS, user_id=USER_ID)
     await subscriptions_hub(empty, ctx)
     assert _flat(empty.callback_query.edits[0]["reply_markup"]) == [BACK]
 
@@ -459,7 +459,7 @@ async def test_hub_buttons_without_seerr_keep_setup_text_with_back():
     for handler, data in ((request_hub_new, REQUESTS_NEW),
                           (requests_hub_mine, REQUESTS_MINE),
                           (trending_hub, REQUESTS_TRENDING),
-                          (subscriptions_hub, REQUESTS_SUBS)):
+                          (subscriptions_hub, REQUESTS_SUBSCRIPTIONS)):
         ctx = _linked_ctx()
         ctx.bot_data["seerr"] = None
         upd = make_update(callback_data=data, user_id=USER_ID)
@@ -556,11 +556,11 @@ async def test_hub_subscription_delete_keeps_back():
     ctx.bot_data["store"].list_subscriptions.return_value = [
         (2, "tv", 1399, "Title B")]
     upd = _from_hub(make_update(callback_data="subdel:1", user_id=USER_ID))
-    await sub_del(upd, ctx)
+    await subscription_del(upd, ctx)
     ctx.bot_data["store"].remove_subscription.assert_awaited_once_with(1, USER_ID)
     assert _flat(upd.callback_query.edits[0]["reply_markup"])[-1] == BACK
     typed = make_update(callback_data="subdel:1", user_id=USER_ID)
-    await sub_del(typed, ctx)
+    await subscription_del(typed, ctx)
     assert HUB_OPEN not in " ".join(_cbs(typed.callback_query.edits[0]["reply_markup"]))
 
 
@@ -570,7 +570,7 @@ async def test_hub_buttons_end_other_flows():
     for handler, data in ((request_hub_new, REQUESTS_NEW),
                           (requests_hub_mine, REQUESTS_MINE),
                           (trending_hub, REQUESTS_TRENDING),
-                          (subscriptions_hub, REQUESTS_SUBS)):
+                          (subscriptions_hub, REQUESTS_SUBSCRIPTIONS)):
         ctx = _linked_ctx()
         conv = _fake_conv()
         ctx.bot_data["flow_convs"] = [conv]
@@ -593,7 +593,7 @@ def test_request_hub_list_buttons_registered():
     last = src.index("CallbackQueryHandler(unmatched_callback)")
     for handler, prefix in (("requests_hub_mine", "REQUESTS_MINE"),
                             ("trending_hub", "REQUESTS_TRENDING"),
-                            ("subscriptions_hub", "REQUESTS_SUBS")):
+                            ("subscriptions_hub", "REQUESTS_SUBSCRIPTIONS")):
         found = re.search(
             r'CallbackQueryHandler\(' + handler + r',\s*pattern=fr"\^\{'
             + prefix + r'\}\$"\)', src)

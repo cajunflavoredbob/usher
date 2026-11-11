@@ -65,8 +65,8 @@ DV_PAGE: Final = "dvp"                # dvp:<version>:<screen> browse paging
 DV_INFO: Final = "dvi"                # dvi:<version>:<media_type>:<tmdb_id>
 
 # --- Availability subscriptions ----------------------------------------------
-SUB_ADD: Final = "subadd"             # subadd:<media_type>:<tmdb_id>
-SUB_DEL: Final = "subdel"             # subdel:<sub_id> from /subscriptions
+SUBSCRIPTION_ADD: Final = "subadd"    # subadd:<media_type>:<tmdb_id>
+SUBSCRIPTION_DEL: Final = "subdel"    # subdel:<id> from /subscriptions
 
 # --- Admin provisioning (/invite, /uninvite, the Admin Hub's Shares) ---------
 INV_LIB: Final = "invl"               # invl:<version>:<section_id> toggle
@@ -97,7 +97,8 @@ REQUESTS_NEW: Final = "rqhn"          # Requests Hub "New request" (request
                                       # conversation entry point)
 REQUESTS_MINE: Final = "rqhm"         # Requests Hub "My requests" (global handler)
 REQUESTS_TRENDING: Final = "rqht"     # Requests Hub "Trending" (global handler)
-REQUESTS_SUBS: Final = "rqhs"         # Requests Hub "Subscriptions" (global handler)
+REQUESTS_SUBSCRIPTIONS: Final = "rqhs"  # Requests Hub "Subscriptions" (global
+                                      # handler)
 TICKETS_REPORT: Final = "tkhr"        # Tickets Hub "Report a problem" (issue
                                       # conversation entry point)
 TICKETS_LIST: Final = "tkhl"          # Tickets Hub list button and a detail

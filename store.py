@@ -569,7 +569,7 @@ class UserStore:
 
     # --- Availability subscriptions ------------------------------------------
     # Strictly per-user: a user only ever sees and manages their own rows,
-    # and nothing renders who else (or how many others) watch a title.
+    # and nothing renders who else (or how many others) subscribed to a title.
 
     async def add_subscription(self, telegram_id: int, media_type: str,
                                tmdb_id: int, title: str) -> bool:
@@ -590,7 +590,7 @@ class UserStore:
 
         return await self._run(_do)
 
-    async def remove_subscription(self, sub_id: int, telegram_id: int) -> bool:
+    async def remove_subscription(self, subscription_id: int, telegram_id: int) -> bool:
         """Delete one subscription -- only the owner's (the telegram_id
         predicate makes a forged subdel callback a no-op)."""
 
@@ -598,7 +598,7 @@ class UserStore:
             with self._conn() as c:
                 cur = c.execute(
                     "DELETE FROM availability_subs WHERE id = ? AND telegram_id = ?",
-                    (sub_id, telegram_id),
+                    (subscription_id, telegram_id),
                 )
                 return cur.rowcount > 0
 

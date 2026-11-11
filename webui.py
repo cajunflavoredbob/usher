@@ -622,7 +622,7 @@ def _settings_page(
     adm_chk = " checked" if s.tg_notify_admin_requests else ""
     fail_chk = " checked" if s.tg_notify_admin_failed else ""
     iss_chk = " checked" if s.tg_notify_issues else ""
-    subs_chk = " checked" if s.tg_notify_subscriptions else ""
+    subscriptions_chk = " checked" if s.tg_notify_subscriptions else ""
     telegram_form = f"""
 <form id="telegram-form" method="POST" action="/admin/telegram">
   {csrf}
@@ -642,7 +642,7 @@ def _settings_page(
   <label class="inline-check"><input type="checkbox" name="tg_notify_admin_requests"{adm_chk}> New-request notices to the admin</label>
   <label class="inline-check"><input type="checkbox" name="tg_notify_admin_failed"{fail_chk}> Failed-download alarm to the admin</label>
   <label class="inline-check"><input type="checkbox" name="tg_notify_issues"{iss_chk}> Ticket DMs</label>
-  <label class="inline-check"><input type="checkbox" name="tg_notify_subscriptions"{subs_chk}> Availability-watch notifications</label>
+  <label class="inline-check"><input type="checkbox" name="tg_notify_subscriptions"{subscriptions_chk}> Availability-watch notifications</label>
 
   <div class="btn-row divided">
     <button type="button" class="test-btn" data-test="telegram" data-form="telegram-form">Test</button>

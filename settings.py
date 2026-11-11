@@ -88,7 +88,7 @@ class Settings:
     tg_notify_admin_requests: bool = True  # new-request + auto-approved FYIs to the admin
     tg_notify_admin_failed: bool = True    # failed-download alarm to the admin
     tg_notify_issues: bool = True          # issue reported/comment/resolved DMs
-    tg_notify_subscriptions: bool = True   # availability-watch fan-out
+    tg_notify_subscriptions: bool = True   # Subscription fan-out
     allowed_autofix_telegram_ids: list[int] = field(default_factory=list)
     # When True, every linked user may auto-fix regardless of the allowlist
     # (the admin is always allowed). The list above is retained either way.

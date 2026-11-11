@@ -21,7 +21,7 @@ from seerr import (
     MediaResult,
 )
 
-from bot.callback_prefixes import RQ_INFO_DISMISS, SUB_ADD
+from bot.callback_prefixes import RQ_INFO_DISMISS, SUBSCRIPTION_ADD
 from const import DETAIL_OVERVIEW_MAX_CHARS
 
 logger = logging.getLogger("usher")
@@ -67,7 +67,7 @@ def card_keyboard(r: MediaResult) -> InlineKeyboardMarkup:
     if (r.status or 0) not in (MEDIA_STATUS_AVAILABLE, MEDIA_STATUS_BLOCKLISTED):
         rows.append([InlineKeyboardButton(
             "🔔 Notify me when available",
-            callback_data=f"{SUB_ADD}:{r.media_type}:{r.tmdb_id}")])
+            callback_data=f"{SUBSCRIPTION_ADD}:{r.media_type}:{r.tmdb_id}")])
     rows.append([InlineKeyboardButton("🗑 Dismiss", callback_data=RQ_INFO_DISMISS)])
     return InlineKeyboardMarkup(rows)
 
