@@ -895,7 +895,7 @@ async def setup_get(request: web.Request) -> web.Response:
   <h2>Admin Account</h2>
   <label>Username</label>
   <input type="text" name="username" required autofocus>
-  <label>Password <span class="note">min 8 characters</span></label>
+  <label>Password <span class="note">min {ADMIN_PASSWORD_MIN_CHARS} characters</span></label>
   <input type="password" name="password" required minlength="{ADMIN_PASSWORD_MIN_CHARS}">
   <label>Confirm password</label>
   <input type="password" name="confirm" required minlength="{ADMIN_PASSWORD_MIN_CHARS}">
@@ -967,7 +967,7 @@ async def setup_post(request: web.Request) -> web.Response:
     if not username:
         errors.append("Username required.")
     if len(password) < ADMIN_PASSWORD_MIN_CHARS or password != confirm:
-        errors.append("Password must be at least 8 chars and match confirm.")
+        errors.append(f"Password must be at least {ADMIN_PASSWORD_MIN_CHARS} chars and match confirm.")
     if not bot_token:
         errors.append("Telegram bot token required.")
     try:
@@ -1406,7 +1406,7 @@ async def change_password(request: web.Request) -> web.Response:
         )
     if len(new) < ADMIN_PASSWORD_MIN_CHARS or new != confirm:
         return web.Response(
-            text=_settings_page(store.settings, error="New password must be >= 8 chars and match confirm.",
+            text=_settings_page(store.settings, error=f"New password must be >= {ADMIN_PASSWORD_MIN_CHARS} chars and match confirm.",
                                 active_tab="account",
                                 webhook_url=_webhook_url_from_request(request),
                                 csrf_token=csrf_for_request(request)),
