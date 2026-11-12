@@ -268,3 +268,32 @@ async def test_delete_404_after_landed_delete_still_closes_card():
         "gone", status_code=404, service="Seerr")
     await rq_list_cancel(make_update(callback_data="rqlc:12", user_id=USER_ID), ctx)
     store.delete_progress_card.assert_awaited_once_with(1)
+
+
+async def test_4k_card_is_not_closed_by_cancelling_a_standard_request():
+    """The requester also has a pending 4K Request for the title (made in the
+    web UI); its card is the only waiting one but is not the cancelled one."""
+    c4k = _card(1, USER_ID)
+    c4k["is4k"] = 1
+    ctx, store = _setup(cards=[c4k], owner=make_link(telegram_id=USER_ID))
+    await rq_list_cancel(make_update(callback_data="rqlc:12", user_id=USER_ID), ctx)
+    store.delete_progress_card.assert_not_awaited()
+
+
+async def test_cancelled_4k_request_closes_the_4k_card_among_two():
+    std = _card(1, USER_ID, message_id=701)
+    c4k = _card(2, USER_ID, message_id=702)
+    c4k["is4k"] = 1
+    ctx, store = _setup(cards=[std, c4k], owner=make_link(telegram_id=USER_ID))
+    ctx.bot_data["seerr"].get_request.return_value.is4k = True
+    await rq_list_cancel(make_update(callback_data="rqlc:12", user_id=USER_ID), ctx)
+    store.delete_progress_card.assert_awaited_once_with(2)
+
+
+async def test_cancelled_standard_request_closes_the_standard_card_among_two():
+    std = _card(1, USER_ID, message_id=701)
+    c4k = _card(2, USER_ID, message_id=702)
+    c4k["is4k"] = 1
+    ctx, store = _setup(cards=[c4k, std], owner=make_link(telegram_id=USER_ID))
+    await rq_list_cancel(make_update(callback_data="rqlc:12", user_id=USER_ID), ctx)
+    store.delete_progress_card.assert_awaited_once_with(1)

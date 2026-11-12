@@ -232,12 +232,14 @@ async def _close_progress_cards(ctx, info, *, fallback_user_id,
             return
         cards = await store.find_progress_cards(info.media_type, info.tmdb_id)
         # Only a pending Request can be cancelled, and its card is still
-        # "waiting". Cards carry no Request id, so when the requester has
-        # several waiting cards for the title (standard and 4K, or two
-        # season picks) we cannot tell which one this was: leave them all
-        # rather than close a live Request's card.
+        # "waiting". Cards carry no Request id, only the 4K flag (no
+        # seasons), so a card counts only when its 4K flag matches the
+        # cancelled Request's. When several still match (two season picks)
+        # we cannot tell which one this was: leave them all rather than
+        # close a live Request's card.
         mine = [c for c in cards
-                if c["user_id"] == requester_tg and c["status"] == "waiting"]
+                if c["user_id"] == requester_tg and c["status"] == "waiting"
+                and bool(c["is4k"]) == info.is4k]
         if len(mine) != 1:
             return
         card = mine[0]

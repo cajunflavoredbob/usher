@@ -202,6 +202,7 @@ class RequestListItem:
     created_at: str = ""     # ISO 8601
     requested_by: str = "?"  # displayName
     requested_by_id: Optional[int] = None  # Seerr user id of the requester
+    is4k: bool = False       # 4K Request (a Progress card row stores the same flag)
 
 
 @dataclass
@@ -870,6 +871,7 @@ class SeerrClient:
             requested_by=(requested_by.get("displayName")
                           or requested_by.get("plexUsername") or "?"),
             requested_by_id=requester_id if isinstance(requester_id, int) else None,
+            is4k=item.get("is4k") is True,
         )
 
     async def list_requests(

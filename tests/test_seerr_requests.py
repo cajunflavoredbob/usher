@@ -479,3 +479,10 @@ async def test_search_percent_encodes_reserved_characters(monkeypatch):
     await client.search("goodbye, lara & friends")
     assert "query=goodbye%2C%20lara%20%26%20friends" in captured["raw"]
     await client.close()
+
+
+def test_parse_request_item_keeps_is4k():
+    from seerr import SeerrClient
+    base = {"id": 5, "status": 1, "media": {"mediaType": "movie", "tmdbId": 550}}
+    assert SeerrClient._parse_request_item({**base, "is4k": True}).is4k is True
+    assert SeerrClient._parse_request_item(base).is4k is False
