@@ -7,11 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-12
+
 ### Added
 - The Auto-fix and SABnzbd tabs show a "Remove the saved key" box next to a
   stored Radarr, Sonarr or SABnzbd API key; ticking it and saving clears the key.
 
 ### Fixed
+- Cancelling a TV Request from /requests now closes its Progress card with
+  "Request cancelled." when it is the only waiting card made for the same
+  seasons. Cards made before this update are left as they were.
+- The abandoned, complete and timed-out messages for a Fix an Admin ran now
+  name that Fix (Redownload or Mark Failed) instead of calling it Auto-fix.
 - The bot token is replaced with a placeholder in log output once it is loaded from
   settings. If Telegram rejects the token at startup, the log now says so in one
   line instead of printing an error message and traceback.
@@ -92,10 +99,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A resolved Ticket now shows Status: Resolved and offers only Reply, and a
   Fix tapped from an older message on a resolved Ticket is refused instead of
   deleting the current file again.
-- Cancelling a Request from /requests now closes its Progress card with
-  "Request cancelled." instead of leaving it on "Waiting for approval". A TV
-  card is closed when it is the only waiting card made for the same seasons as
-  the cancelled Request; cards made before this update are left as they were.
+- Cancelling a movie Request from /requests now closes its Progress card
+  with "Request cancelled." instead of leaving it on "Waiting for approval".
 - Typing a command in the middle of /issue, /request, /invite or /link now
   tells you the unfinished flow was stopped, instead of dropping it silently.
 - Tapping a number in /trending now runs the same checks as a search: a movie
