@@ -61,6 +61,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the Admin panel refuses saves ("Usher is restarting. Refresh in a moment.") so
   they cannot overwrite the restored settings, and an unfinished /link sign-in
   no longer holds the restart up.
+- A Fix on one episode no longer shows another episode's download percent, or
+  spends its one-time SABnzbd speed boost on that other episode's download.
 
 ## [0.18.0] - 2026-11-11
 

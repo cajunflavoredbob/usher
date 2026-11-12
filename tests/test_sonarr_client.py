@@ -129,6 +129,46 @@ async def test_queue_progress_filters_when_episode_ids_present():
     await c.close()
 
 
+async def test_queue_progress_ignores_other_episodes_downloads():
+    """A Fix on episode 9 must not report (or boost) episode 10's download."""
+    import httpx
+    from sonarr import SonarrClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[
+            {"size": 1000, "sizeleft": 500, "episodeId": 10,
+             "downloadId": "b"},
+            {"size": 1000, "sizeleft": 500, "episodes": [{"id": 11}],
+             "downloadId": "c"},
+        ])
+
+    c = SonarrClient("http://sonarr.test:8989", "k")
+    c._client = httpx.AsyncClient(base_url="http://sonarr.test:8989/api/v3",
+                                  transport=httpx.MockTransport(handler))
+    assert await c.get_queue_progress(5, episode_ids=[9]) is None
+    await c.close()
+
+
+async def test_queue_progress_idless_record_counts_beside_other_episodes():
+    import httpx
+    from sonarr import SonarrClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[
+            {"size": 1000, "sizeleft": 500, "episodeId": 10,
+             "downloadId": "b"},
+            {"size": 1000, "sizeleft": 250, "episodes": [],
+             "downloadId": "pack"},
+        ])
+
+    c = SonarrClient("http://sonarr.test:8989", "k")
+    c._client = httpx.AsyncClient(base_url="http://sonarr.test:8989/api/v3",
+                                  transport=httpx.MockTransport(handler))
+    progress = await c.get_queue_progress(5, episode_ids=[9])
+    assert progress is not None and progress.count == 1 and progress.percent == 75
+    await c.close()
+
+
 def _stateful_client(*, delete_landed: bool):
     """Mock Sonarr whose first DELETE times out; the retry gets a 404."""
     state = {"has_file": True, "deletes": 0}
