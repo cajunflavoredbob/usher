@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-11-12
+
+### Changed
+- The daily-limit notice when creating a Ticket and the Auto-fix intro in the
+  Admin panel now say Ticket instead of issue.
+
 ### Fixed
 - Backup and restore now use the encryption key file Usher actually runs with,
   so a custom ENCRYPTION_KEY_PATH is included in the backup and restored in

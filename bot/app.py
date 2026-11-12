@@ -3,6 +3,7 @@ the HTTP server, run the polling loop."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html
 import logging
 import os
@@ -847,10 +848,9 @@ async def _run_setup_only(settings_store: SettingsStore, session_secret: bytes,
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
-        try:
+        # Windows event loops: keep the default signal behaviour
+        with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, stop.set)
-        except NotImplementedError:
-            pass  # Windows event loops: keep the default signal behaviour
     try:
         await stop.wait()
     finally:

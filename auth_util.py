@@ -219,11 +219,7 @@ def load_or_create_setup_token(data_dir: Path) -> Optional[str]:
 
 
 def clear_setup_token(data_dir: Path) -> None:
-    p = Path(data_dir) / SETUP_TOKEN_FILE
-    try:
-        p.unlink()
-    except FileNotFoundError:
-        pass
+    (Path(data_dir) / SETUP_TOKEN_FILE).unlink(missing_ok=True)
 
 
 # --- Audit log ---
