@@ -11,7 +11,8 @@ from telegram.ext import ConversationHandler
 from bot import hub
 from bot.callback_prefixes import (HUB_OPEN, REQUESTS_MINE, REQUESTS_NEW,
                                    REQUESTS_SUBSCRIPTIONS, REQUESTS_TRENDING)
-from bot.discover_cmd import cmd_trending, dv_page, trending_hub
+from bot.discover_cmd import (cmd_trending, dv_category, dv_page,
+                              trending_hub)
 from bot.request_flow import (_request_conversation, _request_timeout,
                               request_cancel, request_from_ticket,
                               request_hub_new, request_start, request_submit,
@@ -548,6 +549,19 @@ async def test_hub_trending_page_keeps_back():
     assert _flat(upd.callback_query.edits[0]["reply_markup"])[-1] == BACK
     typed = make_update(callback_data="dvp:1:1", user_id=USER_ID)
     await dv_page(typed, ctx_with_list())
+    assert HUB_OPEN not in " ".join(_cbs(typed.callback_query.edits[0]["reply_markup"]))
+
+
+async def test_hub_trending_category_tap_keeps_back():
+    def ctx_for_tap():
+        ctx = _linked_ctx(user_data={"dv_version": 1})
+        ctx.bot_data["seerr"].discover.return_value = _results(3)
+        return ctx
+    upd = _from_hub(make_update(callback_data="dvc:tv", user_id=USER_ID))
+    await dv_category(upd, ctx_for_tap())
+    assert _flat(upd.callback_query.edits[0]["reply_markup"])[-1] == BACK
+    typed = make_update(callback_data="dvc:tv", user_id=USER_ID)
+    await dv_category(typed, ctx_for_tap())
     assert HUB_OPEN not in " ".join(_cbs(typed.callback_query.edits[0]["reply_markup"]))
 
 
