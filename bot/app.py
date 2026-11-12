@@ -24,7 +24,7 @@ from http_util import user_friendly_message
 from plex import PlexClient
 from radarr import RadarrClient
 from seerr import SeerrClient, REQUIRED_WEBHOOK_TYPES
-from settings import SettingsStore, load_or_create_session_secret
+from settings import SettingsStore, load_or_create_session_secret, public_base_url
 from sabnzbd import SabnzbdClient
 from sonarr import SonarrClient
 from store import TokenCrypto, UserStore
@@ -631,10 +631,8 @@ async def _post_init(app: Application) -> None:
         logger.exception("Startup autofix-history prune failed (non-fatal)", exc_info=exc)
 
     admin_id = app.bot_data["admin_id"]
-    base = (settings_store.settings.usher_public_url or "").strip().rstrip("/")
+    base = public_base_url(settings_store.settings.usher_public_url)
     if base:
-        if base.endswith("/admin"):
-            base = base[: -len("/admin")]
         admin_url = f"{base}/admin"
     else:
         admin_url = f"http://<host>:{app.bot_data['http_port']}/admin"

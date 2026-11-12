@@ -356,3 +356,27 @@ def test_env_prefers_new_usher_names(monkeypatch):
     monkeypatch.setenv(legacy_env("PUBLIC_URL"), "http://legacy:8765")
     s = SettingsStore._seed_from_env()
     assert s.usher_public_url == "http://new:8765"
+
+
+# --- public base URL ---
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("http://192.0.2.15:8765", "http://192.0.2.15:8765"),
+    ("http://192.0.2.15:8765/", "http://192.0.2.15:8765"),
+    ("http://192.0.2.15:8765/admin", "http://192.0.2.15:8765"),
+    ("https://usher.example.com/admin/", "https://usher.example.com"),
+    ("  https://usher.example.com/sub/admin  ", "https://usher.example.com/sub"),
+    ("", ""),
+])
+def test_public_base_url_strips_trailing_admin(raw, expected):
+    from settings import public_base_url
+    assert public_base_url(raw) == expected
+
+
+def test_webhook_url_from_request_strips_trailing_admin():
+    from types import SimpleNamespace
+    from webui import _webhook_url_from_request
+    s = Settings(usher_public_url="https://usher.example.com/admin")
+    req = SimpleNamespace(app={"settings_store": SimpleNamespace(settings=s)})
+    assert _webhook_url_from_request(req) == "https://usher.example.com/webhook/seerr"

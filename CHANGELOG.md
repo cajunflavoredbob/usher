@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A Fix whose file delete timed out after Radarr or Sonarr had already removed
   the file no longer stops with "couldn't delete file". Usher checks the file is
   gone and still triggers the new search.
+- The Webhook tab no longer shows a Seerr URL ending in /admin when the Usher
+  Admin UI URL was saved with /admin on the end. That URL never reached the
+  webhook, so no Seerr event was processed. The same URL cleanup now backs the
+  startup message, and the bad-URL error names the "Usher Admin UI URL" field.
 
 ## [0.18.0] - 2026-11-11
 

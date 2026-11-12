@@ -335,6 +335,17 @@ def verify_password(plaintext: str, stored: str) -> bool:
     return compare_digest(candidate, expected)
 
 
+def public_base_url(url: str) -> str:
+    """The configured Usher URL as a bare base, for building links.
+    Strips whitespace, trailing slashes and one trailing "/admin" (the panel
+    path), so a value pasted from the address bar still yields working
+    /admin and /webhook/seerr links."""
+    base = (url or "").strip().rstrip("/")
+    if base.endswith("/admin"):
+        base = base[: -len("/admin")].rstrip("/")
+    return base
+
+
 def validate_public_url(url: str) -> Optional[str]:
     """Return None if the URL is acceptable, else a user-facing error string.
     Empty is acceptable (means: not configured)."""

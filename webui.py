@@ -67,6 +67,7 @@ from settings import (
     Settings,
     SettingsStore,
     hash_password,
+    public_base_url,
     iterations_of,
     validate_public_url,
     verify_password,
@@ -845,8 +846,9 @@ def _webhook_url_from_request(request: web.Request) -> str:
     URL receives secret-bearing webhooks, so a spoofable header must not
     shape it."""
     s = request.app["settings_store"].settings
-    if s.usher_public_url:
-        return f"{s.usher_public_url.rstrip('/')}/webhook/seerr"
+    base = public_base_url(s.usher_public_url)
+    if base:
+        return f"{base}/webhook/seerr"
     scheme = "https" if request_is_secure(request) else (request.scheme or "http")
     return f"{scheme}://{request.host}/webhook/seerr"
 
@@ -1233,7 +1235,7 @@ async def telegram_post(request: web.Request) -> web.Response:
     url_err = validate_public_url(public_url)
     if url_err:
         return web.Response(
-            text=_settings_page(s, error=f"Usher Public URL: {url_err}",
+            text=_settings_page(s, error=f"Usher Admin UI URL: {url_err}",
                                 active_tab="telegram",
                                 webhook_url=_webhook_url_from_request(request),
                                 csrf_token=csrf_for_request(request)),
