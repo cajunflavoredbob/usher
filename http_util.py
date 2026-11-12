@@ -68,6 +68,18 @@ class PermanentAPIError(APIError):
     """4xx (except retryable). Will not succeed on retry."""
 
 
+class AmbiguousWriteError(PermanentAPIError):
+    """A non-idempotent request (POST/PATCH) failed AFTER it was sent (read or
+    write timeout, read error, total deadline), so the server may have acted on
+    it. Not a TransientAPIError on purpose: "try again" could duplicate a
+    Ticket or comment. Renders through user_friendly_message as "check before
+    trying again"."""
+    def __init__(self, service: str = "service"):
+        super().__init__(
+            "that may have gone through; check before trying again.",
+            status_code=None, service=service)
+
+
 class NotFoundAPIError(PermanentAPIError):
     """404 specifically. Used by the autofix poller to give up cleanly when
     Sonarr/Radarr no longer knows about the media."""
@@ -131,8 +143,9 @@ async def with_retry(
     Always retries: pre-send connect failures (the server never saw the
     request). When `idempotent` (the default): also retries post-send
     transport errors and any TransientAPIError (429/5xx). When NOT idempotent:
-    a post-send transport error or a 5xx/408 raises immediately (the request
-    may already have taken effect, so a retry could duplicate it); only 429
+    a post-send transport error raises AmbiguousWriteError and a 5xx/408
+    raises immediately (the request may already have taken effect, so a retry
+    could duplicate it); only 429
     -- an explicit "rejected, not processed" -- is still retried.
 
     Permanent errors (including NotFoundAPIError) raise immediately. Backoff =
@@ -148,13 +161,13 @@ async def with_retry(
                 service=service,
             )
         except _TRANSPORT_ERRORS as exc:
-            wrapped = TransientAPIError(
+            if not idempotent:
+                # Sent, outcome unknown: the write may have landed.
+                raise AmbiguousWriteError(service) from exc
+            last_exc = TransientAPIError(
                 f"{service} connection error: {type(exc).__name__}",
                 service=service,
             )
-            if not idempotent:
-                raise wrapped from exc
-            last_exc = wrapped
         except TransientAPIError as exc:
             if not idempotent and exc.status_code != 429:
                 raise
@@ -192,12 +205,14 @@ async def execute(
         # Total per-attempt deadline. The client's httpx timeout is
         # per-phase (connect/read/write each), so a server dripping bytes
         # just under the read timeout could stretch one request unboundedly.
-        # with_retry treats the resulting TransientAPIError like any other
-        # post-send transient: retried when idempotent, raised otherwise.
+        # Post-send either way: idempotent calls retry the TransientAPIError,
+        # non-idempotent ones raise AmbiguousWriteError (it may have landed).
         try:
             async with asyncio.timeout(ATTEMPT_DEADLINE_S):
                 r = await client.request(method, url, **kwargs)
         except TimeoutError as exc:
+            if not idempotent:
+                raise AmbiguousWriteError(service) from exc
             raise TransientAPIError(
                 f"{service} request exceeded {ATTEMPT_DEADLINE_S:.0f}s total",
                 service=service,

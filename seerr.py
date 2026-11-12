@@ -360,7 +360,7 @@ class SeerrClient:
         dropped in 0.12.0 -- the cookie-transfer approach was abandoned and
         the only caller discarded them.)"""
         r = await execute(self._client, "POST", "/auth/plex", service=_SERVICE,
-                          json={"authToken": plex_token})
+                          idempotent=True, json={"authToken": plex_token})
         data = _json_or_raise(r, what="sign-in")
         if "id" not in data:
             raise AmbiguousResponseError("Seerr's sign-in response was missing the user id")
@@ -422,7 +422,7 @@ class SeerrClient:
                 )
                 try:
                     await execute(new_client, "POST", "/auth/plex", service=_SERVICE,
-                                  json={"authToken": plex_token})
+                                  idempotent=True, json={"authToken": plex_token})
                 except APIError as exc:
                     await new_client.aclose()
                     # Seerr reports a revoked/expired Plex token as a 500 "Unable to

@@ -2,10 +2,13 @@
 user-friendly message formatting."""
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 import pytest
 
 from http_util import (
+    AmbiguousWriteError,
     NotFoundAPIError,
     PermanentAPIError,
     TransientAPIError,
@@ -254,7 +257,7 @@ async def test_non_idempotent_does_not_retry_post_send_error():
         calls["n"] += 1
         raise httpx.ReadTimeout("slow")
 
-    with pytest.raises(TransientAPIError):
+    with pytest.raises(AmbiguousWriteError):
         await with_retry(fn, retries=5, idempotent=False, **_FAST)
     assert calls["n"] == 1
 
@@ -373,3 +376,60 @@ def test_classify_parses_plex_errors_array():
     with pytest.raises(PermanentAPIError) as ei:
         classify_response(_response(422, body), service="Plex")
     assert "Invalid email address" in ei.value.user_message
+
+
+# --- non-idempotent post-send failures may have landed ---
+
+@pytest.mark.parametrize("exc", [
+    httpx.ReadTimeout("slow"), httpx.WriteTimeout("slow"),
+    httpx.ReadError("reset"), httpx.RemoteProtocolError("cut"),
+])
+async def test_execute_post_post_send_failure_is_ambiguous(exc):
+    client = _FakeClient([exc, _response(200)])
+    with pytest.raises(AmbiguousWriteError) as ei:
+        await execute(client, "POST", "/issue", service="Seerr", **_FAST)
+    assert client.calls == 1
+    assert not isinstance(ei.value, TransientAPIError)
+    msg = user_friendly_message(ei.value)
+    assert "may have gone through" in msg
+    assert "check before trying again" in msg
+    assert "try again in a minute" not in msg
+
+
+async def test_execute_post_connect_error_stays_transient():
+    client = _FakeClient([httpx.ConnectError("dns")])
+    with pytest.raises(TransientAPIError):
+        await execute(client, "POST", "/issue", service="Seerr", retries=1, **_FAST)
+
+
+async def test_execute_post_total_deadline_is_ambiguous(monkeypatch):
+    import http_util
+
+    class _Slow:
+        async def request(self, *a, **k):
+            await asyncio.sleep(1)
+
+    monkeypatch.setattr(http_util, "ATTEMPT_DEADLINE_S", 0.01)
+    with pytest.raises(AmbiguousWriteError):
+        await execute(_Slow(), "POST", "/issue", service="Seerr", **_FAST)
+
+
+async def test_execute_get_deadline_stays_transient(monkeypatch):
+    import http_util
+
+    class _Slow:
+        async def request(self, *a, **k):
+            await asyncio.sleep(1)
+
+    monkeypatch.setattr(http_util, "ATTEMPT_DEADLINE_S", 0.01)
+    with pytest.raises(TransientAPIError):
+        await execute(_Slow(), "GET", "/x", service="Seerr", retries=0, **_FAST)
+
+
+async def test_execute_post_idempotent_override_read_timeout_stays_transient():
+    """Sign-in and PIN creation POSTs are safe to repeat and opt in."""
+    client = _FakeClient([httpx.ReadTimeout("slow"), _response(200)])
+    r = await execute(client, "POST", "/auth/plex", service="Seerr",
+                      idempotent=True, **_FAST)
+    assert r.status_code == 200
+    assert client.calls == 2

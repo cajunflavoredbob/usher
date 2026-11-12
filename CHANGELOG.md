@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- When creating a Ticket, a comment or a Request times out after Usher sent it,
+  the message now says it may have gone through and to check before trying
+  again, instead of "try again in a minute", so you look before filing a
+  duplicate.
 - Container logs no longer print the bot token or the SABnzbd API key in
   request URLs, and finishing first-run setup now restarts Usher into
   full mode instead of hanging.
