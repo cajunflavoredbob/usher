@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-11
+
+Hubs: a short command menu with one button message per area.
+
+### Added
+- **Hubs.** The command menu now lists only /account, /request, /tickets,
+  /help, and /admin for the Admin. Each opens one message of buttons for
+  its area. Flows started from a Hub end with a back button to it, plus
+  Try again when a step fails. Every command that left the menu still
+  works when typed, including ones that take an argument.
+- **Account Hub (/account)** shows the Link state with a Link or Unlink
+  button.
+- **Requests Hub (bare /request)** with New request, My requests, Trending
+  and Subscriptions. `/request <title>` still searches straight away.
+- **Tickets Hub (/tickets)** with Report a problem and the ticket list (My
+  tickets for a User, Open tickets for the Admin).
+- **Admin Hub (/admin, DM only)** with Invite, Shares and Status. The Share
+  list pages with Prev/Next. Anyone else gets "Admin only."; the Admin in a
+  group gets "DM me /admin", and /invite, /uninvite and /status now answer
+  the same way.
+- **Approve, Decline and Retry on Admin Request DMs.** A pending Request DM
+  gets Approve and Decline, a failed one gets Retry, and both get an Open in
+  Seerr link when a Seerr public URL is set. A tap checks the Request's
+  status in Seerr first, so a Request handled elsewhere is left alone. When
+  the Admin is the requester, their own failed-Request DM carries Retry and
+  Open in Seerr too.
+- **/invite explains Plex "already sharing".** The reply names /uninvite and
+  the Plex web app instead of a generic failure.
+
+### Changed
+- **A submitted Request keeps its result on the flow message**, and the
+  Progress card arrives as a new message.
+- **Admin Fix progress goes on a new Progress card.** The Ticket card shows
+  the Ticket again with its buttons, and the card header names the Fix
+  (Redownload or Mark Failed) instead of always saying Auto-fix.
+- **Typed /uninvite matches page 8 at a time** with Prev/Next, like the
+  Share list, instead of asking for a longer name.
+- **Copy says Ticket and Subscription.** The panel toggles read "Ticket
+  DMs" and "Subscription DMs" (settings keys unchanged), the bot's
+  Subscription list and empty state say Subscriptions, and backup notes
+  say "the database" instead of "mappings". User-facing em dashes are gone.
+- **Log lines and job names say "Progress card"** where they used to say
+  request watch. Best-effort Telegram and file calls that fail now log the
+  error at debug level instead of passing silently.
+- **Web UI address placeholders** use documentation-range addresses.
+- **aiohttp 3.14.4.**
+- The database gains two add-only columns on `pending_autofixes`
+  (`reply_markup`, `action_name`), created on first start. No data changes.
+
+### Fixed
+- **The Progress card keeps its keyboard** on auto-fix progress edits, so
+  "⬅️ Tickets" no longer disappears on the first update.
+- **A new-Ticket DM keeps its History button** after a Fix starts and you
+  go Back.
+- **Double taps on Reply or Close with comment** no longer start the flow
+  twice.
+
 ## [0.17.3] - 2026-10-02
 
 Dependency refresh.
