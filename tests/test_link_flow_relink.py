@@ -109,3 +109,37 @@ async def test_strong_pin_success_clears_link_active_loop(monkeypatch):
 async def test_strong_pin_timeout_clears_link_active_loop(monkeypatch):
     ctx = await _run_strong_pin(monkeypatch, None)
     assert "link_active_loop" not in ctx.user_data
+
+
+async def _weak_timeout(monkeypatch, ctx):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from bot import link_flow
+    ctx.bot_data["plex"].request_pin.return_value = SimpleNamespace(
+        id=2, auth_url="https://plex.example.com/auth", code="wxyz")
+    monkeypatch.setattr(link_flow, "_poll_with_cancel",
+                        AsyncMock(return_value=None))
+    monkeypatch.setattr(link_flow, "_finalize_link", AsyncMock())
+    ctx.user_data["link_active_loop"] = "old"
+    await cmd_link_didnt_work(make_update(callback_data=LINK_HELP, user_id=42), ctx)
+
+
+async def test_try_again_after_weak_pin_timeout_issues_new_code(monkeypatch):
+    ctx = make_ctx(admin_id=999)
+    await _weak_timeout(monkeypatch, ctx)
+    assert "link_active_loop" not in ctx.user_data
+    ctx.bot_data["plex"].request_pin.reset_mock()
+    upd = make_update(callback_data=LINK_HELP, user_id=42)
+    await cmd_link_didnt_work(upd, ctx)
+    ctx.bot_data["plex"].request_pin.assert_awaited_once()
+    assert "WXYZ" in upd.callback_query.edits[0]["text"]
+
+
+async def test_stray_tap_without_any_marker_is_refused(monkeypatch):
+    ctx = make_ctx(admin_id=999)
+    await _weak_timeout(monkeypatch, ctx)
+    ctx.user_data.clear()
+    ctx.bot_data["plex"].request_pin.reset_mock()
+    await cmd_link_didnt_work(make_update(callback_data=LINK_HELP, user_id=42), ctx)
+    ctx.bot_data["plex"].request_pin.assert_not_called()
+

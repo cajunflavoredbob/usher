@@ -71,6 +71,7 @@ async def _link_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Conversation_timeout handler. Clears link_active_loop so an abandoned
     link flow doesn't keep an orphaned poll alive in user_data."""
     ctx.user_data.pop("link_active_loop", None)
+    ctx.user_data.pop(LINK_RETRY_KEY, None)
     set_hub_origin(ctx, None)
     return ConversationHandler.END
 
@@ -208,6 +209,9 @@ async def cmd_link_consent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
     )
     record_btn(ctx.application, update.effective_user.id, sent)
     return AWAIT_PLATFORM_CHOICE
+
+
+LINK_RETRY_KEY = "link_retry_ok"
 
 
 async def _poll_with_cancel(plex: PlexClient, pin_id: int, max_iters: int,
@@ -369,6 +373,7 @@ async def _start_plex_auth(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
 
     loop_id = secrets.token_hex(8)
     ctx.user_data["link_active_loop"] = loop_id
+    ctx.user_data.pop(LINK_RETRY_KEY, None)
 
     if platform == "desktop":
         kb = InlineKeyboardMarkup([
@@ -423,7 +428,10 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     if await _refuse_non_private(update):
         await q.answer()
         return
-    if not ctx.user_data.get("link_active_loop"):
+    # Live flow, or the Try again offered by this user's own weak-PIN timeout
+    # (single use; a stray tap with neither marker is refused).
+    retry_ok = ctx.user_data.pop(LINK_RETRY_KEY, None)
+    if not ctx.user_data.get("link_active_loop") and not retry_ok:
         await q.answer("That sign-in has ended. Use /link to start again.")
         return
     await q.answer()
@@ -471,6 +479,8 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         # Clear the loop key explicitly so the parent /link conversation
         # doesn't think it's still polling.
         ctx.user_data.pop("link_active_loop", None)
+        # The Try again below is this user's own: let it past the live-flow check.
+        ctx.user_data[LINK_RETRY_KEY] = True
         await end_flow(update, ctx, "⏱️ Plex auth timed out.", hub, LINK_HELP,
                        typed_text="⏱️ Plex auth timed out. /link to try again.")
         return
@@ -478,6 +488,7 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     await _finalize_link(update, ctx, auth_token, hub=hub)
     # Successful link -- clear the loop key so a later /link is a fresh start.
     ctx.user_data.pop("link_active_loop", None)
+    ctx.user_data.pop(LINK_RETRY_KEY, None)
     try:
         await q.edit_message_reply_markup(reply_markup=None)
     except TelegramError as exc:
@@ -489,6 +500,7 @@ async def link_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     # otherwise it kept polling for up to 28 minutes and a late success or
     # timeout DM landed after "Cancelled".
     ctx.user_data.pop("link_active_loop", None)
+    ctx.user_data.pop(LINK_RETRY_KEY, None)
     hub = hub_origin(ctx)
     if hub is None:
         await update.effective_message.reply_text("Cancelled. /link to try again later.")
