@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- A command sent while a slow step of a flow is still running no longer lets that
+  step bring the flow back to life afterwards, so your next message is no longer
+  swallowed by the flow you left. A Ticket Reply started in that window no longer
+  leaves a stale reply target behind.
+
 ## [0.19.0] - 2026-11-12
 
 ### Added

@@ -72,6 +72,7 @@ from bot.shared import (
     ticket_detail_kb,
     token_for,
     end_action,
+    flow_step_is_stale,
     force_end_flow_conversations,
     media_action_key,
     new_ticket_dm_kb,
@@ -896,6 +897,8 @@ async def tk_reply_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
                 "/cancel it first, then tap Reply again."
             )
             return ConversationHandler.END
+        if flow_step_is_stale(ctx):
+            return ConversationHandler.END  # a newer command ended this flow
         ctx.user_data["tk_reply_id"] = ticket_id
         ctx.user_data["tk_close_after"] = False
         ctx.user_data["tk_reply_from_list"] = _opened_from_list(q.message)
@@ -940,6 +943,8 @@ async def tk_close_with_comment_start(update: Update, ctx: ContextTypes.DEFAULT_
                 "/cancel it first, then tap the button again."
             )
             return ConversationHandler.END
+        if flow_step_is_stale(ctx):
+            return ConversationHandler.END  # a newer command ended this flow
         ctx.user_data["tk_reply_id"] = ticket_id
         ctx.user_data["tk_close_after"] = True
         ctx.user_data["tk_reply_from_list"] = _opened_from_list(q.message)

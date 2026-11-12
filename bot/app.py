@@ -92,6 +92,7 @@ from bot.resolve_flow import _resolve_conversation
 from bot.shared import (
     edit_or_send,
     force_end_flow_conversations,
+    guard_flow_steps,
     format_status,
     global_btn_gate,
     record_btn,
@@ -443,6 +444,8 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     }
     app.bot_data["flow_convs"] = [link_conv, new_ticket_conv, request_conv,
                                   invite_conv, resolve_conv, ticket_conv]
+    for conv in app.bot_data["flow_convs"]:
+        guard_flow_steps(conv)
     app.add_handler(TypeHandler(Update, reset_stale_flows), group=-2)
 
     # Global gate: drop callbacks from stale button-bearing messages. Group -1

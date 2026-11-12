@@ -5,10 +5,12 @@ module can pull from it without circular imports.
 """
 from __future__ import annotations
 
+import functools
 import html
 import logging
 import re
 import time
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Callable, Final, Optional
 
@@ -780,6 +782,13 @@ def force_end_flow_conversations(ctx: ContextTypes.DEFAULT_TYPE,
     PIN poll outlive its conversation and fire _finalize_link mid-flow.
 
     Returns the conversations that were actually live and got ended."""
+    before = _flow_gen(ctx)
+    ctx.user_data[_FLOW_GEN_KEY] = before + 1
+    cell = _STEP_GEN.get()
+    if cell is not None and cell[0] == before:
+        # The calling step ends flows on purpose, so its own bump is not an
+        # overtake. A step already overtaken earlier stays overtaken.
+        cell[0] = before + 1
     ended = []
     for conv in ctx.application.bot_data.get("flow_convs", ()):
         try:
@@ -796,6 +805,67 @@ def force_end_flow_conversations(ctx: ContextTypes.DEFAULT_TYPE,
                    "link_retry_ok"):
         ctx.user_data.pop(marker, None)
     return ended
+
+
+# Per-user flow generation. Force-ending a user's flows bumps it; a flow step
+# remembers the value it started under (in _STEP_GEN) and, if the value moved
+# while it ran, the step's returned state is dropped (guard_flow_steps) and its
+# own writes can be skipped (flow_step_is_stale). Lives in user_data under a key
+# no flow reset clears, like rq_search_version and inv_version, but is separate
+# from them: those answer "is this button from the latest menu".
+_FLOW_GEN_KEY: Final = "flow_gen"
+_STEP_GEN: ContextVar[Optional[list]] = ContextVar("flow_step_gen", default=None)
+
+
+def _flow_gen(ctx) -> int:
+    return ctx.user_data.get(_FLOW_GEN_KEY) or 0
+
+
+def flow_step_is_stale(ctx) -> bool:
+    """True when the flow step running in this task started before the user's
+    flows were last force-ended. Always False outside a guarded step."""
+    cell = _STEP_GEN.get()
+    return cell is not None and cell[0] != _flow_gen(ctx)
+
+
+def guard_flow_steps(conv: ConversationHandler) -> None:
+    """Wrap every step callback of `conv` so a step that was overtaken by a
+    force-end returns END instead of the state it computed (PTB would store
+    that state and revive the ended conversation). When the conversation
+    already holds a live state again (the user restarted the flow), the
+    overtaken step returns None and leaves that newer state alone. A step that itself calls
+    force_end_flow_conversations (cross-flow jump entry points) is not
+    overtaken by its own call. Idempotent."""
+    handlers = (list(conv.entry_points) + list(conv.fallbacks)
+                + [h for hs in conv.states.values() for h in hs])
+    for handler in handlers:
+        cb = handler.callback
+        if getattr(cb, "_flow_guarded", False):
+            continue
+        handler.callback = _guarded_step(conv, cb)
+
+
+def _guarded_step(conv: ConversationHandler, cb):
+    @functools.wraps(cb)
+    async def step(update, ctx):
+        cell = [_flow_gen(ctx)]
+        token = _STEP_GEN.set(cell)
+        try:
+            result = await cb(update, ctx)
+        finally:
+            _STEP_GEN.reset(token)
+        if cell[0] == _flow_gen(ctx):
+            return result
+        # Overtaken. If the conversation has a live state again, a newer step
+        # (the user restarted the flow) owns it: leave it alone.
+        try:
+            if conv._get_key(update) in conv._conversations:
+                return None
+        except Exception:
+            pass
+        return ConversationHandler.END
+    step._flow_guarded = True
+    return step
 
 
 # Keycap-emoji labels for numbered pick lists (/issue and /request share the
