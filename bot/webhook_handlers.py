@@ -301,7 +301,7 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
         logger.exception("Failed to DM admin about new ticket #%d", ticket_id)
 
 
-# --- Request lifecycle (MEDIA_*) --------------------------------------------
+# Request lifecycle (MEDIA_*)
 
 # Who hears about each request event. The requester is DMed only for state
 # changes they didn't witness in the /request flow itself: an auto-approval

@@ -113,7 +113,7 @@ def _csrf_input(token: str) -> str:
     return f'<input type="hidden" name="{CSRF_FORM_FIELD}" value="{_esc(token)}">'
 
 
-# --- Session helpers --------------------------------------------------------
+# Session helpers
 
 def _sign(secret: bytes, data: bytes) -> bytes:
     return hmac.new(secret, data, sha256).digest()
@@ -201,7 +201,7 @@ def _current_user(request: web.Request) -> Optional[str]:
                                   store.settings.admin.password_version)
 
 
-# --- HTML rendering ---------------------------------------------------------
+# HTML rendering
 
 def _esc(s) -> str:
     if not s:
@@ -851,7 +851,7 @@ def _webhook_url_from_request(request: web.Request) -> str:
     return f"{scheme}://{request.host}/webhook/seerr"
 
 
-# --- Route handlers ---------------------------------------------------------
+# Route handlers
 
 async def setup_get(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
@@ -1703,7 +1703,7 @@ async def restore_upload(request: web.Request) -> web.Response:
     return web.Response(text=body, content_type="text/html")
 
 
-# --- Connection tests -------------------------------------------------------
+# Connection tests
 
 def _test_json(ok: bool, detail: str, status: int = 200) -> web.Response:
     return web.json_response({"ok": ok, "detail": detail}, status=status)
@@ -1848,7 +1848,7 @@ async def test_webhook(request: web.Request) -> web.Response:
         return _test_json(False, user_friendly_message(exc))
 
 
-# --- Seerr New-Plex-Sign-In warning ------------------------------------------
+# Seerr New-Plex-Sign-In warning
 
 async def newplex_warning_check(request: web.Request) -> web.Response:
     """Report whether the dismissible New-Plex-Sign-In banner should show.
@@ -1896,7 +1896,7 @@ async def newplex_warning_dismiss(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
-# --- Auth middleware --------------------------------------------------------
+# Auth middleware
 
 PUBLIC_ADMIN_PATHS = {"/admin/setup", "/admin/login"}
 
@@ -1929,7 +1929,7 @@ async def auth_middleware(request: web.Request, handler) -> web.Response:
         raise
 
 
-# --- Attach -----------------------------------------------------------------
+# Attach
 
 def attach_webui(
     app: web.Application,
@@ -1953,10 +1953,9 @@ def attach_webui(
     # the DB-file swap against in-flight store writes.
     app["user_store"] = user_store
     app["on_settings_changed"] = on_settings_changed
-    # Used by the webhook self-test to build its loopback URL.
+    # Port for the webhook self-test's loopback URL.
     app["http_port"] = http_port
-    # Trusted-proxy CIDRs (TRUSTED_PROXIES env): gates X-Forwarded-For /
-    # X-Forwarded-Proto trust in auth_util.client_ip / request_is_secure.
+    # Only requests from these CIDRs (TRUSTED_PROXIES) may set X-Forwarded-*.
     app["trusted_proxies"] = trusted_proxies
     app.middlewares.append(auth_middleware)
     app.router.add_get("/admin/setup", setup_get)

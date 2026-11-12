@@ -25,7 +25,7 @@ from const import RELINK_RESUME_TTL_S
 
 logger = logging.getLogger("usher")
 
-# --- Conversation states ----------------------------------------------------
+# Conversation states
 
 # Ticket creation
 TITLE, PICK_MEDIA, PICK_SEASON, PICK_EPISODE, PICK_TYPE, DESCRIPTION, OFFER_AUTOFIX, CONFIRM_AUTOFIX = range(8)
@@ -46,7 +46,7 @@ INV_EMAIL = 500
 INV_LIBS = 501
 INV_CONFIRM = 502
 
-# --- Issue type maps --------------------------------------------------------
+# Issue type maps
 
 ISSUE_TYPES: Final = {
     1: ("🎥", "Video"),
@@ -67,7 +67,7 @@ ISSUE_TYPE_LABELS: Final = {
     "OTHER": ("❓", "Other"),
 }
 
-# --- Button-staleness gate -------------------------------------------------
+# Button-staleness gate
 
 BTN_TTL_SECONDS = 6 * 3600  # 6h before a button-bearing message's buttons expire
 
@@ -76,7 +76,7 @@ BTN_TTL_SECONDS = 6 * 3600  # 6h before a button-bearing message's buttons expir
 # a verbatim copy between here and webui.py). Re-exported for bot.* callers.
 
 
-# --- Formatting -------------------------------------------------------------
+# Formatting
 
 # Module-level set of timestamps that have already produced a parse-fail
 # warning. Prevents log spam if Seerr starts emitting a non-ISO format
@@ -306,7 +306,7 @@ async def format_media_title_line(
     return line
 
 
-# --- Seerr-required gate ----------------------------------------------------
+# Seerr-required gate
 
 async def require_seerr(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                         *, reply_markup=None) -> Optional[SeerrClient]:
@@ -332,7 +332,7 @@ async def require_seerr(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     return seerr
 
 
-# --- Telegram edit/send helper ---------------------------------------------
+# Telegram edit/send helper
 
 async def edit_or_send(q, text: str, **kwargs):
     """Edit the callback's message; if Telegram rejects (e.g., the user edited
@@ -353,7 +353,7 @@ async def edit_or_send(q, text: str, **kwargs):
         return None
 
 
-# --- Per-user identity / Plex token resolution -----------------------------
+# Per-user identity / Plex token resolution
 
 async def token_for(
     ctx: ContextTypes.DEFAULT_TYPE, tg_id: int
@@ -380,7 +380,7 @@ async def token_for(
     return False, link.plex_token, False
 
 
-# --- Button bookkeeping -----------------------------------------------------
+# Button bookkeeping
 # How many recent button-bearing messages per user the gate will admit. Three
 # is enough to cover a rapid-fire webhook burst (new-ticket + comment + resolve)
 # without letting truly-old messages stay live.
@@ -471,7 +471,7 @@ async def send_typing(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         logger.debug("send_chat_action failed", exc_info=True)
 
 
-# --- Per-media action serialization -----------------------------------------
+# Per-media action serialization
 
 def media_action_key(media: dict) -> str:
     """Serialization key for destructive arr workflows on one title."""
@@ -492,7 +492,7 @@ def end_action(ctx: ContextTypes.DEFAULT_TYPE, key: str) -> None:
     ctx.bot_data.get("inflight_actions", set()).discard(key)
 
 
-# --- Cross-conversation text-capture guard ------------------------
+# Cross-conversation text-capture guard
 
 def user_in_conversation(ctx: ContextTypes.DEFAULT_TYPE, update: Update,
                          *names: str) -> bool:
@@ -512,7 +512,7 @@ def user_in_conversation(ctx: ContextTypes.DEFAULT_TYPE, update: Update,
     return False
 
 
-# --- Expired-keyboard catch-all -----------------------------------
+# Expired-keyboard catch-all
 
 async def unmatched_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Terminal catch-all for callback taps nothing else claimed: a keyboard
@@ -653,7 +653,7 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     raise ApplicationHandlerStop
 
 
-# --- "Most recent command wins" flow reset ---------------------------------
+# "Most recent command wins" flow reset
 
 # Commands that must NOT abandon an in-progress flow. /cancel is handled by each
 # conversation's own fallback (which sends a "Cancelled." reply), so the gate
@@ -738,7 +738,7 @@ def truncate_message(text: str, limit: int = 4000) -> str:
     return text[:cut] + "\n…(truncated)"
 
 
-# --- Ticket detail keyboard ------------------------------------------------
+# Ticket detail keyboard
 
 def ticket_detail_kb(ticket_id: int, is_admin: bool) -> InlineKeyboardMarkup:
     """Top-level row for a ticket's detail view. Reply goes straight to the

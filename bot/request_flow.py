@@ -353,7 +353,7 @@ async def request_title(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     )
 
 
-# --- Search + result screens --------------------------------------------------
+# Search + result screens
 
 async def _run_search(
     update: Update,
@@ -605,7 +605,7 @@ async def request_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     return await _show_confirm(update, ctx)
 
 
-# --- Season multi-select ------------------------------------------------------
+# Season multi-select
 
 def _season_keyboard(seasons: list, selected: set,
                      version: int) -> InlineKeyboardMarkup:
@@ -805,7 +805,7 @@ async def request_seasons_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
     return await _show_confirm(update, ctx)
 
 
-# --- Confirm + submit ---------------------------------------------------------
+# Confirm + submit
 
 def _summarize_seasons(numbers: list[int]) -> str:
     """Compact season summary: [1,2,3,5] -> "S1-S3, S5"."""

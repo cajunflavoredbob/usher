@@ -845,7 +845,7 @@ async def tk_close_direct(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         end_action(ctx, close_key)
 
 
-# --- Ticket reply conversation ----------------------------------------------
+# Ticket reply conversation
 
 async def tk_reply_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Entry point for `tkr:<id>` -- reply only (no close)."""

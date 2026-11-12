@@ -128,7 +128,7 @@ logging.basicConfig(
 logger = logging.getLogger("usher")
 
 
-# --- App setup ---------------------------------------------------------------
+# App setup
 
 def _build_clients_from_settings(app: Application) -> None:
     """(Re)build Seerr/Radarr/Sonarr clients and update the allowlist + webhook

@@ -491,7 +491,7 @@ async def invite_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-# --- Shares: the Admin Hub's list, one Share's view, and its removal ---------
+# Shares: the Admin Hub's list, one Share's view, and its removal
 #
 # Not a conversation: every step fetches the listing live from plex.tv and
 # carries what it needs in its callback. The one exception is the search text

@@ -146,7 +146,7 @@ class UserStore:
         self._init_schema()
         self._migrate_schema()
 
-    # --- Connection helpers ---------------------------------------------
+    # Connection helpers
 
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
@@ -190,7 +190,7 @@ class UserStore:
         async with self.maintenance_lock:
             return await asyncio.to_thread(self._run_sync_with_retry, fn)
 
-    # --- Schema ----------------------------------------------------------
+    # Schema
 
     def _init_schema(self) -> None:
         with self._conn() as c:
@@ -357,7 +357,7 @@ class UserStore:
             if version < self.SCHEMA_VERSION:
                 c.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
 
-    # --- Token decryption helper ----------------------------------------
+    # Token decryption helper
 
     def _decrypt_field(self, raw: Optional[str]) -> tuple[Optional[str], bool]:
         """Return (decrypted_or_None, decrypt_failed)."""
@@ -369,7 +369,7 @@ class UserStore:
             logger.warning("Couldn't decrypt Plex token (key rotated or row corrupted)")
             return None, True
 
-    # --- Link CRUD -------------------------------------------------------
+    # Link CRUD
 
     async def link_with_plex(
         self,
@@ -477,7 +477,7 @@ class UserStore:
             plex_token_decrypt_failed=failed,
         )
 
-    # --- Request Progress cards ----------------------------------------------
+    # Request Progress cards
     # One row per /request Progress card (the message sent after the
     # confirmation) that edits itself through the download.
     # status: waiting (pending approval) -> grabbing -> gone
@@ -570,7 +570,7 @@ class UserStore:
 
         await self._run(_do)
 
-    # --- Availability subscriptions ------------------------------------------
+    # Availability subscriptions
     # Strictly per-user: a user only ever sees and manages their own rows,
     # and nothing renders who else (or how many others) subscribed to a title.
 
@@ -704,7 +704,7 @@ class UserStore:
                 count += 1
         return count
 
-    # --- Auto-fix rate limiting -----------------------------------------
+    # Auto-fix rate limiting
 
     async def count_autofix_24h(self, telegram_id: int) -> int:
         def _do() -> int:
@@ -741,7 +741,7 @@ class UserStore:
 
         await self._run(_do)
 
-    # --- Pending autofix tracking ---------------------------------------
+    # Pending autofix tracking
 
     async def add_pending_autofix(
         self,

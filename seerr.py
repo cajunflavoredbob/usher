@@ -104,12 +104,10 @@ MEDIA_STATUS_AVAILABLE = 5
 MEDIA_STATUS_BLOCKLISTED = 6
 MEDIA_STATUS_DELETED = 7
 
-# Webhook notification-type bits the bot depends on (Seerr's Notification
-# enum), with the labels Seerr's UI shows for each checkbox. Everything the
-# dispatcher handles except ISSUE_REOPENED (deliberately unhandled) and
-# MEDIA_AUTO_REQUESTED (deliberately silent). Used by the /status webhook
-# check so a misconfigured agent is diagnosed instead of silently dropping
-# DMs.
+# Webhook notification-type bits the bot handles, with the label Seerr's UI
+# shows for each checkbox. Excludes ISSUE_REOPENED (unhandled) and
+# MEDIA_AUTO_REQUESTED (silent). The /status webhook check uses it to flag
+# a misconfigured agent instead of silently dropping DMs.
 REQUIRED_WEBHOOK_TYPES: dict = {
     2: "Request Pending Approval",
     4: "Request Approved",
@@ -723,7 +721,7 @@ class SeerrClient:
         url = f"{self.public_url}/issues/{issue_id}"
         return CreatedIssue(id=issue_id, url=url)
 
-    # --- Requests ------------------------------------------------------------
+    # Requests
 
     async def get_my_permissions(
         self, *, as_plex_token: Optional[str] = None

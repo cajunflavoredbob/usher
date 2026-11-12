@@ -8,15 +8,14 @@ from __future__ import annotations
 
 from typing import Final
 
-# --- Ticket management (/tickets, webhook DMs) -----------------------------
+# Ticket management (/tickets, webhook DMs)
 TK_OPEN: Final = "tkopen"             # [#N] from the ticket list, or [📜 History]
                                       # in a ticket DM -> detail view
 TK_REPLY: Final = "tkr"               # [💬 Reply] (top-level + comment-DM)
 TK_FIX: Final = "tkf"                 # [🔧 Fix] sub-menu opener (admin)
 TK_CLOSE: Final = "tkc"               # [✅ Close] sub-menu opener (admin)
 TK_BACK: Final = "tkback"             # [⬅️ Back] in sub-menus
-TK_BACK_LIST: Final = "tkbl"          # [⬅️ Back] in sub-menus of a detail card
-                                      # opened from the ticket list
+TK_BACK_LIST: Final = "tkbl"          # [⬅️ Back] in sub-menus of a list-opened detail card
 TK_BACK_DM: Final = "tkbd"            # [⬅️ Back] in sub-menus of a new-Ticket DM
 
 # Sub-menu actions
@@ -25,14 +24,14 @@ TK_FIX_MARK_FAILED: Final = "tkfm"    # blocklist + delete + search
 TK_CLOSE_WITH_COMMENT: Final = "tkcc"
 TK_CLOSE_DIRECT: Final = "tkcd"
 
-# --- /link flow ------------------------------------------------------------
+# /link flow
 LINK_CONSENT: Final = "link_consent"  # link_consent:yes / link_consent:no
 LINK_PLATFORM: Final = "tklplat"      # tklplat:desktop / tklplat:mobile
 LINK_HELP: Final = "tklhelp"          # fixed-shape "Didn't work?" callback
 RELINK: Final = "relink"              # fixed-shape "Unlink & sign in again"
                                       # (revoked-Plex-token recovery)
 
-# --- /issue flow -----------------------------------------------------------
+# /issue flow
 TICKET_MEDIA: Final = "media"
 TICKET_SEASON: Final = "season"
 TICKET_EPISODE: Final = "ep"
@@ -43,7 +42,7 @@ TICKET_AUTOFIX_CONFIRM: Final = "confirm"
 TICKET_CANCEL: Final = "cancel"
 TICKET_RESEARCH_PARENT: Final = "research_parent"
 
-# --- /request flow ----------------------------------------------------------
+# /request flow
 RQ_MEDIA: Final = "rqm"               # rqm:<version>:<media_type>:<tmdb_id>
 RQ_SEASON: Final = "rqs"              # rqs:<version>:<n> toggle a season
 RQ_SEASON_NA: Final = "rqna"          # rqna:<version>:<n> unrequestable season
@@ -60,21 +59,21 @@ RQ_FROM_TICKET: Final = "rqfi"        # rqfi:<media_type>:<tmdb_id> jump from
                                       # the /issue not-in-library dead-end
 RQ_LIST_CANCEL: Final = "rqlc"        # rqlc:<request_id> cancel from /requests
 
-# --- Admin Request DM buttons (webhook DMs; see bot.request_admin) ----------
+# Admin Request DM buttons (webhook DMs; see bot.request_admin)
 RQ_ADMIN_APPROVE: Final = "rqap"      # rqap:<request_id> Approve (pending DM)
 RQ_ADMIN_DECLINE: Final = "rqdc"      # rqdc:<request_id> Decline (pending DM)
 RQ_ADMIN_RETRY: Final = "rqrt"        # rqrt:<request_id> Retry (failed DM)
 
-# --- /trending browse --------------------------------------------------------
+# /trending browse
 DV_CATEGORY: Final = "dvc"            # dvc:<category> switch browse list
 DV_PAGE: Final = "dvp"                # dvp:<version>:<screen> browse paging
 DV_INFO: Final = "dvi"                # dvi:<version>:<media_type>:<tmdb_id>
 
-# --- Availability subscriptions ----------------------------------------------
+# Availability subscriptions
 SUBSCRIPTION_ADD: Final = "subadd"    # subadd:<media_type>:<tmdb_id>
 SUBSCRIPTION_DEL: Final = "subdel"    # subdel:<id> from /subscriptions
 
-# --- Admin provisioning (/invite, /uninvite, the Admin Hub's Shares) ---------
+# Admin provisioning (/invite, /uninvite, the Admin Hub's Shares)
 INV_LIB: Final = "invl"               # invl:<version>:<section_id> toggle
 INV_ALL: Final = "inva"               # inva:<version> select all libraries
 INV_DONE: Final = "invd"              # invd:<version> proceed to confirm
@@ -87,10 +86,10 @@ SHARE_REMOVE: Final = "shrm"          # shrm:<share_id> Remove -> confirm card
 SHARE_MATCHES: Final = "shq"          # shq:<page> Prev/Next of typed /uninvite
                                       # matches (search text in user_data)
 
-# --- Post-autofix resolve follow-up ----------------------------------------
+# Post-autofix resolve follow-up
 RESOLVE: Final = "resolve"            # resolve:<ticket_id>:yes|no|skip
 
-# --- Hubs (shared by every Hub; see bot.hub) --------------------------------
+# Hubs (shared by every Hub; see bot.hub)
 HUB_OPEN: Final = "hubo"              # hubo:<hub> "⬅️ <Hub>" back button:
                                       # re-render that Hub in place
 HUB_RETRY: Final = "hubry"            # hubry:<step>[:<arg>] Try again for steps

@@ -491,7 +491,7 @@ async def cmd_unlink(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(await _do_unlink(update, ctx))
 
 
-# --- Account Hub (/account) ---------------------------------------------------
+# Account Hub (/account)
 
 async def render_account(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> HubView:
     store: UserStore = ctx.bot_data["store"]

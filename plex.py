@@ -125,7 +125,7 @@ class PlexClient:
                           service=_SERVICE)
         return json_or_raise(r, service=_SERVICE, what="PIN poll").get("authToken")
 
-    # --- Server sharing (admin /invite, /uninvite) -------------------------
+    # Server sharing (admin /invite, /uninvite)
 
     async def get_owned_server(self, token: str) -> tuple[str, str]:
         """(machine_identifier, name) of the account's owned server. Raises

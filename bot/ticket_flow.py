@@ -87,7 +87,7 @@ from const import (
 
 logger = logging.getLogger("usher")
 
-# --- New Ticket conversation ---------------------------------------------------
+# New Ticket conversation
 
 
 def _tickets_origin(ctx) -> Optional[str]:
