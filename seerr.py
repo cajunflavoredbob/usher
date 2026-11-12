@@ -570,15 +570,22 @@ class SeerrClient:
         filter: str = "open",
         take: int = 25,
         as_plex_token: Optional[str] = None,
+        created_by: Optional[int] = None,
     ) -> tuple[list[IssueListItem], int]:
-        """List issues. If as_plex_token is provided, authenticates as that
-        user (gets their visible issues only). Else returns all (admin view).
+        """List issues. Without as_plex_token returns all (admin view). With
+        it, Seerr narrows to that user's issues only when the user lacks
+        MANAGE_ISSUES and VIEW_ISSUES; a user holding either still gets
+        everyone's, so pass created_by (a Seerr user id) to pin the list to
+        one user.
         Returns (items, total): total is Seerr's full matching count, which
         can exceed len(items) when the list is truncated at `take` (the cap
         was previously silent and issues past it were invisible)."""
         client = await self._client_for(as_plex_token)
+        params: dict = {"filter": filter, "take": take}
+        if created_by is not None:
+            params["createdBy"] = created_by
         r = await execute(client, "GET", "/issue", service=_SERVICE,
-                          params={"filter": filter, "take": take})
+                          params=params)
         data = _json_or_raise(r, what="issue list")
         out: list[IssueListItem] = []
         for item in data.get("results", []):

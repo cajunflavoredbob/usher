@@ -161,6 +161,7 @@ async def tickets_hub_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
         tickets, total = await seerr.list_issues(
             filter="open",
             as_plex_token=None if is_admin else link.plex_token,
+            created_by=None if is_admin else link.seerr_id,
         )
     except PlexTokenInvalidError:
         await prompt_plex_relink(update, ctx, back=back_button(TICKETS_HUB))

@@ -75,6 +75,21 @@ async def test_list_issues_returns_total_from_page_info(monkeypatch):
     await client.close()
 
 
+async def test_list_issues_sends_created_by_only_when_given(monkeypatch):
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.url.params))
+        return httpx.Response(200, json={"results": []})
+
+    client = _client(monkeypatch, handler)
+    await client.list_issues(created_by=7)
+    await client.list_issues()
+    assert seen[0]["createdBy"] == "7"
+    assert "createdBy" not in seen[1]
+    await client.close()
+
+
 async def test_list_issues_total_falls_back_to_len(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={

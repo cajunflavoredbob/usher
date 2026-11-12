@@ -43,6 +43,7 @@ async def test_admin_lists_all_tickets():
     # Admin call sets as_plex_token=None.
     args, kwargs = ctx.bot_data["seerr"].list_issues.call_args
     assert kwargs["as_plex_token"] is None
+    assert kwargs["created_by"] is None
 
 
 async def test_user_lists_only_their_tickets():
@@ -57,6 +58,17 @@ async def test_user_lists_only_their_tickets():
     # User call passes their token so Seerr scopes the list.
     args, kwargs = ctx.bot_data["seerr"].list_issues.call_args
     assert kwargs["as_plex_token"] == "user-token"
+
+
+async def test_user_list_asks_seerr_for_only_tickets_they_created():
+    """A user with MANAGE_ISSUES or VIEW_ISSUES gets everyone's Issues from
+    Seerr unless the query names them, so the fetch passes the Link's Seerr
+    id."""
+    upd = make_update(callback_data="tkhl", user_id=42)
+    ctx = make_ctx(admin_id=999, link=make_link(telegram_id=42))
+    await tickets_hub_list(upd, ctx)
+    kwargs = ctx.bot_data["seerr"].list_issues.call_args.kwargs
+    assert kwargs["created_by"] == 7
 
 
 # --- empty + auth + error paths ---

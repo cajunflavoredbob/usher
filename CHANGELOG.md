@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- "Your open tickets" no longer lists other people's Tickets for a user whose Seerr
+  account can manage or view all Issues; the list is now limited to the user's
+  own.
 - "Your requests" no longer lists other people's Requests (with Cancel buttons
   on their pending ones) for a user whose Seerr account can manage or view all
   Requests; the list is now limited to the user's own.
