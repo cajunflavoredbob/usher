@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-11-12
+
 ### Fixed
 - A command sent while a slow step of a flow is still running no longer lets that
   step bring the flow back to life afterwards, so your next message is no longer

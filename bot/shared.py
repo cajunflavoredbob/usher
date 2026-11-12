@@ -881,7 +881,8 @@ def _guarded_step(conv: ConversationHandler, cb):
             if conv._get_key(update) in conv._conversations:
                 return None
         except Exception:
-            pass
+            logger.debug("Overtaken step could not read its conversation state",
+                         exc_info=True)
         return ConversationHandler.END
     step._flow_guarded = True
     return step
