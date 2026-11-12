@@ -25,7 +25,7 @@ from tests._handler_harness import make_ctx, make_message
 
 def _make_fix(*, fix_id: int = 1, label: str = "Test Movie",
               ticket_url: str = "http://seerr.example/issues/1",
-              timed_out: bool = False) -> PendingAutofix:
+              timed_out: bool = False, action_name: str = "") -> PendingAutofix:
     now = datetime.now(timezone.utc)
     delta = timedelta(hours=-1 if timed_out else 1)
     return PendingAutofix(
@@ -36,6 +36,7 @@ def _make_fix(*, fix_id: int = 1, label: str = "Test Movie",
         label=label, ticket_id=fix_id, ticket_url=ticket_url,
         started_at=now.strftime("%Y-%m-%d %H:%M:%S"),
         timeout_at=(now + delta).strftime("%Y-%m-%d %H:%M:%S"),
+        action_name=action_name,
     )
 
 
@@ -376,3 +377,30 @@ async def test_progress_header_says_auto_fix_for_a_user_issue_fix():
 async def test_progress_header_uses_the_admin_fixs_own_name():
     assert (await _header_for("Redownload")
             == "🔧 Redownload for #5: <b>Movie (2026)</b>")
+
+
+# --- DM wording: Reporter's Auto-fix vs the Admin's own Fix -------------------
+
+async def _dm_text(notify, fix) -> str:
+    ctx = make_ctx(admin_id=42)
+    ctx.bot.send_message = AsyncMock(return_value=make_message(message_id=900))
+    await notify(ctx, fix)
+    return ctx.bot.send_message.call_args.kwargs["text"]
+
+
+async def test_dms_without_an_action_name_say_auto_fix():
+    fix = _make_fix(timed_out=True)
+    assert "Auto-fix abandoned for" in await _dm_text(_notify_media_gone, fix)
+    assert "Auto-fix complete:" in await _dm_text(_notify_complete, fix)
+    assert "Auto-fix timed out (" in await _dm_text(_notify_timeout, fix)
+
+
+async def test_admin_fix_dms_use_the_fixs_own_name():
+    fix = _make_fix(timed_out=True, action_name="Redownload")
+    gone = await _dm_text(_notify_media_gone, fix)
+    done = await _dm_text(_notify_complete, fix)
+    late = await _dm_text(_notify_timeout, fix)
+    assert "Redownload abandoned for" in gone
+    assert "Redownload complete:" in done
+    assert "Redownload timed out (" in late
+    assert "Auto-fix" not in gone + done + late

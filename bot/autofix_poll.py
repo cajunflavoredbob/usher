@@ -166,6 +166,12 @@ async def _paint_progress(ctx: ContextTypes.DEFAULT_TYPE, store: UserStore,
         logger.debug("autofix progress paint failed (non-fatal)", exc_info=exc)
 
 
+def _fix_name(fix) -> str:
+    """What a Fix is called to the person told about it: a Reporter's own
+    Redownload is an "Auto-fix"; an Admin's Fix says its own name."""
+    return html.escape(fix.action_name) if fix.action_name else "Auto-fix"
+
+
 def _progress_header(fix) -> str:
     """The Progress card's first line. A Reporter's /issue Auto-fix says
     "Auto-fix"; an admin Fix says its own name, as its card did when painted."""
@@ -183,7 +189,7 @@ def _ticket_line(fix) -> list[str]:
 
 async def _notify_media_gone(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:
     lines = [
-        f"⚠️ Auto-fix abandoned for <b>{html.escape(fix.label)}</b>.",
+        f"⚠️ {_fix_name(fix)} abandoned for <b>{html.escape(fix.label)}</b>.",
         "The media was removed from Sonarr/Radarr before the new file landed.",
         *_ticket_line(fix),
     ]
@@ -195,7 +201,7 @@ async def _notify_media_gone(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:
 
 async def _notify_complete(ctx: ContextTypes.DEFAULT_TYPE, fix, extra: str = "") -> None:
     lines = [
-        f"🎉 Auto-fix complete: <b>{html.escape(fix.label)}</b> downloaded{extra}.",
+        f"🎉 {_fix_name(fix)} complete: <b>{html.escape(fix.label)}</b> downloaded{extra}.",
         *_ticket_line(fix),
         "",
         "Did this resolve the problem?",
@@ -221,7 +227,7 @@ async def _notify_timeout(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:
     # "for the admin".
     is_admin = fix.user_id == ctx.bot_data.get("admin_id")
     lines = [
-        f"⏱️ Auto-fix timed out ({AUTOFIX_TIMEOUT_HOURS}h) for <b>{html.escape(fix.label)}</b>.",
+        f"⏱️ {_fix_name(fix)} timed out ({AUTOFIX_TIMEOUT_HOURS}h) for <b>{html.escape(fix.label)}</b>.",
         "No new file was imported."
         + (" Check Sonarr/Radarr to see if a release was grabbed." if is_admin else ""),
         *_ticket_line(fix),
