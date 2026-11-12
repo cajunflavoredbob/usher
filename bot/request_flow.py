@@ -1124,6 +1124,11 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                 is4k=is4k,
                 status="grabbing" if approved else "waiting",
                 timeout_hours=PROGRESS_CARD_TIMEOUT_HOURS,
+                # The seasons Seerr granted (the picked ones when it lists
+                # none), so a later cancel can tell this card from another
+                # season pick of the same show.
+                seasons=(sorted(created.seasons or seasons)
+                         if media["type"] == "tv" else None),
             )
         except Exception as exc:
             logger.exception("couldn't enqueue the Progress card row (card stays static)", exc_info=exc)

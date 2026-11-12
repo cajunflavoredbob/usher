@@ -231,21 +231,22 @@ async def _close_progress_cards(ctx, info, *, fallback_user_id,
                 requester_tg = owner.telegram_id
         if requester_tg is None:
             return
-        # A show can hold several Requests (one per season pick) and card rows
-        # store no seasons, so a TV card can't be tied to the cancelled
-        # Request: leave TV cards alone rather than close a live one.
-        if info.media_type != "movie":
-            return
         cards = await store.find_progress_cards(info.media_type, info.tmdb_id)
         # Only a pending Request can be cancelled, and its card is still
-        # "waiting". Cards carry no Request id, only the 4K flag (no
-        # seasons), so a card counts only when its 4K flag matches the
-        # cancelled Request's. When several still match (two season picks)
-        # we cannot tell which one this was: leave them all rather than
-        # close a live Request's card.
+        # "waiting". Cards carry no Request id, only the 4K flag and, for
+        # TV, the seasons the Request was made with, so a card counts only
+        # when its 4K flag matches the cancelled Request's and, for TV, its
+        # stored seasons equal the Request's. A card with no stored seasons
+        # (made before they were recorded) never matches. When several
+        # still match we cannot tell which one this was: leave them all
+        # rather than close a live Request's card.
+        is_tv = info.media_type != "movie"
+        request_seasons = sorted(info.seasons)
         mine = [c for c in cards
                 if c["user_id"] == requester_tg and c["status"] == "waiting"
-                and bool(c["is4k"]) == info.is4k]
+                and bool(c["is4k"]) == info.is4k
+                and (not is_tv or (c.get("seasons") and
+                                   sorted(c["seasons"]) == request_seasons))]
         if len(mine) != 1:
             return
         card = mine[0]

@@ -282,7 +282,8 @@ class UserStore:
                     last_progress TEXT NOT NULL DEFAULT '',
                     bumped INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                    timeout_at TEXT NOT NULL
+                    timeout_at TEXT NOT NULL,
+                    seasons TEXT
                 )
                 """
             )
@@ -301,13 +302,18 @@ class UserStore:
     # schema; 0 = any pre-stamp database (CREATE TABLE IF NOT
     # EXISTS never reconciles an existing old-shape table, and a missing
     # column is a permanent poller kill).
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
 
     # Full expected column sets, table -> (column, ADD COLUMN ddl). ALTER
     # TABLE ADD COLUMN needs a default for NOT NULL adds, so nullable/
     # defaulted forms are used -- fine for reconciliation, since rows that
     # predate a column have no better value anyway.
     _EXPECTED_COLUMNS: dict[str, list[tuple[str, str]]] = {
+        "request_watches": [
+            # JSON list of the requested season numbers (TV cards); NULL
+            # when unknown (movies, and cards made before this column).
+            ("seasons", "ALTER TABLE request_watches ADD COLUMN seasons TEXT"),
+        ],
         "user_mapping": [
             ("plex_token_enc", "ALTER TABLE user_mapping ADD COLUMN plex_token_enc TEXT"),
             ("plex_uuid",      "ALTER TABLE user_mapping ADD COLUMN plex_uuid TEXT"),
@@ -486,23 +492,36 @@ class UserStore:
     async def add_progress_card(self, *, chat_id: int, message_id: int,
                                 user_id: int, media_type: str, tmdb_id: int,
                                 label: str, is4k: bool,
-                                status: str, timeout_hours: int) -> int:
+                                status: str, timeout_hours: int,
+                                seasons: Optional[list] = None) -> int:
         def _do() -> int:
             with self._conn() as c:
                 cur = c.execute(
                     """
                     INSERT INTO request_watches (
                         chat_id, message_id, user_id, media_type, tmdb_id,
-                        label, is4k, status, timeout_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', ?))
+                        label, is4k, status, timeout_at, seasons
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', ?), ?)
                     """,
                     (chat_id, message_id, user_id, media_type, tmdb_id,
                      label, 1 if is4k else 0, status,
-                     f"+{timeout_hours} hours"),
+                     f"+{timeout_hours} hours",
+                     json.dumps(sorted(seasons)) if seasons else None),
                 )
                 return cur.lastrowid
 
         return await self._run(_do)
+
+    @staticmethod
+    def _card_row(keys: tuple, row: tuple) -> dict:
+        card = dict(zip(keys, row))
+        raw = card["seasons"]
+        try:
+            parsed = json.loads(raw) if raw else None
+        except ValueError:
+            parsed = None
+        card["seasons"] = parsed if isinstance(parsed, list) else None
+        return card
 
     async def list_progress_cards(self) -> list[dict]:
         def _do() -> list[tuple]:
@@ -511,7 +530,7 @@ class UserStore:
                     """
                     SELECT id, chat_id, message_id, user_id, media_type,
                            tmdb_id, label, is4k, status, arr_id,
-                           last_progress, bumped, timeout_at
+                           last_progress, bumped, timeout_at, seasons
                     FROM request_watches ORDER BY id
                     """
                 ).fetchall()
@@ -519,8 +538,8 @@ class UserStore:
         rows = await self._run(_do)
         keys = ("id", "chat_id", "message_id", "user_id", "media_type",
                 "tmdb_id", "label", "is4k", "status", "arr_id",
-                "last_progress", "bumped", "timeout_at")
-        return [dict(zip(keys, r)) for r in rows]
+                "last_progress", "bumped", "timeout_at", "seasons")
+        return [self._card_row(keys, r) for r in rows]
 
     async def find_progress_cards(self, media_type: str,
                                   tmdb_id: int) -> list[dict]:
@@ -530,7 +549,7 @@ class UserStore:
                     """
                     SELECT id, chat_id, message_id, user_id, media_type,
                            tmdb_id, label, is4k, status, arr_id,
-                           last_progress, bumped, timeout_at
+                           last_progress, bumped, timeout_at, seasons
                     FROM request_watches
                     WHERE media_type = ? AND tmdb_id = ?
                     """,
@@ -540,8 +559,8 @@ class UserStore:
         rows = await self._run(_do)
         keys = ("id", "chat_id", "message_id", "user_id", "media_type",
                 "tmdb_id", "label", "is4k", "status", "arr_id",
-                "last_progress", "bumped", "timeout_at")
-        return [dict(zip(keys, r)) for r in rows]
+                "last_progress", "bumped", "timeout_at", "seasons")
+        return [self._card_row(keys, r) for r in rows]
 
     async def update_progress_card(self, card_id: int, **fields) -> bool:
         """Update whitelisted columns on one Progress card row. Returns True when

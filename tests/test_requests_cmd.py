@@ -130,8 +130,9 @@ async def test_cancel_not_found_treated_as_success():
     assert "cancelled" in upd.callback_query.edits[0]["text"]
 
 
-def _card(card_id, user_id, *, media_type="movie", tmdb_id=550, message_id=700):
-    return {"id": card_id, "chat_id": user_id, "message_id": message_id,
+def _card(card_id, user_id, *, media_type="movie", tmdb_id=550, message_id=700,
+          seasons=None):
+    return {"seasons": seasons, "id": card_id, "chat_id": user_id, "message_id": message_id,
             "user_id": user_id, "media_type": media_type, "tmdb_id": tmdb_id,
             "label": "Fight Club", "is4k": 0, "status": "waiting",
             "arr_id": None, "last_progress": None, "bumped": 0,
@@ -160,9 +161,9 @@ async def test_cancel_closes_requesters_progress_card():
     assert "/requests" not in edit["text"]
 
 
-async def test_tv_cancel_leaves_progress_cards_alone():
-    """Card rows store no seasons, so cancelling one season's Request must not
-    close the card of another season's Request for the same show."""
+async def test_tv_cancel_leaves_card_without_stored_seasons_alone():
+    """A legacy TV card row has no stored seasons, so it cannot be tied to the
+    cancelled Request and is left alone."""
     ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
     item = _items()[1]
     item.requested_by_id = 7
@@ -329,3 +330,57 @@ async def test_cancelled_standard_request_closes_the_standard_card_among_two():
     ctx, store = _setup(cards=[c4k, std], owner=make_link(telegram_id=USER_ID))
     await rq_list_cancel(make_update(callback_data="rqlc:12", user_id=USER_ID), ctx)
     store.delete_progress_card.assert_awaited_once_with(1)
+
+
+def _tv_setup(cards):
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
+    item = _items()[1]  # TV, seasons [1, 2]
+    item.requested_by_id = 7
+    item.status = REQUEST_STATUS_PENDING
+    seerr = ctx.bot_data["seerr"]
+    seerr.get_request.side_effect = None
+    seerr.get_request.return_value = item
+    store = ctx.bot_data["store"]
+    store.find_by_seerr_id.return_value = make_link(telegram_id=USER_ID)
+    store.find_progress_cards.return_value = list(cards)
+    return ctx, store
+
+
+async def test_tv_cancel_closes_the_card_whose_stored_seasons_match():
+    ctx, store = _tv_setup([
+        _card(1, USER_ID, media_type="tv", tmdb_id=1399, message_id=701,
+              seasons=[3]),
+        _card(2, USER_ID, media_type="tv", tmdb_id=1399, message_id=702,
+              seasons=[1, 2])])
+    await rq_list_cancel(make_update(callback_data="rqlc:13", user_id=USER_ID), ctx)
+    store.delete_progress_card.assert_awaited_once_with(2)
+    edit = ctx.bot.edit_message_text.await_args.kwargs
+    assert edit["message_id"] == 702 and "Request cancelled." in edit["text"]
+
+
+async def test_tv_cancel_with_no_card_of_those_seasons_closes_nothing():
+    ctx, store = _tv_setup([
+        _card(1, USER_ID, media_type="tv", tmdb_id=1399, seasons=[3])])
+    await rq_list_cancel(make_update(callback_data="rqlc:13", user_id=USER_ID), ctx)
+    store.delete_progress_card.assert_not_awaited()
+
+
+async def test_tv_cancel_with_two_cards_of_the_same_seasons_closes_nothing():
+    ctx, store = _tv_setup([
+        _card(1, USER_ID, media_type="tv", tmdb_id=1399, message_id=701,
+              seasons=[1, 2]),
+        _card(2, USER_ID, media_type="tv", tmdb_id=1399, message_id=702,
+              seasons=[1, 2])])
+    await rq_list_cancel(make_update(callback_data="rqlc:13", user_id=USER_ID), ctx)
+    store.delete_progress_card.assert_not_awaited()
+
+
+async def test_tv_cancel_ignores_a_legacy_card_beside_a_matching_one():
+    """A card with no stored seasons is not a match, so the one card whose
+    seasons equal the Request's is closed and the legacy one is kept."""
+    ctx, store = _tv_setup([
+        _card(1, USER_ID, media_type="tv", tmdb_id=1399, message_id=701),
+        _card(2, USER_ID, media_type="tv", tmdb_id=1399, message_id=702,
+              seasons=[2, 1])])
+    await rq_list_cancel(make_update(callback_data="rqlc:13", user_id=USER_ID), ctx)
+    store.delete_progress_card.assert_awaited_once_with(2)

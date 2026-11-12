@@ -294,3 +294,46 @@ async def test_pending_autofix_keeps_the_fix_action_name(fresh_store: UserStore)
         radarr_movie_id=556, action_name="Redownload")
     rows = await fresh_store.list_pending_autofixes()
     assert [r.action_name for r in rows] == ["", "Redownload"]
+
+
+async def test_old_shape_request_watches_gets_the_seasons_column(
+        tmp_db_path: Path, fresh_token_crypto):
+    """A database from before the seasons column keeps its card rows (seasons
+    unknown) and can store a TV card's seasons after opening."""
+    with sqlite3.connect(tmp_db_path) as c:
+        c.execute(
+            """
+            CREATE TABLE request_watches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                media_type TEXT NOT NULL,
+                tmdb_id INTEGER NOT NULL,
+                label TEXT NOT NULL DEFAULT '',
+                is4k INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'waiting',
+                arr_id INTEGER,
+                last_progress TEXT NOT NULL DEFAULT '',
+                bumped INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                timeout_at TEXT NOT NULL
+            )
+            """
+        )
+        c.execute(
+            "INSERT INTO request_watches (chat_id, message_id, user_id, "
+            "media_type, tmdb_id, timeout_at) "
+            "VALUES (1, 2, 3, 'tv', 1399, datetime('now', '+1 hours'))")
+        c.execute("PRAGMA user_version = 2")
+    store = UserStore(tmp_db_path, crypto=fresh_token_crypto)
+    old = (await store.find_progress_cards("tv", 1399))[0]
+    assert old["seasons"] is None
+    await store.add_progress_card(
+        chat_id=1, message_id=9, user_id=3, media_type="tv", tmdb_id=1399,
+        label="Show", is4k=False, status="waiting", timeout_hours=1,
+        seasons=[2])
+    rows = await store.find_progress_cards("tv", 1399)
+    assert sorted(map(str, (r["seasons"] for r in rows))) == ["None", "[2]"]
+    with sqlite3.connect(tmp_db_path) as c:
+        assert c.execute("PRAGMA user_version").fetchone()[0] == UserStore.SCHEMA_VERSION

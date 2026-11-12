@@ -166,6 +166,51 @@ async def test_store_progress_card_round_trip(fresh_store):
     assert await fresh_store.list_progress_cards() == []
 
 
+async def test_store_progress_card_keeps_seasons(fresh_store):
+    await fresh_store.add_progress_card(
+        chat_id=1, message_id=2, user_id=3, media_type="tv", tmdb_id=1399,
+        label="Show", is4k=False, status="waiting", timeout_hours=24,
+        seasons=[2, 1])
+    await fresh_store.add_progress_card(
+        chat_id=1, message_id=3, user_id=3, media_type="movie", tmdb_id=550,
+        label="Movie", is4k=False, status="waiting", timeout_hours=24)
+    tv = (await fresh_store.find_progress_cards("tv", 1399))[0]
+    movie = (await fresh_store.find_progress_cards("movie", 550))[0]
+    listed = {r["tmdb_id"]: r for r in await fresh_store.list_progress_cards()}
+    assert tv["seasons"] == [1, 2] and listed[1399]["seasons"] == [1, 2]
+    assert movie["seasons"] is None
+
+
+async def test_tv_submit_stores_the_seasons_seerr_granted():
+    from seerr import CreatedRequest, REQUEST_STATUS_PENDING
+    from bot.request_flow import request_submit
+    ctx = make_ctx(admin_id=999, link=make_link(telegram_id=USER_ID),
+                   user_data={"rq_media": {"type": "tv", "tmdb_id": 1399,
+                                           "title": "Show", "year": "2026"},
+                              "rq_selected": {1, 2, 3},
+                              "rq_search_version": 1})
+    ctx.args = []
+    ctx.bot_data["seerr"].create_request.return_value = CreatedRequest(
+        id=5, status=REQUEST_STATUS_PENDING, seasons=[3, 1])
+    await request_submit(make_update(callback_data="rqgo:1", user_id=USER_ID), ctx)
+    kwargs = ctx.bot_data["store"].add_progress_card.call_args.kwargs
+    assert kwargs["seasons"] == [1, 3]
+
+
+async def test_movie_submit_stores_no_seasons():
+    from seerr import CreatedRequest, REQUEST_STATUS_APPROVED
+    from bot.request_flow import request_submit
+    ctx = make_ctx(admin_id=999, link=make_link(telegram_id=USER_ID),
+                   user_data={"rq_media": {"type": "movie", "tmdb_id": 550,
+                                           "title": "Movie", "year": "2026"},
+                              "rq_search_version": 1})
+    ctx.args = []
+    ctx.bot_data["seerr"].create_request.return_value = CreatedRequest(
+        id=5, status=REQUEST_STATUS_APPROVED)
+    await request_submit(make_update(callback_data="rqgo:1", user_id=USER_ID), ctx)
+    assert ctx.bot_data["store"].add_progress_card.call_args.kwargs["seasons"] is None
+
+
 # --- SAB-enriched progress lines ---------------------------------------------
 
 async def test_progress_line_prefers_sab_live_data():

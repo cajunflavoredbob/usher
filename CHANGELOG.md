@@ -92,8 +92,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A resolved Ticket now shows Status: Resolved and offers only Reply, and a
   Fix tapped from an older message on a resolved Ticket is refused instead of
   deleting the current file again.
-- Cancelling a movie Request from /requests now closes its Progress card
-  with "Request cancelled." instead of leaving it on "Waiting for approval".
+- Cancelling a Request from /requests now closes its Progress card with
+  "Request cancelled." instead of leaving it on "Waiting for approval". A TV
+  card is closed when it is the only waiting card made for the same seasons as
+  the cancelled Request; cards made before this update are left as they were.
 - Typing a command in the middle of /issue, /request, /invite or /link now
   tells you the unfinished flow was stopped, instead of dropping it silently.
 - Tapping a number in /trending now runs the same checks as a search: a movie
