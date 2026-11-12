@@ -855,36 +855,47 @@ async def tk_reply_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     except (ValueError, IndexError):
         logger.warning("Unparseable callback data: %r", q.data)
         return ConversationHandler.END
-    is_admin, token, decrypt_failed = await token_for(ctx, update.effective_user.id)
-    if not is_admin and decrypt_failed:
-        await q.message.reply_text(
-            DECRYPT_FAILED_MSG
-        )
+    # Double-tap guard: two concurrent taps would each send a prompt and
+    # set the conversation state twice. The slot covers only this start
+    # handler (checks, button strip, prompt), not the whole conversation.
+    # Reply and Close-with-comment share this key on purpose, so a tap on
+    # the sibling button cannot overwrite tk_close_after mid-start.
+    start_key = f"tkstart:{ticket_id}"
+    if not try_begin_action(ctx, start_key):
         return ConversationHandler.END
-    if not is_admin and token is None:
-        await q.message.reply_text("DM me /link first so I can post comments as you.")
-        return ConversationHandler.END
-    # Same text-capture guard as the resolve comment prompt:
-    # an active /issue conversation would swallow the reply as its next input.
-    if user_in_conversation(ctx, update, "issue", "resolve"):
-        await q.message.reply_text(
-            "You're in the middle of another flow (like /issue). Finish or "
-            "/cancel it first, then tap Reply again."
-        )
-        return ConversationHandler.END
-    ctx.user_data["tk_reply_id"] = ticket_id
-    ctx.user_data["tk_close_after"] = False
-    ctx.user_data["tk_reply_from_list"] = _opened_from_list(q.message)
-    # Strip the inline buttons but keep the original ticket-announcement text,
-    # then prompt for the reply text in a separate message.
     try:
-        await q.edit_message_reply_markup(reply_markup=None)
-    except Exception:
-        logger.debug("Couldn't clear buttons on ticket #%d message", ticket_id)
-    await q.message.reply_text(
-        f"Send the reply text for ticket #{ticket_id} (or /cancel)."
-    )
-    return AWAIT_TICKET_REPLY
+        is_admin, token, decrypt_failed = await token_for(ctx, update.effective_user.id)
+        if not is_admin and decrypt_failed:
+            await q.message.reply_text(
+                DECRYPT_FAILED_MSG
+            )
+            return ConversationHandler.END
+        if not is_admin and token is None:
+            await q.message.reply_text("DM me /link first so I can post comments as you.")
+            return ConversationHandler.END
+        # Same text-capture guard as the resolve comment prompt:
+        # an active /issue conversation would swallow the reply as its next input.
+        if user_in_conversation(ctx, update, "issue", "resolve"):
+            await q.message.reply_text(
+                "You're in the middle of another flow (like /issue). Finish or "
+                "/cancel it first, then tap Reply again."
+            )
+            return ConversationHandler.END
+        ctx.user_data["tk_reply_id"] = ticket_id
+        ctx.user_data["tk_close_after"] = False
+        ctx.user_data["tk_reply_from_list"] = _opened_from_list(q.message)
+        # Strip the inline buttons but keep the original ticket-announcement text,
+        # then prompt for the reply text in a separate message.
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            logger.debug("Couldn't clear buttons on ticket #%d message", ticket_id)
+        await q.message.reply_text(
+            f"Send the reply text for ticket #{ticket_id} (or /cancel)."
+        )
+        return AWAIT_TICKET_REPLY
+    finally:
+        end_action(ctx, start_key)
 
 
 async def tk_close_with_comment_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
@@ -896,28 +907,39 @@ async def tk_close_with_comment_start(update: Update, ctx: ContextTypes.DEFAULT_
     except (ValueError, IndexError):
         logger.warning("Unparseable callback data: %r", q.data)
         return ConversationHandler.END
-    if not await _require_admin(q, ctx, action_label="tk_close_with_comment_start"):
+    # Double-tap guard: two concurrent taps would each send a prompt and
+    # set the conversation state twice. The slot covers only this start
+    # handler (checks, button strip, prompt), not the whole conversation.
+    # Reply and Close-with-comment share this key on purpose, so a tap on
+    # the sibling button cannot overwrite tk_close_after mid-start.
+    start_key = f"tkstart:{ticket_id}"
+    if not try_begin_action(ctx, start_key):
         return ConversationHandler.END
-    # Same text-capture guard as tk_reply_start.
-    if user_in_conversation(ctx, update, "issue", "resolve"):
-        await q.message.reply_text(
-            "You're in the middle of another flow (like /issue). Finish or "
-            "/cancel it first, then tap the button again."
-        )
-        return ConversationHandler.END
-    ctx.user_data["tk_reply_id"] = ticket_id
-    ctx.user_data["tk_close_after"] = True
-    ctx.user_data["tk_reply_from_list"] = _opened_from_list(q.message)
-    # Strip the inline buttons but keep the original ticket-announcement text,
-    # then prompt for the closing comment in a separate message.
     try:
-        await q.edit_message_reply_markup(reply_markup=None)
-    except Exception:
-        logger.debug("Couldn't clear buttons on ticket #%d message", ticket_id)
-    await q.message.reply_text(
-        f"Send the closing comment for ticket #{ticket_id} (or /cancel)."
-    )
-    return AWAIT_TICKET_REPLY
+        if not await _require_admin(q, ctx, action_label="tk_close_with_comment_start"):
+            return ConversationHandler.END
+        # Same text-capture guard as tk_reply_start.
+        if user_in_conversation(ctx, update, "issue", "resolve"):
+            await q.message.reply_text(
+                "You're in the middle of another flow (like /issue). Finish or "
+                "/cancel it first, then tap the button again."
+            )
+            return ConversationHandler.END
+        ctx.user_data["tk_reply_id"] = ticket_id
+        ctx.user_data["tk_close_after"] = True
+        ctx.user_data["tk_reply_from_list"] = _opened_from_list(q.message)
+        # Strip the inline buttons but keep the original ticket-announcement text,
+        # then prompt for the closing comment in a separate message.
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            logger.debug("Couldn't clear buttons on ticket #%d message", ticket_id)
+        await q.message.reply_text(
+            f"Send the closing comment for ticket #{ticket_id} (or /cancel)."
+        )
+        return AWAIT_TICKET_REPLY
+    finally:
+        end_action(ctx, start_key)
 
 
 def _clear_reply_state(ctx) -> None:
