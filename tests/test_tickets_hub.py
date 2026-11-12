@@ -774,3 +774,46 @@ async def test_fix_from_list_progress_card_stores_no_keyboard():
     await _apply_fix(upd, ctx, strategy="redownload")
     stored = ctx.bot_data["store"].set_autofix_message.call_args.kwargs["reply_markup"]
     assert stored == ""
+
+
+_COUNTERS = {"rq_search_version": 5, "inv_version": 3, "dv_version": 4,
+             "relink_resume": {"action": "submit_ticket"}}
+
+
+async def test_issue_submit_keeps_version_counters_and_relink_resume():
+    ctx = _submit_ctx()
+    ctx.user_data.update(_COUNTERS)
+    ctx.user_data["_pending_autofix_id"] = None
+    upd = make_update(text="no sound", user_id=USER_ID)
+    await _submit_ticket(upd, ctx, autofix=False)
+    for key, value in _COUNTERS.items():
+        assert ctx.user_data[key] == value
+    for key in ("media", "issue_type", "description", "submitting_ticket"):
+        assert key not in ctx.user_data
+
+
+async def test_issue_cancel_keeps_version_counters_and_relink_resume():
+    ctx = _submit_ctx()
+    ctx.user_data.update(_COUNTERS)
+    upd = make_update(callback_data="cancel", user_id=USER_ID)
+    await ticket_cancel(upd, ctx)
+    for key, value in _COUNTERS.items():
+        assert ctx.user_data[key] == value
+    assert "media" not in ctx.user_data
+
+
+async def test_stale_confirm_version_does_not_match_after_issue_then_request():
+    """After /issue a new /request bumps the kept counter past the old
+    card's version, so an older rqgo:5 card fails the version check."""
+    from bot import request_flow
+    ctx = _submit_ctx()
+    ctx.user_data["rq_search_version"] = 5
+    await _submit_ticket(make_update(text="x", user_id=USER_ID), ctx,
+                         autofix=False)
+    new_version = request_flow._current_version(ctx) + 1
+    assert new_version != 5 and new_version > 5
+
+
+def test_on_error_cleanup_covers_pending_autofix_id():
+    from bot.app import _CONVERSATION_USER_DATA_KEYS
+    assert "_pending_autofix_id" in _CONVERSATION_USER_DATA_KEYS

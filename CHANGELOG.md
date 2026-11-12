@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Finishing or cancelling /issue no longer resets the counters that retire old
+  Request and Invite confirm buttons, so an older confirm card cannot submit a
+  newer Request or send a newer Invite.
 - When creating a Ticket, a comment or a Request times out after Usher sent it,
   the message now says it may have gone through and to check before trying
   again, instead of "try again in a minute", so you look before filing a

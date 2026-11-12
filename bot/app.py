@@ -739,7 +739,7 @@ _CONVERSATION_USER_DATA_KEYS = (
     "media", "search_results", "seasons", "season",
     "episode", "issue_type", "description",
     "search_version", "submitting_ticket",
-    "research_parent",
+    "research_parent", "_pending_autofix_id",
     "awaiting_comment_for",
 ) + _RQ_KEYS + (
     # rq_jump_media is ticket_flow's stash for the Request-it-instead jump

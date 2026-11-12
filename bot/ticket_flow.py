@@ -96,6 +96,20 @@ def _tickets_origin(ctx) -> Optional[str]:
     return TICKETS_HUB if hub_origin(ctx) == TICKETS_HUB else None
 
 
+# Keys the /issue flow owns. Never clear() user_data: the request, invite and
+# discover version counters and relink_resume must survive, or a restarted
+# counter lets an older confirm card pass the version check.
+_ISSUE_KEYS = ("media", "search_results", "seasons", "season", "episode",
+               "issue_type", "description", "research_parent",
+               "search_version", "submitting_ticket", "rq_jump_media",
+               "_pending_autofix_id", "hub_origin")
+
+
+def _clear_issue_state(ctx) -> None:
+    for key in _ISSUE_KEYS:
+        ctx.user_data.pop(key, None)
+
+
 async def _ticket_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Conversation_timeout handler. Clears every user_data key the new-Ticket
     flow can populate so an abandoned conversation doesn't leak state for
@@ -950,7 +964,7 @@ async def _submit_ticket_inner(
                 reply_markup=markup.to_json() if markup is not None else "")
         except Exception as exc:
             logger.exception("couldn't attach autofix card message", exc_info=exc)
-    ctx.user_data.clear()
+    _clear_issue_state(ctx)
     return ConversationHandler.END
 
 
@@ -979,7 +993,7 @@ async def ticket_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await update.callback_query.answer("Cancelled")
     await end_flow(update, ctx, "Cancelled.", _tickets_origin(ctx),
                    typed_text="Cancelled. /issue to start over.")
-    ctx.user_data.clear()
+    _clear_issue_state(ctx)
     return ConversationHandler.END
 
 
