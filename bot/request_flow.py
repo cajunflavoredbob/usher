@@ -93,7 +93,7 @@ from bot.hub import (
     set_hub_origin,
 )
 from bot.media_card import send_detail_card
-from bot.progress_card import APPROVED_LINE, _card_text
+from bot.progress_card import APPROVED_LINE, card_text
 from bot.requests_hub import REQUESTS_HUB
 from bot.shared import (
     DECRYPT_FAILED_MSG,
@@ -1058,7 +1058,7 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     try:
         card = await ctx.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=_card_text(label, APPROVED_LINE if approved
+            text=card_text(label, APPROVED_LINE if approved
                             else "⏳ Waiting for approval…"),
             parse_mode="HTML",
         )

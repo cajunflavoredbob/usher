@@ -134,7 +134,7 @@ async def refresh_arr_downloads(ctx, *, movies: bool, tv: bool) -> None:
             logger.debug("%s refresh failed (non-fatal)", key, exc_info=True)
 
 
-def _card_text(label: str, body_line: str, *, footer: bool = True) -> str:
+def card_text(label: str, body_line: str, *, footer: bool = True) -> str:
     text = f"<b>{html.escape(label)}</b>\n{body_line}"
     if footer:
         text += "\n\nUse /requests to check on it."
@@ -152,7 +152,7 @@ async def _edit_card(ctx, card: dict, body_line: str, *,
         await ctx.bot.edit_message_text(
             chat_id=card["chat_id"],
             message_id=card["message_id"],
-            text=_card_text(card["label"], body_line, footer=footer),
+            text=card_text(card["label"], body_line, footer=footer),
             parse_mode="HTML",
         )
         return True
