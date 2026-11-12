@@ -84,3 +84,28 @@ async def test_didnt_work_without_live_link_flow_does_nothing():
     ctx.bot_data["plex"].request_pin.assert_not_called()
     assert upd.callback_query.edits == []
     assert upd.callback_query.answers[-1][0]
+
+
+async def _run_strong_pin(monkeypatch, poll_result):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from bot import link_flow
+    ctx = make_ctx(admin_id=999)
+    ctx.bot_data["plex"].request_pin.return_value = SimpleNamespace(
+        id=1, auth_url="https://plex.example.com/auth", code="abcd")
+    monkeypatch.setattr(link_flow, "_poll_with_cancel",
+                        AsyncMock(return_value=poll_result))
+    monkeypatch.setattr(link_flow, "_finalize_link", AsyncMock())
+    upd = make_update(callback_data=f"{HUB_RETRY}:linkplat:desktop", user_id=42)
+    await hub_retry_linkplat(upd, ctx)
+    return ctx
+
+
+async def test_strong_pin_success_clears_link_active_loop(monkeypatch):
+    ctx = await _run_strong_pin(monkeypatch, "tok")
+    assert "link_active_loop" not in ctx.user_data
+
+
+async def test_strong_pin_timeout_clears_link_active_loop(monkeypatch):
+    ctx = await _run_strong_pin(monkeypatch, None)
+    assert "link_active_loop" not in ctx.user_data

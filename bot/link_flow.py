@@ -399,10 +399,14 @@ async def _start_plex_auth(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         if ctx.user_data.get("link_active_loop") != loop_id:
             # A newer loop (didnt_work fallback) has taken ownership; exit silently
             return ConversationHandler.END
+        # Ours and over: leave no stale "live flow" mark for Didn't work?.
+        ctx.user_data.pop("link_active_loop", None)
         await end_flow(update, ctx, "⏱️ Plex auth timed out.", hub, retry,
                        typed_text="⏱️ Plex auth timed out. /link to try again.")
         return ConversationHandler.END
 
+    if ctx.user_data.get("link_active_loop") == loop_id:
+        ctx.user_data.pop("link_active_loop", None)
     await _finalize_link(update, ctx, auth_token, hub=hub)
     try:
         await q.edit_message_reply_markup(reply_markup=None)
