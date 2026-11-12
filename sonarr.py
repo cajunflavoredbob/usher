@@ -7,14 +7,14 @@ from typing import Optional
 
 import httpx
 
-from fix_result import FixResult, parse_queue_records
+from fix_result import FixResult, find_grab_for_import, parse_queue_records
 from http_util import APIError, execute, json_or_raise
 
 logger = logging.getLogger("usher." + __name__)
 
 _SERVICE = "Sonarr"
 
-# Mark-Failed history scan: page until the grabbed event is found, capped so
+# Mark-Failed history scan: page until the imported release's grab is found, capped so
 # a pathological history can't spin forever (5 x 50 = 250 records deep).
 _HISTORY_PAGE_SIZE = 50
 _HISTORY_MAX_PAGES = 5
@@ -114,12 +114,13 @@ class SonarrClient:
         blocklisted = False
         if blocklist:
             try:
-                # Page until the grabbed event is found: a
+                # Page until the grab matching the newest import is found: a
                 # churn-heavy episode (repeated imports/upgrades) can push
-                # the grab past the first _HISTORY_PAGE_SIZE records, and
+                # it past the first _HISTORY_PAGE_SIZE records, and
                 # silently skipping the blocklist re-grabs the exact release
                 # Mark Failed was meant to bury.
                 grab = None
+                records: list[dict] = []
                 for page in range(1, _HISTORY_MAX_PAGES + 1):
                     r = await execute(
                         self._client, "GET", "/history", service=_SERVICE,
@@ -127,9 +128,10 @@ class SonarrClient:
                                 "pageSize": _HISTORY_PAGE_SIZE,
                                 "sortKey": "date", "sortDirection": "descending"},
                     )
-                    records = json_or_raise(r, service=_SERVICE, what="episode history").get("records") or []
-                    grab = next((rec for rec in records if rec.get("eventType") == "grabbed"), None)
-                    if grab is not None or len(records) < _HISTORY_PAGE_SIZE:
+                    page_records = json_or_raise(r, service=_SERVICE, what="episode history").get("records") or []
+                    records.extend(page_records)
+                    grab = find_grab_for_import(records)
+                    if grab is not None or len(page_records) < _HISTORY_PAGE_SIZE:
                         break
                 if grab is not None:
                     await execute(self._client, "POST", f"/history/failed/{grab['id']}",
@@ -165,11 +167,8 @@ class SonarrClient:
             )
 
         if blocklist:
-            # "recent history": the scan is bounded (_HISTORY_MAX_PAGES pages);
-            # a grab deeper than that exists but wasn't found, so don't claim
-            # there was no grab at all.
             prefix = ("Blocklisted current release, " if blocklisted
-                      else "No grab found in recent history to blocklist; ")
+                      else "Couldn't identify the release, so it wasn't blocklisted; ")
             message = (
                 f"{prefix}deleted '{series.title}' S{match.season:02d}E{match.episode:02d} "
                 "file, and triggered re-search."
@@ -231,8 +230,9 @@ class SonarrClient:
     async def mark_failed_episode(
         self, tvdb_id: int, season: int, episode: int
     ) -> FixResult:
-        """Blocklist the most recent grab, delete the on-disk file, and trigger
-        a new search. Falls back to delete+search if there's no grab in history.
+        """Blocklist the grab that produced the on-disk file (the "grabbed"
+        record sharing the newest import's downloadId), delete the file, and
+        trigger a new search. Skips the blocklist if that grab can't be found.
         """
         series, match, err = await self._resolve_episode(tvdb_id, season, episode)
         if err is not None:

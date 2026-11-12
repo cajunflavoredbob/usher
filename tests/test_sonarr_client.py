@@ -56,13 +56,15 @@ async def test_mark_failed_pages_history_until_grab_found():
         if path == "/api/v3/history":
             page = int(request.url.params["page"])
             if page == 1:
-                # A full page of non-grab churn pushes the grab off page 1.
+                # A full page of non-grab churn pushes the grab off page 1;
+                # the newest import (first record) names the release.
                 return httpx.Response(200, json={"records": [
-                    {"id": 1000 + i, "eventType": "downloadFolderImported"}
+                    {"id": 1000 + i, "eventType": "downloadFolderImported",
+                     "downloadId": "A"}
                     for i in range(_HISTORY_PAGE_SIZE)
                 ]})
             return httpx.Response(200, json={"records": [
-                {"id": 777, "eventType": "grabbed"},
+                {"id": 777, "eventType": "grabbed", "downloadId": "A"},
             ]})
         if path.startswith("/api/v3/history/failed/") and request.method == "POST":
             return httpx.Response(200, json={})
@@ -86,6 +88,88 @@ async def test_mark_failed_pages_history_until_grab_found():
                      if r.url.path == "/api/v3/history"]
     assert history_pages == ["1", "2"]
     assert any(r.url.path == "/api/v3/history/failed/777" for r in requests)
+
+
+def _episode_history_client(records):
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        path = request.url.path
+        if path == "/api/v3/series":
+            return httpx.Response(200, json=[{"id": 8, "tvdbId": 42, "title": "Show"}])
+        if path == "/api/v3/episode":
+            return httpx.Response(200, json=[
+                {"id": 501, "seasonNumber": 1, "episodeNumber": 5,
+                 "title": "Ep", "hasFile": True, "episodeFileId": 9},
+            ])
+        if path == "/api/v3/history":
+            return httpx.Response(200, json={"records": records})
+        if path.startswith("/api/v3/history/failed/"):
+            return httpx.Response(200, json={})
+        if path == "/api/v3/episodefile/9":
+            return httpx.Response(200, json={})
+        if path == "/api/v3/command":
+            return httpx.Response(201, json={})
+        return httpx.Response(404, json={"message": "unexpected"})
+
+    client = SonarrClient("http://sonarr.test", "key")
+    client._client = httpx.AsyncClient(
+        base_url="http://sonarr.test/api/v3",
+        transport=httpx.MockTransport(handler),
+    )
+    return client, requests
+
+
+async def test_mark_failed_blocklists_grab_that_matches_the_import_not_the_newest_grab():
+    client, requests = _episode_history_client([
+        {"id": 300, "eventType": "grabbed", "downloadId": "B"},
+        {"id": 200, "eventType": "downloadFolderImported", "downloadId": "A"},
+        {"id": 123, "eventType": "grabbed", "downloadId": "A"},
+    ])
+    result = await client.mark_failed_episode(42, 1, 5)
+    await client.close()
+
+    assert result.steps_done == ["blocklist", "delete", "search"]
+    failed = [r.url.path for r in requests if "/history/failed/" in r.url.path]
+    assert failed == ["/api/v3/history/failed/123"]
+
+
+async def test_mark_failed_skips_blocklist_when_no_grab_shares_the_import_download_id():
+    client, requests = _episode_history_client([
+        {"id": 300, "eventType": "grabbed", "downloadId": "B"},
+        {"id": 200, "eventType": "downloadFolderImported", "downloadId": "A"},
+    ])
+    result = await client.mark_failed_episode(42, 1, 5)
+    await client.close()
+
+    assert result.status == "ok"
+    assert result.steps_done == ["delete", "search"]
+    assert "wasn't blocklisted" in result.message
+    assert not any("/history/failed/" in r.url.path for r in requests)
+
+
+async def test_mark_failed_skips_blocklist_when_there_is_no_import_event():
+    client, requests = _episode_history_client([
+        {"id": 123, "eventType": "grabbed", "downloadId": "A"},
+    ])
+    result = await client.mark_failed_episode(42, 1, 5)
+    await client.close()
+
+    assert result.steps_done == ["delete", "search"]
+    assert not any("/history/failed/" in r.url.path for r in requests)
+
+
+async def test_mark_failed_skips_blocklist_when_the_import_has_no_download_id():
+    client, requests = _episode_history_client([
+        {"id": 200, "eventType": "downloadFolderImported", "downloadId": ""},
+        {"id": 123, "eventType": "grabbed", "downloadId": ""},
+    ])
+    result = await client.mark_failed_episode(42, 1, 5)
+    await client.close()
+
+    assert result.steps_done == ["delete", "search"]
+    assert not any("/history/failed/" in r.url.path for r in requests)
 
 
 async def test_queue_progress_falls_back_when_records_lack_episode_ids():

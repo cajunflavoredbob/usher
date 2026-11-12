@@ -7,7 +7,7 @@ from typing import Optional
 
 import httpx
 
-from fix_result import FixResult, parse_queue_records
+from fix_result import FixResult, find_grab_for_import, parse_queue_records
 from http_util import APIError, execute, json_or_raise
 
 logger = logging.getLogger("usher." + __name__)
@@ -126,7 +126,7 @@ class RadarrClient:
                     params={"movieId": movie.id},
                 )
                 records = json_or_raise(r, service=_SERVICE, what="movie history", expect=list) or []
-                grab = next((rec for rec in records if rec.get("eventType") == "grabbed"), None)
+                grab = find_grab_for_import(records)
                 if grab is not None:
                     await execute(self._client, "POST", f"/history/failed/{grab['id']}",
                                   service=_SERVICE)
@@ -161,7 +161,8 @@ class RadarrClient:
             )
 
         if blocklist:
-            prefix = "Blocklisted current release, " if blocklisted else "No prior grab to blocklist; "
+            prefix = ("Blocklisted current release, " if blocklisted
+                      else "Couldn't identify the release, so it wasn't blocklisted; ")
             message = f"{prefix}deleted '{movie.title}' file, and triggered re-search."
         else:
             message = f"Deleted file (if any) and triggered re-search for '{movie.title}'."
@@ -178,8 +179,9 @@ class RadarrClient:
         return await self._run_movie_workflow(movie=movie, blocklist=False)
 
     async def mark_failed(self, tmdb_id: int) -> FixResult:
-        """Blocklist the most recent grab, delete the on-disk file, and trigger
-        a new search. Falls back to delete+search if there's no grab in history.
+        """Blocklist the grab that produced the on-disk file (the "grabbed"
+        record sharing the newest import's downloadId), delete the file, and
+        trigger a new search. Skips the blocklist if that grab can't be found.
         """
         try:
             movie = await self.get_movie_by_tmdb(tmdb_id)

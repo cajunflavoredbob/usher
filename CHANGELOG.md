@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Mark Failed now blocklists the release that produced the file on disk (the
+  grab matching the newest import) instead of the newest grab, which could be a
+  later download still in flight. When that release can't be identified,
+  nothing is blocklisted and the final reply says so.
 - "Your open tickets" no longer lists other people's Tickets for a user whose Seerr
   account can manage or view all Issues; the list is now limited to the user's
   own.

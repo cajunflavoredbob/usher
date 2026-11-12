@@ -92,3 +92,26 @@ def parse_queue_records(records: list) -> "QueueProgress | None":
     percent = int(round((total - left) / total * 100)) if total > 0 else 0
     return QueueProgress(percent=max(0, min(100, percent)), timeleft=timeleft,
                          download_ids=download_ids, count=count)
+
+
+def find_grab_for_import(records: list[dict]) -> Optional[dict]:
+    """The "grabbed" history record that produced the file now on disk.
+
+    `records` is newest-first history for one item. The newest
+    "downloadFolderImported" event names the release by its `downloadId`;
+    the answer is the "grabbed" record sharing it. Returns None when there
+    is no import event, it has no downloadId, or no grab matches, so the
+    caller skips the blocklist instead of burying a guessed release.
+    """
+    imported = next(
+        (rec for rec in records if rec.get("eventType") == "downloadFolderImported"),
+        None,
+    )
+    download_id = imported.get("downloadId") if imported else None
+    if not download_id:
+        return None
+    return next(
+        (rec for rec in records
+         if rec.get("eventType") == "grabbed" and rec.get("downloadId") == download_id),
+        None,
+    )

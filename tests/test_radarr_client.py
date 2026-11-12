@@ -47,8 +47,8 @@ def _client_with_history(history_records):
 async def test_mark_failed_blocklists_via_per_movie_history():
     # Newest-first, an import above the grab: it must pick the grab, not rec 0.
     client, requests = _client_with_history([
-        {"id": 200, "eventType": "downloadFolderImported"},
-        {"id": 123, "eventType": "grabbed"},
+        {"id": 200, "eventType": "downloadFolderImported", "downloadId": "A"},
+        {"id": 123, "eventType": "grabbed", "downloadId": "A"},
     ])
     result = await client.mark_failed(tmdb_id=42)
     await client.close()
@@ -108,7 +108,59 @@ async def test_mark_failed_no_grab_falls_back_to_delete_search():
 
     assert result.status == "ok"
     assert result.steps_done == ["delete", "search"]
-    assert "No prior grab to blocklist" in result.message
+    assert "Couldn't identify the release" in result.message
+    assert not any("/history/failed/" in r.url.path for r in requests)
+
+
+async def test_mark_failed_blocklists_grab_that_matches_the_import_not_the_newest_grab():
+    # A later grab (B) is in flight; the file on disk came from grab A.
+    client, requests = _client_with_history([
+        {"id": 300, "eventType": "grabbed", "downloadId": "B"},
+        {"id": 200, "eventType": "downloadFolderImported", "downloadId": "A"},
+        {"id": 123, "eventType": "grabbed", "downloadId": "A"},
+    ])
+    result = await client.mark_failed(tmdb_id=42)
+    await client.close()
+
+    assert result.steps_done == ["blocklist", "delete", "search"]
+    failed = [r.url.path for r in requests if "/history/failed/" in r.url.path]
+    assert failed == ["/api/v3/history/failed/123"]
+
+
+async def test_mark_failed_skips_blocklist_when_no_grab_shares_the_import_download_id():
+    client, requests = _client_with_history([
+        {"id": 300, "eventType": "grabbed", "downloadId": "B"},
+        {"id": 200, "eventType": "downloadFolderImported", "downloadId": "A"},
+    ])
+    result = await client.mark_failed(tmdb_id=42)
+    await client.close()
+
+    assert result.status == "ok"
+    assert result.steps_done == ["delete", "search"]
+    assert "wasn't blocklisted" in result.message
+    assert not any("/history/failed/" in r.url.path for r in requests)
+
+
+async def test_mark_failed_skips_blocklist_when_there_is_no_import_event():
+    client, requests = _client_with_history([
+        {"id": 123, "eventType": "grabbed", "downloadId": "A"},
+    ])
+    result = await client.mark_failed(tmdb_id=42)
+    await client.close()
+
+    assert result.steps_done == ["delete", "search"]
+    assert not any("/history/failed/" in r.url.path for r in requests)
+
+
+async def test_mark_failed_skips_blocklist_when_the_import_has_no_download_id():
+    client, requests = _client_with_history([
+        {"id": 200, "eventType": "downloadFolderImported", "downloadId": ""},
+        {"id": 123, "eventType": "grabbed", "downloadId": ""},
+    ])
+    result = await client.mark_failed(tmdb_id=42)
+    await client.close()
+
+    assert result.steps_done == ["delete", "search"]
     assert not any("/history/failed/" in r.url.path for r in requests)
 
 

@@ -524,7 +524,7 @@ async def tk_fix_redownload(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def tk_fix_mark_failed(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Mark the most recent grab as failed → Radarr/Sonarr blocklists + re-searches."""
+    """Mark the grab that produced the file as failed → Radarr/Sonarr blocklists + re-searches."""
     await _apply_fix(update, ctx, strategy="mark_failed")
 
 
