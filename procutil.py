@@ -9,6 +9,26 @@ import signal
 
 logger = logging.getLogger("usher")
 
+# Set once a clean exit is scheduled (restore, token change). The web UI
+# refuses settings saves while it is set, and long poll loops stop, so the
+# in-memory settings can't overwrite a restore and shutdown isn't held up.
+_restart_pending = False
+
+
+def restart_pending() -> bool:
+    return _restart_pending
+
+
+def mark_restart_pending() -> None:
+    global _restart_pending
+    _restart_pending = True
+
+
+def reset_restart_pending() -> None:
+    """Test hook."""
+    global _restart_pending
+    _restart_pending = False
+
 
 def schedule_clean_exit(delay_s: float = 2.0) -> None:
     """Send SIGTERM to self after `delay_s` so PTB's run_polling and
@@ -16,6 +36,7 @@ def schedule_clean_exit(delay_s: float = 2.0) -> None:
     connections, the HTTP server). Falls back to os._exit only if
     the SIGTERM dispatch itself fails."""
     loop = asyncio.get_running_loop()
+    mark_restart_pending()
 
     def _kill() -> None:
         try:

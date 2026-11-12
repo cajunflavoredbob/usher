@@ -53,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   differs from their Plex name. A Display Name can no longer hide a Ticket
   message or send it to someone else, and the Admin is not messaged about their
   own comments.
+- Restoring a backup now restarts Usher promptly. Once a restart is scheduled,
+  the Admin panel refuses saves ("Usher is restarting. Refresh in a moment.") so
+  they cannot overwrite the restored settings, and an unfinished /link sign-in
+  no longer holds the restart up.
 
 ## [0.18.0] - 2026-11-11
 

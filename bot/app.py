@@ -586,6 +586,7 @@ async def _post_init(app: Application) -> None:
         s = settings_store.settings
         if s.telegram_bot_token != boot_token or s.admin_telegram_id != boot_admin_id:
             logger.info("Bot token or admin id changed; exiting in 2s to restart")
+            app.bot_data["shutting_down"] = True
             schedule_clean_exit(2.0)
             return
         logger.info("Settings changed; rebuilding clients")

@@ -59,7 +59,7 @@ from const import (ADMIN_PASSWORD_MIN_CHARS, ADMIN_UPLOAD_MAX_BYTES,
                    MIN_BACKUP_PASSPHRASE_CHARS, RESTORE_MEMBER_MAX_BYTES)
 from former_name import LEGACY_BACKUP_EXT
 from fsutil import atomic_write_bytes
-from procutil import schedule_clean_exit
+from procutil import restart_pending, schedule_clean_exit
 from backup_crypto import is_wrapped, unwrap, wrap
 from settings import (
     DEFAULT_DAILY_AUTOFIX_LIMIT,
@@ -1095,7 +1095,7 @@ async def login_post(request: web.Request) -> web.Response:
     # PBKDF2 auto-upgrade: if the stored hash uses a stale
     # iteration count, rehash with the current count and persist.
     stored_iters = iterations_of(admin.password_hash)
-    if stored_iters and stored_iters < PBKDF2_ITERATIONS:
+    if stored_iters and stored_iters < PBKDF2_ITERATIONS and not restart_pending():
         try:
             admin.password_hash = hash_password(password)
             await store.save_async()
@@ -1889,6 +1889,8 @@ async def newplex_warning_check(request: web.Request) -> web.Response:
         return web.json_response({"show": False})
     finally:
         await client.close()
+    if restart_pending():  # the Seerr call may have outlasted a restore
+        return web.Response(text=RESTARTING_MSG, status=503)
     enabled = main.get("newPlexLogin")
     if enabled is None:
         return web.json_response({"show": False})  # setting absent: unsupported build
@@ -1922,6 +1924,22 @@ async def newplex_warning_dismiss(request: web.Request) -> web.Response:
 
 PUBLIC_ADMIN_PATHS = {"/admin/setup", "/admin/login"}
 
+# POSTs that never write settings, so they stay open during a pending restart.
+_READ_ONLY_POSTS = {"/admin/logout", "/admin/backup"}
+RESTARTING_MSG = "Usher is restarting. Refresh in a moment."
+
+
+def _blocked_by_restart(request: web.Request) -> bool:
+    """True when a restart is scheduled and this request would save settings
+    (the in-memory copy is stale after a restore, so a save would undo it)."""
+    if not restart_pending():
+        return False
+    path = request.path
+    if path == "/admin/seerr/newplex-warning":
+        return True  # GET that auto-saves
+    return (request.method == "POST" and path not in _READ_ONLY_POSTS
+            and not path.startswith("/admin/test/"))
+
 
 @web.middleware
 async def auth_middleware(request: web.Request, handler) -> web.Response:
@@ -1940,6 +1958,9 @@ async def auth_middleware(request: web.Request, handler) -> web.Response:
         # First-run: force /admin/setup until admin exists
         if not store.settings.admin.is_set() and path != "/admin/setup":
             raise web.HTTPFound("/admin/setup")
+        if _blocked_by_restart(request) and (
+                path in PUBLIC_ADMIN_PATHS or _current_user(request)):
+            return _no_store(web.Response(text=RESTARTING_MSG, status=503))
         if path in PUBLIC_ADMIN_PATHS:
             return _no_store(await handler(request))
         if _current_user(request):

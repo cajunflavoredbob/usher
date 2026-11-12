@@ -25,6 +25,7 @@ from telegram.ext import (
 )
 
 from http_util import user_friendly_message
+from procutil import restart_pending
 from plex import PlexClient
 from seerr import SeerrClient
 from store import UserStore
@@ -225,6 +226,10 @@ async def _poll_with_cancel(plex: PlexClient, pin_id: int, max_iters: int,
     warned_user = False
     for _ in range(max_iters):
         if ctx.user_data.get("link_active_loop") != loop_id:
+            return None
+        # A scheduled restart must not wait out the poll (PTB's stop() waits
+        # for in-flight update tasks).
+        if restart_pending() or ctx.application.bot_data.get("shutting_down"):
             return None
         sleep_s = min(
             PLEX_POLL_MAX_BACKOFF_S,
