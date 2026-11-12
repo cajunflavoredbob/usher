@@ -595,6 +595,16 @@ async def prompt_plex_relink(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *,
     record_btn(ctx.application, update.effective_user.id, sent)
 
 
+# Command that restarts the action behind each relink-resume marker kind.
+_RELINK_RESUME_COMMANDS: Final = {
+    "submit_request": "/request",
+    "submit_ticket": "/issue",
+    "ticket_reply": "/tickets",
+    "resolve_close": "/tickets",
+    "resolve_comment": "/tickets",
+}
+
+
 async def run_relink_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
     """Execute a stashed relink-resume marker if one is fresh. Called by
     _finalize_link after a successful (re-)link. The marker is popped BEFORE
@@ -608,7 +618,8 @@ async def run_relink_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> b
         # marker aged out, honesty beats silence.
         await update.effective_message.reply_text(
             "That was a while ago, so I didn't repeat your earlier action, "
-            "start it again with /issue or /tickets if you still need it."
+            f"start it again with {_RELINK_RESUME_COMMANDS.get(marker.get('kind'), '/help')} "
+            "if you still need it."
         )
         return False
     executor = RELINK_RESUME_EXECUTORS.get(marker.get("kind"))

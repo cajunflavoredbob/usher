@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- When a Request or Ticket action expires before you finish re-linking, the
+  message now points you to the command that restarts that action (/request,
+  /issue or /tickets) instead of always naming /issue and /tickets.
 - Shutting down Usher now closes the SABnzbd connection too.
 - After a Plex sign-in finishes or times out, the "Didn't work?" button no
   longer treats the old sign-in as still in progress.

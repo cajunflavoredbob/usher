@@ -8,6 +8,8 @@ import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
 from bot import shared, ticket_flow  # noqa: F401  (registers the submit_ticket executor)
 from bot.link_flow import _finalize_link, cmd_unlink
 from bot.resolve_flow import resolve_comment, resolve_start
@@ -176,3 +178,24 @@ async def test_finalize_link_runs_resume(monkeypatch):
     await _finalize_link(upd, ctx, "fresh-tok")
     executor.assert_called_once()
     assert "relink_resume" not in ctx.user_data
+
+
+# --- expired-marker wording names the right command ---------------------------
+
+
+@pytest.mark.parametrize("kind,command", [
+    ("submit_request", "/request"),
+    ("submit_ticket", "/issue"),
+    ("ticket_reply", "/tickets"),
+    ("resolve_close", "/tickets"),
+    ("resolve_comment", "/tickets"),
+])
+async def test_expired_marker_names_command_for_its_kind(kind, command):
+    upd = make_update(text="", user_id=42)
+    marker = {"kind": kind, "payload": {}, "saved_at": time.time() - 10_000}
+    ctx = make_ctx(user_data={"relink_resume": marker})
+    assert await run_relink_resume(upd, ctx) is False
+    text = upd.effective_message.reply_calls[0]["text"]
+    assert f"start it again with {command} " in text
+    for other in {"/request", "/issue", "/tickets"} - {command}:
+        assert other not in text
