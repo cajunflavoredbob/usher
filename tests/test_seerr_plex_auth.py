@@ -65,3 +65,40 @@ async def test_failed_auth_caches_nothing(monkeypatch):
         await client._as_user("dead-token")
     assert len(client._user_clients) == 0
     await client.close()
+
+
+async def test_unable_to_authenticate_500_sends_one_post(monkeypatch):
+    """A revoked token must cost one POST, not a retried burst."""
+    posts = []
+    real_async_client = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        posts.append(request.url.path)
+        return httpx.Response(500, json={"message": "Unable to authenticate."})
+
+    def patched(*args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(seerr_mod.httpx, "AsyncClient", patched)
+    client = SeerrClient("http://seerr.test", "key")
+    with pytest.raises(PlexTokenInvalidError):
+        await client._as_user("dead-token")
+    assert len(posts) == 1
+    await client.close()
+
+
+async def test_sign_in_post_send_timeout_is_transient(monkeypatch):
+    from http_util import AmbiguousWriteError
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow", request=request)
+
+    client = SeerrClient("http://seerr.test", "key")
+    client._client = httpx.AsyncClient(base_url="http://seerr.test",
+                                       transport=httpx.MockTransport(handler))
+    with pytest.raises(TransientAPIError) as ei:
+        await client.login_with_plex("tok")
+    assert not isinstance(ei.value, AmbiguousWriteError)
+    await client._client.aclose()
+    await client.close()

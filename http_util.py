@@ -137,6 +137,7 @@ async def with_retry(
     backoff_cap: float = 5.0,
     service: str = "service",
     idempotent: bool = True,
+    post_send_transient: bool = False,
 ) -> T:
     """Run an async operation, retrying transient failures per `idempotent`.
 
@@ -147,6 +148,11 @@ async def with_retry(
     raises immediately (the request may already have taken effect, so a retry
     could duplicate it); only 429
     -- an explicit "rejected, not processed" -- is still retried.
+
+    `post_send_transient` only changes how a non-idempotent call's post-send
+    transport failure is classified: TransientAPIError (raised at once, never
+    retried) instead of AmbiguousWriteError. For a POST whose repeat is
+    harmless but whose 5xx must not be retried (sign-in, PIN request).
 
     Permanent errors (including NotFoundAPIError) raise immediately. Backoff =
     backoff_base * 2^attempt + 0-25% jitter, capped at backoff_cap.
@@ -162,6 +168,11 @@ async def with_retry(
             )
         except _TRANSPORT_ERRORS as exc:
             if not idempotent:
+                if post_send_transient:
+                    raise TransientAPIError(
+                        f"{service} connection error: {type(exc).__name__}",
+                        service=service,
+                    ) from exc
                 # Sent, outcome unknown: the write may have landed.
                 raise AmbiguousWriteError(service) from exc
             last_exc = TransientAPIError(
@@ -191,13 +202,16 @@ async def execute(
     service: str,
     retries: int = 3,
     idempotent: Optional[bool] = None,
+    post_send_transient: bool = False,
     **kwargs,
 ) -> httpx.Response:
     """Issue an HTTP request via the given client and return the (guaranteed
     2xx) response, raising APIError on anything else. Retry safety is derived
     from the HTTP method (see IDEMPOTENT_METHODS); pass `idempotent` explicitly
     to override -- e.g. a POST the server treats idempotently, or a GET that
-    must not be retried."""
+    must not be retried. `post_send_transient` only reclassifies a failure
+    after a non-idempotent request was sent (see with_retry); it never adds
+    retries."""
     if idempotent is None:
         idempotent = method.upper() in IDEMPOTENT_METHODS
 
@@ -211,7 +225,7 @@ async def execute(
             async with asyncio.timeout(ATTEMPT_DEADLINE_S):
                 r = await client.request(method, url, **kwargs)
         except TimeoutError as exc:
-            if not idempotent:
+            if not idempotent and not post_send_transient:
                 raise AmbiguousWriteError(service) from exc
             raise TransientAPIError(
                 f"{service} request exceeded {ATTEMPT_DEADLINE_S:.0f}s total",
@@ -220,7 +234,8 @@ async def execute(
         classify_response(r, service=service)
         return r
     return await with_retry(_do, service=service, retries=retries,
-                            idempotent=idempotent)
+                            idempotent=idempotent,
+                            post_send_transient=post_send_transient)
 
 
 def json_or_raise(r: httpx.Response, *, service: str, what: str,

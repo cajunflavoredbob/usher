@@ -433,3 +433,20 @@ async def test_execute_post_idempotent_override_read_timeout_stays_transient():
                       idempotent=True, **_FAST)
     assert r.status_code == 200
     assert client.calls == 2
+
+
+async def test_post_send_transient_post_timeout_is_transient_not_ambiguous():
+    client = _FakeClient([httpx.ReadTimeout("slow"), _response(200)])
+    with pytest.raises(TransientAPIError) as ei:
+        await execute(client, "POST", "/auth/plex", service="Seerr",
+                      post_send_transient=True, **_FAST)
+    assert not isinstance(ei.value, AmbiguousWriteError)
+    assert client.calls == 1
+
+
+async def test_post_send_transient_does_not_retry_5xx():
+    client = _FakeClient([_response(500), _response(200)])
+    with pytest.raises(TransientAPIError):
+        await execute(client, "POST", "/auth/plex", service="Seerr",
+                      post_send_transient=True, **_FAST)
+    assert client.calls == 1

@@ -104,7 +104,7 @@ class PlexClient:
         # deeplink (~30 min lifetime). strong=False returns a 4-char
         # human-friendly code that works at plex.tv/link (~15 min lifetime).
         r = await execute(self._http, "POST", f"{PLEX_API_BASE}/pins",
-                          service=_SERVICE, idempotent=True,
+                          service=_SERVICE, post_send_transient=True,
                           params={"strong": "true" if strong else "false"})
         d = json_or_raise(r, service=_SERVICE, what="PIN request")
         pin_id = d["id"]
