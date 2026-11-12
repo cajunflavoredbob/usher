@@ -86,7 +86,7 @@ def test_bot_command_menu_covers_registered_commands():
     app registers (menu drift shipped 0.15.0 with /request invisible).
     Typed-only commands that left the menu under ADR 0009 (link and unlink,
     which /account replaces; requests, trending and subscriptions, which
-    /request replaces; issue, which /tickets replaces; uninvite and status,
+    /request replaces; issue, which /tickets replaces; invite, uninvite and status,
     which /admin replaces) are excluded."""
     import re
     from bot.app import _BOT_COMMANDS, _ADMIN_BOT_COMMANDS
