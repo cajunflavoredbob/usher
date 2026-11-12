@@ -108,6 +108,11 @@ _ISSUE_KEYS = ("media", "search_results", "seasons", "season", "episode",
 def _clear_issue_state(ctx) -> None:
     for key in _ISSUE_KEYS:
         ctx.user_data.pop(key, None)
+    # A resume marker for this flow's own submit is stale once the flow ends;
+    # markers other flows left (a Request, a Ticket reply) stay.
+    marker = ctx.user_data.get("relink_resume")
+    if isinstance(marker, dict) and marker.get("kind") == "submit_ticket":
+        ctx.user_data.pop("relink_resume", None)
 
 
 async def _ticket_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:

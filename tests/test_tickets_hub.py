@@ -802,6 +802,24 @@ async def test_issue_cancel_keeps_version_counters_and_relink_resume():
     assert "media" not in ctx.user_data
 
 
+async def test_issue_cancel_drops_its_own_submit_resume_marker():
+    ctx = _submit_ctx()
+    ctx.user_data["relink_resume"] = {"kind": "submit_ticket", "payload": {},
+                                      "saved_at": 0}
+    await ticket_cancel(make_update(callback_data="cancel", user_id=USER_ID),
+                        ctx)
+    assert "relink_resume" not in ctx.user_data
+
+
+async def test_issue_cancel_keeps_another_flows_resume_marker():
+    ctx = _submit_ctx()
+    marker = {"kind": "submit_request", "payload": {}, "saved_at": 0}
+    ctx.user_data["relink_resume"] = marker
+    await ticket_cancel(make_update(callback_data="cancel", user_id=USER_ID),
+                        ctx)
+    assert ctx.user_data["relink_resume"] == marker
+
+
 async def test_stale_confirm_version_does_not_match_after_issue_then_request():
     """After /issue a new /request bumps the kept counter past the old
     card's version, so an older rqgo:5 card fails the version check."""
