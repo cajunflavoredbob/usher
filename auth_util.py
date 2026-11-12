@@ -211,7 +211,7 @@ def load_or_create_setup_token(data_dir: Path) -> Optional[str]:
     # Atomic + durable (fsutil): consistent with the other first-boot writes.
     atomic_write_text(p, token)
     logger.warning(
-        "First-run setup token generated. Required to access /admin/setup. "
+        "First-run setup token generated. Required to submit the /admin/setup form. "
         "Token: %s (stored at %s; delete the file to invalidate)",
         token, p,
     )

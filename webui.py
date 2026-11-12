@@ -864,7 +864,15 @@ async def setup_get(request: web.Request) -> web.Response:
             status=503)
     csrf = csrf_for_request(request)
     s = store.settings
-    admin_tg_val = str(s.admin_telegram_id) if s.admin_telegram_id else ""
+    # This page is public until an Admin account exists, so a stored secret or
+    # the Admin's Telegram id is never echoed into it; a note says it is kept.
+    keep_note = '<div class="note">Already set. Leave blank to keep it.</div>'
+    tok_set = bool(s.telegram_bot_token)
+    admin_set = bool(s.admin_telegram_id)
+    key_set = bool(s.seerr_api_key)
+    tok_req = "" if tok_set else " required"
+    admin_req = "" if admin_set else " required"
+    key_req = "" if key_set else " required"
 
     token_field = ""
     if setup_token:
@@ -892,15 +900,18 @@ async def setup_get(request: web.Request) -> web.Response:
 
   <h2>Telegram</h2>
   <label>Telegram Bot Token <span class="note">from @BotFather</span></label>
-  <input type="password" name="telegram_bot_token" value="{_esc(s.telegram_bot_token)}" required>
+  <input type="password" name="telegram_bot_token" autocomplete="off"{tok_req}>
+  {keep_note if tok_set else ""}
   <label>Admin Telegram User ID <span class="note">DM @userinfobot</span></label>
-  <input type="text" name="admin_telegram_id" value="{_esc(admin_tg_val)}" inputmode="numeric" pattern="[0-9]+" required>
+  <input type="text" name="admin_telegram_id" inputmode="numeric" pattern="[0-9]+"{admin_req}>
+  {keep_note if admin_set else ""}
 
   <h2>Seerr</h2>
   <label>Seerr URL</label>
   <input type="text" name="seerr_url" value="{_esc(s.seerr_url)}" placeholder="http://192.0.2.10:5056" required>
   <label>Seerr API Key</label>
-  <input type="password" name="seerr_api_key" value="{_esc(s.seerr_api_key)}" required>
+  <input type="password" name="seerr_api_key" autocomplete="off"{key_req}>
+  {keep_note if key_set else ""}
 
   <button type="submit">Save &amp; Start Usher</button>
   <div class="note">Saving restarts the container.</div>
@@ -940,6 +951,15 @@ async def setup_post(request: web.Request) -> web.Response:
     admin_tg_raw = (form.get("admin_telegram_id") or "").strip()
     seerr_url = (form.get("seerr_url") or "").strip()
     seerr_api_key = (form.get("seerr_api_key") or "").strip()
+
+    # A blank secret keeps the stored value (the form never shows it back).
+    stored = store.settings
+    if not bot_token:
+        bot_token = stored.telegram_bot_token
+    if not seerr_api_key:
+        seerr_api_key = stored.seerr_api_key
+    if not admin_tg_raw and stored.admin_telegram_id:
+        admin_tg_raw = str(stored.admin_telegram_id)
 
     errors: list[str] = []
     if not username:

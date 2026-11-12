@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Container logs no longer print the bot token or the SABnzbd API key in
   request URLs, and finishing first-run setup now restarts Usher into
   full mode instead of hanging.
+- The first-run setup page no longer shows a bot token, Seerr API key or Admin
+  Telegram id that were set from the environment. It says "Already set" and
+  keeps the stored value when you leave the field blank.
 
 ## [0.18.0] - 2026-11-11
 
