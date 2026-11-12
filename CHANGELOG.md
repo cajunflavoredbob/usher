@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Shutting down Usher now closes the SABnzbd connection too.
 - After a Plex sign-in finishes or times out, the "Didn't work?" button no
   longer treats the old sign-in as still in progress.
 - Finishing or cancelling /issue no longer resets the counters that retire old

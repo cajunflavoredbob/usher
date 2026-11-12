@@ -713,7 +713,7 @@ async def _post_shutdown(app: Application) -> None:
     # Close current API clients explicitly so httpx connection pools don't
     # leak. PlexClient is built once at startup and stashed under "plex";
     # the arr clients are managed by _build_clients_from_settings.
-    for key in ("seerr", "radarr", "sonarr", "plex"):
+    for key in ("seerr", "radarr", "sonarr", "sabnzbd", "plex"):
         client = app.bot_data.get(key)
         if client is not None and hasattr(client, "close"):
             try:
