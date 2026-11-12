@@ -633,7 +633,7 @@ def _settings_page(
   <label>Admin Telegram User ID <span class="note">DM @userinfobot</span></label>
   <input type="text" name="admin_telegram_id" value="{_esc(admin_tg_val)}" inputmode="numeric" pattern="[0-9]+" required>
   <label>Usher Admin UI URL <span class="note">optional</span></label>
-  <input type="text" name="usher_public_url" value="{_esc(s.usher_public_url)}" placeholder="http://192.168.1.15:8765 or https://usher.example.com">
+  <input type="text" name="usher_public_url" value="{_esc(s.usher_public_url)}" placeholder="http://192.0.2.15:8765 or https://usher.example.com">
   <div class="note">Linked in the bot's startup DM.</div>
 
   <h2>Notifications</h2>
@@ -664,7 +664,7 @@ def _settings_page(
     <button type="button" id="newplex-dismiss">Dismiss</button>
   </div>
   <label>Seerr URL</label>
-  <input type="text" name="seerr_url" value="{_esc(s.seerr_url)}" placeholder="http://192.168.1.10:5056" required>
+  <input type="text" name="seerr_url" value="{_esc(s.seerr_url)}" placeholder="http://192.0.2.10:5056" required>
   <label>Seerr API Key</label>
   <input type="password" name="seerr_api_key" value="{_esc(s.seerr_api_key)}" autocomplete="off" required>
   <label>Seerr Public URL <span class="note">optional; used in user-facing links</span></label>
@@ -684,12 +684,12 @@ def _settings_page(
   <p class="intro">On a Video, Audio, or Subtitles issue, Radarr or Sonarr deletes the file and searches for a replacement.</p>
 
   <label>Radarr URL <span class="note">optional</span></label>
-  <input type="text" name="radarr_url" value="{_esc(s.radarr_url)}" placeholder="http://192.168.1.10:7878">
+  <input type="text" name="radarr_url" value="{_esc(s.radarr_url)}" placeholder="http://192.0.2.10:7878">
   <label>Radarr API Key</label>
   <input type="password" name="radarr_api_key" value="{_esc(s.radarr_api_key)}" autocomplete="off">
 
   <label>Sonarr URL <span class="note">optional</span></label>
-  <input type="text" name="sonarr_url" value="{_esc(s.sonarr_url)}" placeholder="http://192.168.1.10:8989">
+  <input type="text" name="sonarr_url" value="{_esc(s.sonarr_url)}" placeholder="http://192.0.2.10:8989">
   <label>Sonarr API Key</label>
   <input type="password" name="sonarr_api_key" value="{_esc(s.sonarr_api_key)}" autocomplete="off">
 
@@ -727,7 +727,7 @@ def _settings_page(
   <h2>SABnzbd</h2>
   <p class="intro">Optional. Bumps downloads this bot triggers up SABnzbd's queue.</p>
   <label>SABnzbd URL <span class="note">optional</span></label>
-  <input type="text" name="sabnzbd_url" value="{_esc(s.sabnzbd_url)}" placeholder="http://192.168.1.10:8080">
+  <input type="text" name="sabnzbd_url" value="{_esc(s.sabnzbd_url)}" placeholder="http://192.0.2.10:8080">
   <label>SABnzbd API Key</label>
   <input type="password" name="sabnzbd_api_key" value="{_esc(s.sabnzbd_api_key)}" autocomplete="off">
   <label>Auto-bump priority</label>
@@ -898,7 +898,7 @@ async def setup_get(request: web.Request) -> web.Response:
 
   <h2>Seerr</h2>
   <label>Seerr URL</label>
-  <input type="text" name="seerr_url" value="{_esc(s.seerr_url)}" placeholder="http://192.168.1.10:5056" required>
+  <input type="text" name="seerr_url" value="{_esc(s.seerr_url)}" placeholder="http://192.0.2.10:5056" required>
   <label>Seerr API Key</label>
   <input type="password" name="seerr_api_key" value="{_esc(s.seerr_api_key)}" required>
 
