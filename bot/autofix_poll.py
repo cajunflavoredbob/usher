@@ -157,13 +157,22 @@ async def _paint_progress(ctx: ContextTypes.DEFAULT_TYPE, store: UserStore,
         await ctx.bot.edit_message_text(
             chat_id=fix.chat_id,
             message_id=fix.message_id,
-            text=(f"🔧 Auto-fix: <b>{html.escape(fix.label)}</b>\n{line}"),
+            text=f"{_progress_header(fix)}\n{line}",
             parse_mode="HTML",
             reply_markup=markup,
         )
         await store.set_autofix_progress(fix.id, line)
     except Exception:
         logger.debug("autofix progress paint failed (non-fatal)", exc_info=True)
+
+
+def _progress_header(fix) -> str:
+    """The Progress card's first line. A Reporter's /issue Auto-fix says
+    "Auto-fix"; an admin Fix says its own name, as its card did when painted."""
+    label = f"<b>{html.escape(fix.label)}</b>"
+    if fix.action_name:
+        return f"🔧 {html.escape(fix.action_name)} for #{fix.ticket_id}: {label}"
+    return f"🔧 Auto-fix: {label}"
 
 
 def _ticket_line(fix) -> list[str]:

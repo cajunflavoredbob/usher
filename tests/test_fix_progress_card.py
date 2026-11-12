@@ -203,3 +203,10 @@ async def test_ticket_back_shows_ticket_with_buttons():
     await tk_back(upd, ctx)
     assert _flat(upd.callback_query.edits[-1]["reply_markup"])[-1] == (
         "⬅️ Tickets", "tkhl")
+
+
+async def test_admin_fix_enqueues_its_action_name_for_the_poller():
+    ctx = _ctx()
+    ctx.bot_data["store"].add_pending_autofix = AsyncMock(return_value=41)
+    await _fix(ctx)
+    assert ctx.bot_data["store"].add_pending_autofix.call_args.kwargs["action_name"] == "Redownload"

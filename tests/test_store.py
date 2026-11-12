@@ -281,3 +281,16 @@ def test_encryption_key_env_prefers_new_name(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("USHER_ENCRYPTION_KEY", new_key)
     monkeypatch.setenv(legacy_env("ENCRYPTION_KEY"), Fernet.generate_key().decode())
     assert TokenCrypto(key_path=tmp_path / "k.bin").key == new_key.encode()
+
+
+async def test_pending_autofix_keeps_the_fix_action_name(fresh_store: UserStore):
+    await fresh_store.add_pending_autofix(
+        chat_id=100, user_id=42, media_type="movie",
+        label="Movie", ticket_id=1, ticket_url="http://x/issues/1",
+        radarr_movie_id=555)
+    await fresh_store.add_pending_autofix(
+        chat_id=100, user_id=42, media_type="movie",
+        label="Movie", ticket_id=2, ticket_url="http://x/issues/2",
+        radarr_movie_id=556, action_name="Redownload")
+    rows = await fresh_store.list_pending_autofixes()
+    assert [r.action_name for r in rows] == ["", "Redownload"]

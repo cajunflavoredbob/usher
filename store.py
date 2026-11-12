@@ -120,6 +120,8 @@ class PendingAutofix:
     bumped: int = 0                     # SABnzbd priority boost applied
     reply_markup: str = ""              # the card's keyboard as JSON, kept on
                                         # each progress edit ("" = none)
+    action_name: str = ""               # an admin Fix's own name ("Redownload");
+                                        # "" = a Reporter's /issue Auto-fix
 
     async def is_complete(self, radarr, sonarr) -> tuple[bool, str]:
         """Returns (done, extra_suffix). Polymorphic dispatch over media_type
@@ -327,6 +329,7 @@ class UserStore:
             ("last_progress",        "ALTER TABLE pending_autofixes ADD COLUMN last_progress TEXT NOT NULL DEFAULT ''"),
             ("bumped",               "ALTER TABLE pending_autofixes ADD COLUMN bumped INTEGER NOT NULL DEFAULT 0"),
             ("reply_markup",         "ALTER TABLE pending_autofixes ADD COLUMN reply_markup TEXT NOT NULL DEFAULT ''"),
+            ("action_name",          "ALTER TABLE pending_autofixes ADD COLUMN action_name TEXT NOT NULL DEFAULT ''"),
         ],
     }
 
@@ -763,6 +766,7 @@ class UserStore:
         sonarr_season: Optional[int] = None,
         expected_episode_ids: Optional[list[int]] = None,
         message_id: Optional[int] = None,
+        action_name: str = "",
     ) -> int:
         def _do() -> int:
             with self._conn() as c:
@@ -772,14 +776,14 @@ class UserStore:
                         chat_id, user_id, media_type,
                         radarr_movie_id, sonarr_series_id, sonarr_episode_id, sonarr_season,
                         expected_episode_ids, label, issue_id, issue_url,
-                        message_id, timeout_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', ?))
+                        message_id, action_name, timeout_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', ?))
                     """,
                     (
                         chat_id, user_id, media_type,
                         radarr_movie_id, sonarr_series_id, sonarr_episode_id, sonarr_season,
                         json.dumps(expected_episode_ids or []), label, ticket_id, ticket_url,
-                        message_id, f"+{timeout_hours} hours",
+                        message_id, action_name, f"+{timeout_hours} hours",
                     ),
                 )
                 return cur.lastrowid
@@ -795,7 +799,7 @@ class UserStore:
                            sonarr_series_id, sonarr_episode_id, sonarr_season,
                            expected_episode_ids, label, issue_id, issue_url,
                            started_at, timeout_at, message_id, last_progress,
-                           bumped, reply_markup
+                           bumped, reply_markup, action_name
                     FROM pending_autofixes
                     WHERE status = 'pending'
                     ORDER BY id
@@ -823,6 +827,7 @@ class UserStore:
                     message_id=r[14], last_progress=r[15] or "",
                     bumped=r[16] or 0,
                     reply_markup=r[17] or "",
+                    action_name=r[18] or "",
                 ))
             except Exception:
                 logger.exception("Skipping corrupt pending_autofix row id=%s", r[0])

@@ -570,7 +570,7 @@ async def _resolve_fix_context(
 
 async def _enqueue_fix_completion(
     store: UserStore, *, fix: _FixContext, result: FixResult,
-    chat_id: int, user_id: int, ticket_url: str,
+    chat_id: int, user_id: int, ticket_url: str, action_name: str = "",
 ) -> int:
     """Build the pending_autofix row from result.poll_info; returns the row
     id so the caller can attach the Fix's Progress card to it. Raises on
@@ -583,6 +583,7 @@ async def _enqueue_fix_completion(
         "label": fix.label or f"#{fix.ticket_id}",
         "ticket_id": fix.ticket_id,
         "ticket_url": ticket_url,
+        "action_name": action_name,
     }
     if fix.media["type"] == "movie":
         kwargs["radarr_movie_id"] = poll_info.get("movie_id")
@@ -749,6 +750,7 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
                     chat_id=q.message.chat_id,
                     user_id=update.effective_user.id,
                     ticket_url=f"{seerr.public_url}/issues/{ticket_id}",
+                    action_name=action_name,
                 )
             except Exception:
                 logger.exception("failed to enqueue pending autofix for #%d", ticket_id)
