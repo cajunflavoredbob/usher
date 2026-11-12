@@ -982,8 +982,8 @@ async def setup_post(request: web.Request) -> web.Response:
     if reload_cb:
         try:
             await reload_cb()
-        except Exception:
-            logger.exception("on_settings_changed failed during setup")
+        except Exception as exc:
+            logger.exception("on_settings_changed failed during setup", exc_info=exc)
 
     body = _page("Setup", """
 <h1>Setup Complete</h1>

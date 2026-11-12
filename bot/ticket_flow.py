@@ -122,8 +122,8 @@ async def _ticket_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
                     reply_markup=end_markup(hub, TICKETS_REPORT),
                 )
                 record_btn(ctx.application, update.effective_user.id, sent)
-    except Exception:
-        logger.debug("new-Ticket timeout notice failed (non-fatal)", exc_info=True)
+    except Exception as exc:
+        logger.debug("new-Ticket timeout notice failed (non-fatal)", exc_info=exc)
     return ConversationHandler.END
 
 
@@ -948,8 +948,8 @@ async def _submit_ticket_inner(
             await store.set_autofix_message(
                 pending_id, sent.message_id,
                 reply_markup=markup.to_json() if markup is not None else "")
-        except Exception:
-            logger.exception("couldn't attach autofix card message")
+        except Exception as exc:
+            logger.exception("couldn't attach autofix card message", exc_info=exc)
     ctx.user_data.clear()
     return ConversationHandler.END
 

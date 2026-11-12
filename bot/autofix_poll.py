@@ -102,10 +102,10 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 logger.info("poll: media removed for fix %d; marking failed", fix.id)
                 await store.mark_autofix_status(fix.id, "failed")
                 await _notify_media_gone(ctx, fix)
-            except TransientAPIError:
-                logger.debug("poll: transient error for fix %d; will retry next tick", fix.id)
-            except Exception:
-                logger.exception("poll failed for fix %d", fix.id)
+            except TransientAPIError as exc:
+                logger.debug("poll: transient error for fix %d; will retry next tick: %s", fix.id, exc)
+            except Exception as exc:
+                logger.exception("poll failed for fix %d", fix.id, exc_info=exc)
         finally:
             _inflight.discard(fix.id)
 
@@ -162,8 +162,8 @@ async def _paint_progress(ctx: ContextTypes.DEFAULT_TYPE, store: UserStore,
             reply_markup=markup,
         )
         await store.set_autofix_progress(fix.id, line)
-    except Exception:
-        logger.debug("autofix progress paint failed (non-fatal)", exc_info=True)
+    except Exception as exc:
+        logger.debug("autofix progress paint failed (non-fatal)", exc_info=exc)
 
 
 def _progress_header(fix) -> str:
@@ -189,8 +189,8 @@ async def _notify_media_gone(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:
     ]
     try:
         await ctx.bot.send_message(chat_id=fix.chat_id, text="\n".join(lines), parse_mode="HTML")
-    except Exception:
-        logger.exception("notify_media_gone send_message failed for fix %d", fix.id)
+    except Exception as exc:
+        logger.exception("notify_media_gone send_message failed for fix %d", fix.id, exc_info=exc)
 
 
 async def _notify_complete(ctx: ContextTypes.DEFAULT_TYPE, fix, extra: str = "") -> None:
@@ -212,8 +212,8 @@ async def _notify_complete(ctx: ContextTypes.DEFAULT_TYPE, fix, extra: str = "")
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
         record_btn(ctx.application, fix.user_id, sent)
-    except Exception:
-        logger.exception("notify_complete send_message failed for fix %d", fix.id)
+    except Exception as exc:
+        logger.exception("notify_complete send_message failed for fix %d", fix.id, exc_info=exc)
 
 
 async def _notify_timeout(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:
@@ -240,7 +240,7 @@ async def _notify_timeout(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
         record_btn(ctx.application, fix.user_id, sent)
-    except Exception:
-        logger.exception("notify_timeout send_message failed for fix %d", fix.id)
+    except Exception as exc:
+        logger.exception("notify_timeout send_message failed for fix %d", fix.id, exc_info=exc)
 
 

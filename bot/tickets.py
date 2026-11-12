@@ -100,8 +100,8 @@ async def _require_admin(
         return True
     try:
         await q.answer("Admin only.", show_alert=False)
-    except TelegramError:
-        logger.debug("callback answer failed", exc_info=True)
+    except TelegramError as exc:
+        logger.debug("callback answer failed", exc_info=exc)
     # Local import to avoid a top-level auth_util dep just for this entry.
     from auth_util import audit
     audit("admin_callback_blocked",
@@ -368,8 +368,8 @@ async def _build_ticket_detail(
                     episode=ticket.problem_episode,
                 )
                 media_label = f"{m_emoji} {bare}"
-            except Exception:
-                logger.exception("get_media_title failed for #%d", ticket_id)
+            except Exception as exc:
+                logger.exception("get_media_title failed for #%d", ticket_id, exc_info=exc)
     except PlexTokenInvalidError:
         raise  # callers show the re-link prompt; a degraded view can't help
     except Exception:
@@ -573,14 +573,14 @@ async def _resolve_fix_context(
     label_year = ""
     try:
         label_title, label_year = await seerr.get_media_title(media_type, tmdb_id)
-    except Exception:
-        logger.exception("get_media_title failed for #%d", ticket_id)
+    except Exception as exc:
+        logger.exception("get_media_title failed for #%d", ticket_id, exc_info=exc)
     if media_type == "tv":
         try:
             _seasons, tvdb_id = await seerr.get_tv_seasons(tmdb_id)
             media["tvdb_id"] = tvdb_id
-        except Exception:
-            logger.exception("get_tv_seasons failed for #%d", ticket_id)
+        except Exception as exc:
+            logger.exception("get_tv_seasons failed for #%d", ticket_id, exc_info=exc)
 
     label = format_media_label(
         label_title, label_year,
@@ -683,8 +683,8 @@ class _ProgressCard:
             else:
                 await bot.edit_message_text(chat_id=self._chat_id,
                                             message_id=self.message_id, text=text)
-        except Exception:
-            logger.exception("couldn't show the fix progress card")
+        except Exception as exc:
+            logger.exception("couldn't show the fix progress card", exc_info=exc)
 
     async def delete(self) -> None:
         if self.message_id is None:
@@ -692,8 +692,8 @@ class _ProgressCard:
         try:
             await self._ctx.bot.delete_message(chat_id=self._chat_id,
                                                message_id=self.message_id)
-        except Exception:
-            logger.exception("couldn't delete the fix progress card")
+        except Exception as exc:
+            logger.exception("couldn't delete the fix progress card", exc_info=exc)
         self.message_id = None
 
 
@@ -802,8 +802,8 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
             try:
                 await store.set_autofix_message(pending_id, card.message_id,
                                                 reply_markup="")
-            except Exception:
-                logger.exception("couldn't attach autofix card for #%d", ticket_id)
+            except Exception as exc:
+                logger.exception("couldn't attach autofix card for #%d", ticket_id, exc_info=exc)
         return
     finally:
         end_action(ctx, media_key)
@@ -889,8 +889,8 @@ async def tk_reply_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         # then prompt for the reply text in a separate message.
         try:
             await q.edit_message_reply_markup(reply_markup=None)
-        except Exception:
-            logger.debug("Couldn't clear buttons on ticket #%d message", ticket_id)
+        except Exception as exc:
+            logger.debug("Couldn't clear buttons on ticket #%d message: %s", ticket_id, exc)
         await q.message.reply_text(
             f"Send the reply text for ticket #{ticket_id} (or /cancel)."
         )
@@ -933,8 +933,8 @@ async def tk_close_with_comment_start(update: Update, ctx: ContextTypes.DEFAULT_
         # then prompt for the closing comment in a separate message.
         try:
             await q.edit_message_reply_markup(reply_markup=None)
-        except Exception:
-            logger.debug("Couldn't clear buttons on ticket #%d message", ticket_id)
+        except Exception as exc:
+            logger.debug("Couldn't clear buttons on ticket #%d message: %s", ticket_id, exc)
         await q.message.reply_text(
             f"Send the closing comment for ticket #{ticket_id} (or /cancel)."
         )
@@ -1082,8 +1082,8 @@ async def _tk_reply_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
             )
             if markup is not None and update.effective_user is not None:
                 record_btn(ctx.application, update.effective_user.id, sent)
-    except Exception:
-        logger.debug("tk-reply-timeout notice failed (non-fatal)", exc_info=True)
+    except Exception as exc:
+        logger.debug("tk-reply-timeout notice failed (non-fatal)", exc_info=exc)
     return ConversationHandler.END
 
 

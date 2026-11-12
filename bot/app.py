@@ -183,8 +183,8 @@ def _build_clients_from_settings(app: Application) -> None:
             for key, client in old_clients:
                 try:
                     await client.close()  # type: ignore[attr-defined]
-                except Exception:
-                    logger.exception("Error closing prior %s client", key)
+                except Exception as exc:
+                    logger.exception("Error closing prior %s client", key, exc_info=exc)
             # Grace elapsed and clients closed: drop them from the
             # shutdown-fallback list so it doesn't grow across reloads.
             tracked = app.bot_data.get("_pending_old_clients") or []
@@ -511,8 +511,8 @@ async def _prune_autofix_history_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         pruned = await store.prune_autofix_history()
         if any(pruned):
             logger.info("Pruned autofix history: %d pending rows, %d events", *pruned)
-    except Exception:
-        logger.exception("Autofix-history prune failed (will retry tomorrow)")
+    except Exception as exc:
+        logger.exception("Autofix-history prune failed (will retry tomorrow)", exc_info=exc)
 
 
 # Telegram's command menu, registered at every startup so it always matches
@@ -546,8 +546,8 @@ async def _register_commands(app: Application) -> None:
             )
         logger.info("Registered %d bot commands (+admin scope)",
                     len(_BOT_COMMANDS))
-    except Exception:
-        logger.exception("set_my_commands failed (menu may be stale)")
+    except Exception as exc:
+        logger.exception("set_my_commands failed (menu may be stale)", exc_info=exc)
 
 
 async def _post_init(app: Application) -> None:
@@ -623,8 +623,8 @@ async def _post_init(app: Application) -> None:
         pruned = await store.prune_autofix_history()
         if any(pruned):
             logger.info("Pruned autofix history: %d pending rows, %d events", *pruned)
-    except Exception:
-        logger.exception("Startup autofix-history prune failed (non-fatal)")
+    except Exception as exc:
+        logger.exception("Startup autofix-history prune failed (non-fatal)", exc_info=exc)
 
     admin_id = app.bot_data["admin_id"]
     base = (settings_store.settings.usher_public_url or "").strip().rstrip("/")
@@ -668,8 +668,8 @@ async def _post_init(app: Application) -> None:
             )
         else:
             logger.warning("Couldn't DM admin %d on startup: %s", admin_id, exc)
-    except Exception:
-        logger.exception("Couldn't DM admin %d on startup (unexpected)", admin_id)
+    except Exception as exc:
+        logger.exception("Couldn't DM admin %d on startup (unexpected)", admin_id, exc_info=exc)
 
     store: UserStore = app.bot_data["store"]
     try:
@@ -687,8 +687,8 @@ async def _post_init(app: Application) -> None:
         )
         try:
             await app.bot.send_message(chat_id=admin_id, text=warn)
-        except Exception:
-            logger.warning("Couldn't DM admin %d about %d decrypt failure(s)", admin_id, n_failed)
+        except Exception as exc:
+            logger.warning("Couldn't DM admin %d about %d decrypt failure(s): %s", admin_id, n_failed, exc)
 
 
 async def _post_shutdown(app: Application) -> None:
@@ -704,8 +704,8 @@ async def _post_shutdown(app: Application) -> None:
     for client in app.bot_data.get("_pending_old_clients") or []:
         try:
             await client.close()
-        except Exception:
-            logger.exception("Error closing retired client on shutdown")
+        except Exception as exc:
+            logger.exception("Error closing retired client on shutdown", exc_info=exc)
 
     # Close current API clients explicitly so httpx connection pools don't
     # leak. PlexClient is built once at startup and stashed under "plex";
@@ -715,16 +715,16 @@ async def _post_shutdown(app: Application) -> None:
         if client is not None and hasattr(client, "close"):
             try:
                 await client.close()
-            except Exception:
-                logger.exception("Error closing %s on shutdown", key)
+            except Exception as exc:
+                logger.exception("Error closing %s on shutdown", key, exc_info=exc)
 
     runner = app.bot_data.get("http_runner")
     if runner is not None:
         try:
             await runner.cleanup()
             logger.info("HTTP server stopped")
-        except Exception:
-            logger.exception("HTTP server cleanup failed")
+        except Exception as exc:
+            logger.exception("HTTP server cleanup failed", exc_info=exc)
 
 
 # user_data keys populated by the ConversationHandlers (link, new Ticket,
@@ -765,8 +765,8 @@ async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if ctx.user_data is not None:
             for key in _CONVERSATION_USER_DATA_KEYS:
                 ctx.user_data.pop(key, None)
-    except Exception:
-        logger.debug("on_error user_data cleanup failed (non-fatal)", exc_info=True)
+    except Exception as exc:
+        logger.debug("on_error user_data cleanup failed (non-fatal)", exc_info=exc)
     # Last-resort user feedback: without it a crash mid-flow is a silent
     # dead end (the flow evaporates and the next message hits a bot that
     # forgot the conversation). Best-effort only.
@@ -778,8 +778,8 @@ async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 text="⚠️ Something went wrong on my end. Please run the "
                      "command again.",
             )
-    except Exception:
-        logger.debug("on_error user notification failed (non-fatal)", exc_info=True)
+    except Exception as exc:
+        logger.debug("on_error user notification failed (non-fatal)", exc_info=exc)
 
 
 def _migrate_legacy_env_into_settings(settings_store: SettingsStore) -> bool:

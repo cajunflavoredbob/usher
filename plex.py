@@ -92,8 +92,8 @@ class PlexClient:
             existing = self.client_id_path.read_text().strip()
             if existing:
                 return existing
-        except FileNotFoundError:
-            logger.debug("no stored client id yet")
+        except FileNotFoundError as exc:
+            logger.debug("no stored client id yet: %s", exc)
         cid = str(uuid.uuid4())
         atomic_write_text(self.client_id_path, cid, chmod=None)
         logger.info("Generated new Plex client identifier")

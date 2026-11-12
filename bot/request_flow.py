@@ -169,8 +169,8 @@ async def _request_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
                     reply_markup=end_markup(hub, REQUESTS_NEW),
                 )
                 record_btn(ctx.application, update.effective_user.id, sent)
-    except Exception:
-        logger.debug("request-timeout notice failed (non-fatal)", exc_info=True)
+    except Exception as exc:
+        logger.debug("request-timeout notice failed (non-fatal)", exc_info=exc)
     return ConversationHandler.END
 
 
@@ -533,8 +533,8 @@ async def request_info_dismiss(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
         return
     try:
         await q.message.delete()
-    except Exception:
-        logger.debug("detail-card delete failed (non-fatal)", exc_info=True)
+    except Exception as exc:
+        logger.debug("detail-card delete failed (non-fatal)", exc_info=exc)
 
 
 async def request_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
@@ -776,8 +776,8 @@ async def request_select_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     try:
         await q.edit_message_reply_markup(
             _season_keyboard(seasons, selected, version))
-    except Exception:
-        logger.debug("season keyboard edit failed (non-fatal)", exc_info=True)
+    except Exception as exc:
+        logger.debug("season keyboard edit failed (non-fatal)", exc_info=exc)
     return RQ_PICK_SEASONS
 
 
@@ -1062,8 +1062,8 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                             else "⏳ Waiting for approval…"),
             parse_mode="HTML",
         )
-    except Exception:
-        logger.exception("couldn't send the Progress card (no row added)")
+    except Exception as exc:
+        logger.exception("couldn't send the Progress card (no row added)", exc_info=exc)
     else:
         try:
             # The Progress card row also drives the SABnzbd priority bump.
@@ -1079,8 +1079,8 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                 status="grabbing" if approved else "waiting",
                 timeout_hours=PROGRESS_CARD_TIMEOUT_HOURS,
             )
-        except Exception:
-            logger.exception("couldn't enqueue the Progress card row (card stays static)")
+        except Exception as exc:
+            logger.exception("couldn't enqueue the Progress card row (card stays static)", exc_info=exc)
     _clear_rq_state(ctx)
     return ConversationHandler.END
 

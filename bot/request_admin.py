@@ -129,8 +129,8 @@ async def _edit_dm(q, text: str, markup) -> None:
         await q.edit_message_text(text, parse_mode="HTML",
                                   disable_web_page_preview=True,
                                   reply_markup=markup)
-    except Exception:
-        logger.exception("Couldn't edit the Admin's Request DM")
+    except Exception as exc:
+        logger.exception("Couldn't edit the Admin's Request DM", exc_info=exc)
 
 
 async def rq_admin_action(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:

@@ -344,8 +344,8 @@ async def edit_or_send(q, text: str, **kwargs):
         return await q.edit_message_text(text, **kwargs)
     except telegram.error.BadRequest:
         pass
-    except Exception:
-        logger.exception("edit_message_text failed unexpectedly; falling back to send")
+    except Exception as exc:
+        logger.exception("edit_message_text failed unexpectedly; falling back to send", exc_info=exc)
     try:
         return await q.message.reply_text(text, **kwargs)
     except Exception:
@@ -467,8 +467,8 @@ async def send_typing(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         await ctx.bot.send_chat_action(chat_id=update.effective_chat.id,
                                        action="typing")
-    except Exception:
-        logger.debug("send_chat_action failed", exc_info=True)
+    except Exception as exc:
+        logger.debug("send_chat_action failed", exc_info=exc)
 
 
 # Per-media action serialization
@@ -525,8 +525,8 @@ async def unmatched_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
         return
     try:
         await q.answer("That menu has expired. Run the command again.")
-    except Exception:
-        logger.debug("expired-callback answer failed", exc_info=True)
+    except Exception as exc:
+        logger.debug("expired-callback answer failed", exc_info=exc)
     try:
         await q.edit_message_reply_markup(reply_markup=None)
     except Exception:
@@ -644,12 +644,12 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         reason = "Use the most recent message - this menu is from an older one."
     try:
         await q.answer(reason, show_alert=False)
-    except telegram.error.TelegramError:
-        logger.debug("callback answer failed", exc_info=True)
+    except telegram.error.TelegramError as exc:
+        logger.debug("callback answer failed", exc_info=exc)
     try:
         await q.edit_message_reply_markup(reply_markup=None)
-    except telegram.error.TelegramError:
-        logger.debug("edit_message_reply_markup failed", exc_info=True)
+    except telegram.error.TelegramError as exc:
+        logger.debug("edit_message_reply_markup failed", exc_info=exc)
     raise ApplicationHandlerStop
 
 

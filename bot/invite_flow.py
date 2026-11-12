@@ -138,8 +138,8 @@ async def _invite_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
                     reply_markup=end_markup(hub, ADMIN_INVITE),
                 )
                 record_btn(ctx.application, update.effective_user.id, sent)
-    except Exception:
-        logger.debug("invite-timeout notice failed (non-fatal)", exc_info=True)
+    except Exception as exc:
+        logger.debug("invite-timeout notice failed (non-fatal)", exc_info=exc)
     return ConversationHandler.END
 
 
@@ -319,8 +319,8 @@ async def invite_toggle_lib(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     try:
         await q.edit_message_reply_markup(_lib_keyboard(
             ctx.user_data["inv_sections"], selected, version))
-    except Exception:
-        logger.debug("invite keyboard edit failed (non-fatal)", exc_info=True)
+    except Exception as exc:
+        logger.debug("invite keyboard edit failed (non-fatal)", exc_info=exc)
     return INV_LIBS
 
 
@@ -341,8 +341,8 @@ async def invite_select_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     try:
         await q.edit_message_reply_markup(_lib_keyboard(
             sections, ctx.user_data["inv_selected"], version))
-    except Exception:
-        logger.debug("invite keyboard edit failed (non-fatal)", exc_info=True)
+    except Exception as exc:
+        logger.debug("invite keyboard edit failed (non-fatal)", exc_info=exc)
     return INV_LIBS
 
 

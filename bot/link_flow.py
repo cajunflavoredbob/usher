@@ -240,8 +240,8 @@ async def _poll_with_cancel(plex: PlexClient, pin_id: int, max_iters: int,
                               "I'll let you know if a token comes through. If you've "
                               "already approved in Plex, sit tight."),
                     )
-                except Exception:
-                    logger.exception("couldn't send Plex-down warning to %s", chat_id)
+                except Exception as exc:
+                    logger.exception("couldn't send Plex-down warning to %s", chat_id, exc_info=exc)
     return None
 
 
@@ -387,8 +387,8 @@ async def _start_plex_auth(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     await _finalize_link(update, ctx, auth_token, hub=hub)
     try:
         await q.edit_message_reply_markup(reply_markup=None)
-    except TelegramError:
-        logger.debug("edit_message_reply_markup failed", exc_info=True)
+    except TelegramError as exc:
+        logger.debug("edit_message_reply_markup failed", exc_info=exc)
     return ConversationHandler.END
 
 
@@ -451,8 +451,8 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     ctx.user_data.pop("link_active_loop", None)
     try:
         await q.edit_message_reply_markup(reply_markup=None)
-    except TelegramError:
-        logger.debug("edit_message_reply_markup failed", exc_info=True)
+    except TelegramError as exc:
+        logger.debug("edit_message_reply_markup failed", exc_info=exc)
 
 
 async def link_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:

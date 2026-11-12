@@ -269,8 +269,8 @@ class SettingsStore:
                 os.fsync(dir_fd)
             finally:
                 os.close(dir_fd)
-        except OSError:
-            logger.debug("directory fsync failed", exc_info=True)
+        except OSError as exc:
+            logger.debug("directory fsync failed", exc_info=exc)
 
     def _write(self, s: Settings) -> None:
         # Crash-safe write: flush + fsync the temp file's contents to disk
@@ -356,8 +356,8 @@ def load_or_create_session_secret(path: str | Path) -> bytes:
             data = p.read_bytes()
             if data:
                 return data
-        except OSError:
-            logger.debug("secret file unreadable", exc_info=True)
+        except OSError as exc:
+            logger.debug("secret file unreadable", exc_info=exc)
     secret = secrets.token_bytes(32)
     # Atomic + durable (fsutil): a torn write here truncates the HMAC
     # signing key and silently weakens every session token.

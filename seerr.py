@@ -323,14 +323,14 @@ class SeerrClient:
         for client in retired:
             try:
                 await client.aclose()
-            except Exception:
-                logger.warning("aclose on retired user client failed", exc_info=True)
+            except Exception as exc:
+                logger.warning("aclose on retired user client failed", exc_info=exc)
         self._retired_user_clients.clear()
         for client, _ in list(self._user_clients.values()):
             try:
                 await client.aclose()
-            except Exception:
-                logger.warning("aclose on cached user client failed", exc_info=True)
+            except Exception as exc:
+                logger.warning("aclose on cached user client failed", exc_info=exc)
         self._user_clients.clear()
 
     async def get_main_settings(self) -> dict:

@@ -48,8 +48,8 @@ async def _resolve_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
                 text="⏱️ Timed out waiting for your comment. Reopen the ticket "
                      "from /tickets to add one.",
             )
-    except Exception:
-        logger.debug("resolve-timeout notice failed (non-fatal)", exc_info=True)
+    except Exception as exc:
+        logger.debug("resolve-timeout notice failed (non-fatal)", exc_info=exc)
     return ConversationHandler.END
 
 

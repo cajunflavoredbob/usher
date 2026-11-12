@@ -175,5 +175,5 @@ async def fan_out_availability(app, media_type: str, tmdb_id: int,
                 disable_web_page_preview=True)
             logger.info("Notified subscriber telegram_id=%d of availability",
                         chat_id)
-        except Exception:
-            logger.exception("Failed to DM subscriber telegram_id=%d", chat_id)
+        except Exception as exc:
+            logger.exception("Failed to DM subscriber telegram_id=%d", chat_id, exc_info=exc)

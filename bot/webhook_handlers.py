@@ -220,8 +220,8 @@ async def handle_seerr_resolved(app: Application, payload: dict) -> None:
             )
             logger.info("Notified admin of resolved ticket #%d (reported by '%s')",
                         ticket_id, reporter_username)
-        except Exception:
-            logger.exception("Failed to DM admin about resolved ticket #%d", ticket_id)
+        except Exception as exc:
+            logger.exception("Failed to DM admin about resolved ticket #%d", ticket_id, exc_info=exc)
 
 
 async def handle_seerr_reported(app: Application, payload: dict) -> None:
@@ -297,8 +297,8 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
         )
         record_btn(app, admin_id, sent)
         logger.info("Notified admin of new ticket #%d from '%s'", ticket_id, reporter_username)
-    except Exception:
-        logger.exception("Failed to DM admin about new ticket #%d", ticket_id)
+    except Exception as exc:
+        logger.exception("Failed to DM admin about new ticket #%d", ticket_id, exc_info=exc)
 
 
 # Request lifecycle (MEDIA_*)
@@ -443,8 +443,8 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
         try:
             requester_is_admin = (requester_seerr_id
                                   == await seerr.get_admin_user_id())
-        except Exception:
-            logger.debug("admin-id comparison failed (non-fatal)", exc_info=True)
+        except Exception as exc:
+            logger.debug("admin-id comparison failed (non-fatal)", exc_info=exc)
 
     # "The admin has been notified" is a lie when the requester IS the
     # admin (the admin FYI below is suppressed as self-noise); drop the
@@ -472,8 +472,8 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
             if reply_markup is not None:
                 record_btn(app, chat_id, sent)
             logger.info("Notified telegram_id=%d of %s", chat_id, nt)
-        except Exception:
-            logger.exception("Failed to DM telegram_id=%d about %s", chat_id, nt)
+        except Exception as exc:
+            logger.exception("Failed to DM telegram_id=%d about %s", chat_id, nt, exc_info=exc)
 
     # The unlinked admin (admin-key attribution) has no link but is a
     # fully supported requester; their lifecycle DMs go to the admin chat.
@@ -514,8 +514,8 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
         from bot.progress_card import apply_webhook_event
         try:
             await apply_webhook_event(app, nt, type_for_card, tmdb_for_card)
-        except Exception:
-            logger.exception("progress card update failed for %s", nt)
+        except Exception as exc:
+            logger.exception("progress card update failed for %s", nt, exc_info=exc)
 
     # Subscriptions: one-shot fan-out to subscribers, minus whoever
     # this event already DMed as the requester.

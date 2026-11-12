@@ -79,8 +79,8 @@ class TokenCrypto:
             existing = self.key_path.read_bytes().strip()
             if existing:
                 return existing
-        except FileNotFoundError:
-            logger.debug("no stored encryption key yet")
+        except FileNotFoundError as exc:
+            logger.debug("no stored encryption key yet: %s", exc)
         key = Fernet.generate_key()
         # Atomic + durable: a torn write here crash-loops the container on
         # every subsequent boot (Fernet(key) raises SystemExit).
@@ -829,8 +829,8 @@ class UserStore:
                     reply_markup=r[17] or "",
                     action_name=r[18] or "",
                 ))
-            except Exception:
-                logger.exception("Skipping corrupt pending_autofix row id=%s", r[0])
+            except Exception as exc:
+                logger.exception("Skipping corrupt pending_autofix row id=%s", r[0], exc_info=exc)
         return out
 
     async def set_autofix_message(self, pending_id: int, message_id: int,
