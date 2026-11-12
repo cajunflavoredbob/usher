@@ -35,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Admin UI URL was saved with /admin on the end. That URL never reached the
   webhook, so no Seerr event was processed. The same URL cleanup now backs the
   startup message, and the bad-URL error names the "Usher Admin UI URL" field.
+- A long Ticket description or comment with line breaks no longer makes
+  Telegram reject the message. Cut-off text now closes its formatting, so the
+  Ticket detail, History and Back open again, and a very long comment or new
+  Ticket still reaches the Admin's DM.
 
 ## [0.18.0] - 2026-11-11
 

@@ -23,6 +23,7 @@ from bot.shared import (
     format_scope_label,
     new_ticket_dm_kb,
     record_btn,
+    truncate_message,
 )
 
 logger = logging.getLogger("usher")
@@ -94,7 +95,7 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
     lines.append("")
     lines.append("<b>Comment:</b>")
     lines.append(f"<i>\"{safe_comment}\"</i>")
-    text = "\n".join(lines)
+    text = truncate_message("\n".join(lines))
 
     # Always offer History (the full comment chain); add Reply while open.
     ticket_status = (ticket.get("issue_status") or "").upper()
@@ -291,7 +292,7 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
     try:
         sent = await app.bot.send_message(
             chat_id=admin_id,
-            text="\n".join(lines),
+            text=truncate_message("\n".join(lines)),
             parse_mode="HTML",
             disable_web_page_preview=True,
             reply_markup=kb,

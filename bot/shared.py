@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Callable, Final, Optional
@@ -762,17 +763,65 @@ KEYCAP_DIGITS: Final = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣",
                         "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
 
 
-def truncate_message(text: str, limit: int = 4000) -> str:
+_HTML_TAG_RE = re.compile(r"<(/?)([A-Za-z][A-Za-z0-9-]*)[^>]*>")
+_TRUNCATION_NOTE = "\n…(truncated)"
+
+
+def _safe_cut(text: str, cut: int) -> int:
+    """Move `cut` back so text[:cut] ends neither inside a tag nor inside an
+    entity such as &amp;."""
+    lt = text.rfind("<", 0, cut)
+    if lt != -1 and text.find(">", lt, cut) == -1:
+        cut = lt
+    amp = text.rfind("&", max(0, cut - 10), cut)
+    if amp != -1 and text.find(";", amp, cut) == -1:
+        cut = amp
+    return cut
+
+
+def _closing_tags(fragment: str) -> str:
+    """Close tags a cut left open, innermost first."""
+    stack: list[str] = []
+    for m in _HTML_TAG_RE.finditer(fragment):
+        if m.group(1):
+            if m.group(2) in stack:
+                while stack and stack.pop() != m.group(2):
+                    pass
+        else:
+            stack.append(m.group(2))
+    return "".join(f"</{t}>" for t in reversed(stack))
+
+
+def truncate_message(text: str, limit: int = 4000, html: bool = True) -> str:
     """Keep a message under Telegram's 4096-char cap (an oversized send or
     edit fails silently from the user's perspective). Cuts at the last
-    newline before the limit so an HTML tag is never split mid-entity.
-    Shared by /tickets and /requests list rendering."""
+    newline when one is near, never inside a tag or entity, then closes any
+    tag the cut left open (a multi-line <i>...</i> span would otherwise make
+    Telegram reject the whole message). The result, closers and note
+    included, is at most `limit` chars.
+    Shared by /tickets and /requests list rendering and the Ticket DMs."""
     if len(text) <= limit:
         return text
-    cut = text.rfind("\n", 0, limit - 20)
-    if cut < limit // 2:
-        cut = limit - 20
-    return text[:cut] + "\n…(truncated)"
+    limit = max(limit, len(_TRUNCATION_NOTE) + 1)
+    budget = limit - len(_TRUNCATION_NOTE)
+    if not html:
+        # Plain text (no parse_mode): any '<' is literal, nothing to close.
+        cut = text.rfind("\n", 0, budget)
+        if cut < budget // 2:
+            cut = budget
+        return text[:cut] + _TRUNCATION_NOTE
+    while budget > 0:
+        cut = text.rfind("\n", 0, budget)
+        if cut < budget // 2:
+            cut = budget
+        cut = _safe_cut(text, cut)
+        head = text[:cut]
+        closers = _closing_tags(head)
+        if len(head) + len(closers) + len(_TRUNCATION_NOTE) <= limit:
+            return head + closers + _TRUNCATION_NOTE
+        budget -= len(closers) + 1
+    # Closers alone outgrow the limit: drop all markup rather than loop.
+    return re.sub(r"<[^>]*>", "", text)[:limit - len(_TRUNCATION_NOTE)] + _TRUNCATION_NOTE
 
 
 # Ticket detail keyboard

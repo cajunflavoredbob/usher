@@ -206,7 +206,7 @@ async def tickets_hub_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
         lines.append(line)
     lines.append("")
     lines.append("Tap a ticket number below to manage it.")
-    text = truncate_message("\n".join(lines))
+    text = truncate_message("\n".join(lines), html=False)
 
     # Inline keyboard: one button per ticket (#N)
     button_rows: list[list[InlineKeyboardButton]] = []
