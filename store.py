@@ -80,7 +80,7 @@ class TokenCrypto:
             if existing:
                 return existing
         except FileNotFoundError:
-            pass
+            logger.debug("no stored encryption key yet")
         key = Fernet.generate_key()
         # Atomic + durable: a torn write here crash-loops the container on
         # every subsequent boot (Fernet(key) raises SystemExit).

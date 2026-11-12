@@ -89,8 +89,8 @@ def _parse_error_body(r: httpx.Response) -> str:
                 msg = first.get("message") if isinstance(first, dict) else None
                 if isinstance(msg, str) and msg.strip():
                     return msg.strip()
-    except Exception:
-        pass
+    except ValueError:
+        logger.debug("error body is not JSON", exc_info=True)
     text = (r.text or "").strip()
     if text and len(text) < 200:
         return text

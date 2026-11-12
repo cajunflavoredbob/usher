@@ -644,12 +644,12 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         reason = "Use the most recent message - this menu is from an older one."
     try:
         await q.answer(reason, show_alert=False)
-    except Exception:
-        pass
+    except telegram.error.TelegramError:
+        logger.debug("callback answer failed", exc_info=True)
     try:
         await q.edit_message_reply_markup(reply_markup=None)
-    except Exception:
-        pass
+    except telegram.error.TelegramError:
+        logger.debug("edit_message_reply_markup failed", exc_info=True)
     raise ApplicationHandlerStop
 
 

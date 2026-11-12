@@ -15,6 +15,7 @@ from telegram import (
     Update,
 )
 from telegram.constants import ChatType
+from telegram.error import TelegramError
 from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
@@ -386,8 +387,8 @@ async def _start_plex_auth(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     await _finalize_link(update, ctx, auth_token, hub=hub)
     try:
         await q.edit_message_reply_markup(reply_markup=None)
-    except Exception:
-        pass
+    except TelegramError:
+        logger.debug("edit_message_reply_markup failed", exc_info=True)
     return ConversationHandler.END
 
 
@@ -450,8 +451,8 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     ctx.user_data.pop("link_active_loop", None)
     try:
         await q.edit_message_reply_markup(reply_markup=None)
-    except Exception:
-        pass
+    except TelegramError:
+        logger.debug("edit_message_reply_markup failed", exc_info=True)
 
 
 async def link_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:

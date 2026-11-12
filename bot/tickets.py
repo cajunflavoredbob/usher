@@ -23,6 +23,7 @@ from telegram import (
     InlineKeyboardMarkup,
     Update,
 )
+from telegram.error import TelegramError
 from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
@@ -99,8 +100,8 @@ async def _require_admin(
         return True
     try:
         await q.answer("Admin only.", show_alert=False)
-    except Exception:
-        pass
+    except TelegramError:
+        logger.debug("callback answer failed", exc_info=True)
     # Local import to avoid a top-level auth_util dep just for this entry.
     from auth_util import audit
     audit("admin_callback_blocked",
