@@ -20,7 +20,18 @@ from store import UserStore
 
 from procutil import schedule_clean_exit  # noqa: F401  (re-export for bot.*)
 
-from bot.callback_prefixes import RELINK, RQ_INFO_DISMISS, TK_CLOSE, TK_FIX, TK_OPEN, TK_REPLY
+from bot.callback_prefixes import (
+    RELINK,
+    RQ_ADMIN_APPROVE,
+    RQ_ADMIN_DECLINE,
+    RQ_ADMIN_RETRY,
+    RQ_INFO_DISMISS,
+    SUBSCRIPTION_ADD,
+    TK_CLOSE,
+    TK_FIX,
+    TK_OPEN,
+    TK_REPLY,
+)
 from const import RELINK_RESUME_TTL_S
 
 logger = logging.getLogger("usher")
@@ -607,6 +618,12 @@ async def run_relink_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> b
     return True
 
 
+_GATE_EXEMPT_PREFIXES: Final = frozenset({
+    RQ_INFO_DISMISS, SUBSCRIPTION_ADD,
+    RQ_ADMIN_APPROVE, RQ_ADMIN_DECLINE, RQ_ADMIN_RETRY,
+})
+
+
 async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """TypeHandler at group=-1. Runs before any callback handler. The gate
     snapshots the per-user button history once at entry, then decides, so a
@@ -618,11 +635,17 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     q = update.callback_query
     if q is None or q.message is None or q.from_user is None:
         return
-    # Detail cards are deliberately NOT recorded in the history (recording
-    # them would evict the live pick list after three 🖼 taps and brick the
-    # /request flow), so their Dismiss button is exempt from the gate. The
-    # action is harmless: it only deletes the tapped card itself.
-    if getattr(q, "data", None) == RQ_INFO_DISMISS:
+    # Callbacks exempt from the gate because their source message is not in
+    # the history or may be old, and the action is safe to run anyway:
+    #  - Dismiss and Notify-me sit on detail cards, which are deliberately NOT
+    #    recorded (recording them would evict the live pick list after three
+    #    taps and brick the /request flow). Dismiss only deletes the tapped
+    #    card; Notify-me only writes a row for the tapper.
+    #  - Approve/Decline/Retry sit on the Admin's Request DMs. They are
+    #    Admin-only and re-read the Request's status from Seerr before acting,
+    #    and there is no way to bring the DM back in Telegram once it expires.
+    data = getattr(q, "data", None)
+    if isinstance(data, str) and data.split(":", 1)[0] in _GATE_EXEMPT_PREFIXES:
         return
     user_id = q.from_user.id
     # Snapshot via list copy so concurrent record_btn calls don't mutate
@@ -632,9 +655,14 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         return  # no record yet -- allow (gradual rollout)
 
     msg_id = q.message.message_id
+    chat_id = getattr(q.message, "chat_id", None)
     now = datetime.now(timezone.utc)
     for e in entries:
         if e.get("message_id") != msg_id:
+            continue
+        # Message ids are only unique per chat; an entry that recorded its
+        # chat must match it too. An entry with no chat_id matches on id alone.
+        if e.get("chat_id") is not None and e.get("chat_id") != chat_id:
             continue
         try:
             sent = datetime.fromisoformat(e["sent_at"])

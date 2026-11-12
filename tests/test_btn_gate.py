@@ -21,12 +21,14 @@ def _make_message(message_id: int, chat_id: int = 100):
     return SimpleNamespace(message_id=message_id, chat_id=chat_id)
 
 
-def _make_update(user_id: int, message_id: int, chat_id: int = 100):
+def _make_update(user_id: int, message_id: int, chat_id: int = 100,
+                 data: str | None = None):
     """Build a stub Update with a callback_query carrying the given message."""
     msg = _make_message(message_id, chat_id)
     q = SimpleNamespace(
         message=msg,
         from_user=SimpleNamespace(id=user_id),
+        data=data,
         answers=[],
         edits=[],
     )
@@ -172,4 +174,51 @@ async def test_gate_no_callback_query_passes_through():
     """Updates without a callback_query (e.g., text messages) skip the gate."""
     app = _make_app()
     upd = SimpleNamespace(callback_query=None)
+    await global_btn_gate(upd, _Ctx(app))  # no raise
+
+
+# --- exempt prefixes and chat matching ---
+
+
+async def test_gate_admits_bell_tap_with_recorded_pick_list():
+    """Detail cards are never recorded, so the Notify-me button must pass."""
+    app = _make_app()
+    record_btn(app, 42, _make_message(1001))
+    upd = _make_update(42, 5555, data="subadd:movie:550")
+    await global_btn_gate(upd, _Ctx(app))  # no raise
+
+
+@pytest.mark.parametrize("prefix", ["rqap", "rqdc", "rqrt"])
+async def test_gate_admits_admin_request_dm_when_old_and_buried(prefix):
+    app = _make_app()
+    record_btn(app, 42, _make_message(2000))
+    old = (datetime.now(timezone.utc) - timedelta(hours=7)).isoformat()
+    app.bot_data["btn_msgs"][42][0]["sent_at"] = old
+    for i in range(3):
+        record_btn(app, 42, _make_message(3000 + i))
+    upd = _make_update(42, 2000, data=f"{prefix}:77")
+    await global_btn_gate(upd, _Ctx(app))  # no raise
+
+
+async def test_gate_still_blocks_stale_fix_button():
+    app = _make_app()
+    record_btn(app, 42, _make_message(1001))
+    upd = _make_update(42, 5555, data="tkf:9")
+    with pytest.raises(ApplicationHandlerStop):
+        await global_btn_gate(upd, _Ctx(app))
+
+
+async def test_gate_refuses_same_message_id_from_other_chat():
+    app = _make_app()
+    record_btn(app, 42, _make_message(1001, chat_id=100))
+    upd = _make_update(42, 1001, chat_id=200)
+    with pytest.raises(ApplicationHandlerStop):
+        await global_btn_gate(upd, _Ctx(app))
+
+
+async def test_gate_admits_entry_without_chat_id_by_message_id():
+    app = _make_app()
+    record_btn(app, 42, _make_message(1001))
+    del app.bot_data["btn_msgs"][42][0]["chat_id"]
+    upd = _make_update(42, 1001, chat_id=200)
     await global_btn_gate(upd, _Ctx(app))  # no raise

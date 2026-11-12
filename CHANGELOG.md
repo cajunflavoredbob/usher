@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Progress cards now update from Seerr webhooks (Approved, Available,
   Declined), Subscriptions fire, and Open in Seerr opens the title page, even
   when Seerr sends the TMDb id as text, which its default template does.
+- The Notify-me button on a title card now works instead of saying the menu is
+  from an older message. Approve, Decline and Retry on the Admin's Request messages keep
+  working after 6 hours or newer messages. A button from a different chat is no
+  longer mistaken for a live one.
 
 ## [0.18.0] - 2026-11-11
 
