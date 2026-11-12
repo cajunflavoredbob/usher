@@ -113,12 +113,12 @@ async def test_media_gone_uses_html_and_escapes_title():
 
 async def test_empty_ticket_url_omits_dangling_line():
     """Legacy rows from the admin-fix path were enqueued with ticket_url="";
-    the DM must not render a dangling 'Original issue:' label."""
+    the DM must not render a dangling 'Ticket:' label."""
     fix = _make_fix(ticket_url="")
     ctx = make_ctx()
     ctx.bot.send_message = AsyncMock(return_value=make_message(message_id=781))
     await _notify_complete(ctx, fix)
-    assert "Original issue:" not in ctx.bot.send_message.call_args.kwargs["text"]
+    assert "Ticket:" not in ctx.bot.send_message.call_args.kwargs["text"]
 
 
 # --- poller: mark-before-notify ordering --------------------------------------
