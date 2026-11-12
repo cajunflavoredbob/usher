@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from fsutil import atomic_write_bytes, atomic_write_text
 
 
@@ -14,6 +16,9 @@ def test_writes_content_and_creates_parents(tmp_path: Path):
     assert target.read_bytes() == b"key-material"
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="Windows has no POSIX mode bits to read back"
+)
 def test_default_chmod_0600(tmp_path: Path):
     target = tmp_path / "secret"
     atomic_write_bytes(target, b"s")

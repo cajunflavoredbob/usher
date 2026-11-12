@@ -211,8 +211,9 @@ def test_write_calls_fsync_and_atomic_replace(tmp_settings_path: Path, monkeypat
     replaced.clear()
     store.save()
 
-    # At least two fsyncs: the temp file fd and the parent directory fd.
-    assert len(fsynced_fds) >= 2
+    # Temp file fd plus parent directory fd. Windows cannot open a directory
+    # for fsync (best-effort skip), so only the temp file fd is counted there.
+    assert len(fsynced_fds) >= (1 if os.name == "nt" else 2)
     # The final landing is an atomic replace onto the real path.
     assert any(dst == str(tmp_settings_path) for _, dst in replaced)
     assert json.loads(tmp_settings_path.read_text())["telegram_bot_token"] == "tok"
