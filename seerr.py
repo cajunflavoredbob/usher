@@ -918,6 +918,21 @@ class SeerrClient:
         await execute(client, "DELETE", f"/request/{request_id}",
                       service=_SERVICE)
 
+    async def approve_request(self, request_id: int) -> None:
+        """Approve a pending request with the bot's own (admin) key."""
+        await execute(self._client, "POST", f"/request/{request_id}/approve",
+                      service=_SERVICE)
+
+    async def decline_request(self, request_id: int) -> None:
+        """Decline a pending request with the bot's own (admin) key."""
+        await execute(self._client, "POST", f"/request/{request_id}/decline",
+                      service=_SERVICE)
+
+    async def retry_request(self, request_id: int) -> None:
+        """Retry a failed request with the bot's own (admin) key."""
+        await execute(self._client, "POST", f"/request/{request_id}/retry",
+                      service=_SERVICE)
+
     async def get_tv_season_availability(self, tmdb_id: int) -> list[SeasonAvailability]:
         """Seasons of a show annotated with STANDARD-tier requestability, for
         the /request season picker. Availability is global, so the admin-key

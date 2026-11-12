@@ -13,6 +13,7 @@ from seerr import SeerrClient
 from store import UserStore
 
 from bot.callback_prefixes import TK_CLOSE, TK_FIX, TK_OPEN, TK_REPLY
+from bot.request_admin import admin_request_kb, seerr_link
 from bot.shared import (
     ISSUE_TYPE_LABELS,
     extract_affected_se,
@@ -419,6 +420,11 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
     requester_username = (request.get("requestedBy_username")
                           or payload.get("notifyuser_username") or "").strip()
 
+    try:
+        request_id: Optional[int] = int(request.get("request_id"))
+    except (TypeError, ValueError):
+        request_id = None
+
     link, requester_seerr_id = await _resolve_requester(
         app, request, requester_username)
     if link is None and (requester_username or requester_seerr_id):
@@ -452,7 +458,8 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
     if requester_line and requester_is_admin and nt == "MEDIA_FAILED":
         requester_line = "⚠️ Your request failed to download."
 
-    async def _dm(chat_id: int, first_line: str, *, with_requester: bool) -> None:
+    async def _dm(chat_id: int, first_line: str, *, with_requester: bool,
+                  reply_markup=None) -> None:
         parts = [first_line]
         if title_line:
             parts.append(html.escape(title_line))
@@ -461,12 +468,15 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
         if with_requester and requester_username:
             parts.append(f"<b>Requested by:</b> {html.escape(requester_username)}")
         try:
-            await app.bot.send_message(
+            sent = await app.bot.send_message(
                 chat_id=chat_id,
                 text="\n".join(parts),
                 parse_mode="HTML",
                 disable_web_page_preview=True,
+                reply_markup=reply_markup,
             )
+            if reply_markup is not None:
+                record_btn(app, chat_id, sent)
             logger.info("Notified telegram_id=%d of %s", chat_id, nt)
         except Exception:
             logger.exception("Failed to DM telegram_id=%d about %s", chat_id, nt)
@@ -488,7 +498,12 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
     # The admin line is skipped when the admin is the requester: their own
     # request coming back as "New request" is noise.
     if admin_line and admin_id and not requester_is_admin:
-        await _dm(admin_id, admin_line, with_requester=True)
+        # Approve/Decline (pending) or Retry (failed), plus Open in Seerr;
+        # see bot.request_admin.
+        await _dm(admin_id, admin_line, with_requester=True,
+                  reply_markup=admin_request_kb(
+                      nt, request_id,
+                      seerr_link(cfg.seerr_public_url, media)))
 
     # Update any Progress cards tracking this media (approved -> grabbing,
     # terminal events paint the final line and close the Progress card).

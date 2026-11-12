@@ -10,6 +10,7 @@ import httpx
 import pytest
 
 import seerr as seerr_mod
+from http_util import APIError
 from seerr import (
     MEDIA_STATUS_AVAILABLE,
     MEDIA_STATUS_PROCESSING,
@@ -230,6 +231,42 @@ async def test_delete_request_issues_delete(monkeypatch):
     await client.delete_request(12)
     assert captured["method"] == "DELETE"
     assert captured["path"].endswith("/request/12")
+    await client.close()
+
+
+@pytest.mark.parametrize("method,suffix", [
+    ("approve_request", "/request/12/approve"),
+    ("decline_request", "/request/12/decline"),
+    ("retry_request", "/request/12/retry"),
+])
+async def test_admin_request_actions_post_once_with_bot_key(monkeypatch, method,
+                                                            suffix):
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path,
+                      request.headers.get("X-Api-Key")))
+        return httpx.Response(200, json={"id": 12})
+
+    client = _client(monkeypatch, handler)
+    await getattr(client, method)(12)
+    assert len(calls) == 1
+    verb, path, key = calls[0]
+    assert verb == "POST"
+    assert path.endswith(suffix)
+    assert key == "key"
+    await client.close()
+
+
+@pytest.mark.parametrize("method", ["approve_request", "decline_request",
+                                    "retry_request"])
+async def test_admin_request_actions_raise_api_error(monkeypatch, method):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"message": "nope"})
+
+    client = _client(monkeypatch, handler)
+    with pytest.raises(APIError):
+        await getattr(client, method)(12)
     await client.close()
 
 

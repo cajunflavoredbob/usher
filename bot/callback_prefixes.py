@@ -59,6 +59,11 @@ RQ_FROM_TICKET: Final = "rqfi"        # rqfi:<media_type>:<tmdb_id> jump from
                                       # the /issue not-in-library dead-end
 RQ_LIST_CANCEL: Final = "rqlc"        # rqlc:<request_id> cancel from /requests
 
+# --- Admin Request DM buttons (webhook DMs; see bot.request_admin) ----------
+RQ_ADMIN_APPROVE: Final = "rqap"      # rqap:<request_id> Approve (pending DM)
+RQ_ADMIN_DECLINE: Final = "rqdc"      # rqdc:<request_id> Decline (pending DM)
+RQ_ADMIN_RETRY: Final = "rqrt"        # rqrt:<request_id> Retry (failed DM)
+
 # --- /trending browse --------------------------------------------------------
 DV_CATEGORY: Final = "dvc"            # dvc:<category> switch browse list
 DV_PAGE: Final = "dvp"                # dvp:<version>:<screen> browse paging

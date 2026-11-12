@@ -155,6 +155,8 @@ Usher receives events from Seerr so Ticket comments and resolutions, and Request
 
 Seerr reaches Usher on its LAN address and port. No public URL is required, but Seerr must be able to reach the Usher port.
 
+When Seerr's webhook carries the request id, the Admin's DM about a pending Request has **Approve** and **Decline** buttons, and the DM about a failed Request has **Retry**. Each tap first checks the Request in Seerr, so a Request already handled there is left alone and the DM says what it is now. Both DMs also get an **Open in Seerr** link when a Seerr public URL is configured (`SEERR_PUBLIC_URL`; this link does not fall back to `SEERR_URL`).
+
 ## Configuration
 
 Configuration is managed in the `/admin` web admin panel and persisted to `/data/settings.json`. Environment variables only **seed the first run** (and migrate legacy installs); after that the web admin panel wins.

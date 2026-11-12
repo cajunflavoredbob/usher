@@ -51,6 +51,9 @@ from bot.callback_prefixes import (
     UNINV_KEEP,
     RQ_INFO_DISMISS,
     RQ_LIST_CANCEL,
+    RQ_ADMIN_APPROVE,
+    RQ_ADMIN_DECLINE,
+    RQ_ADMIN_RETRY,
     LINK_HELP,
     SHARE_REMOVE,
     SHARE_MATCHES,
@@ -79,6 +82,7 @@ from bot.subscriptions import (cmd_subscriptions, subscription_add,
 from bot.request_flow import (_RQ_KEYS, _request_conversation,
                               request_info_dismiss)
 from bot.requests_cmd import cmd_requests, requests_hub_mine, rq_list_cancel
+from bot.request_admin import rq_admin_action
 from bot.resolve_flow import _resolve_conversation
 from bot.shared import (
     edit_or_send,
@@ -412,6 +416,10 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     # live even when no conversation is active.
     app.add_handler(CallbackQueryHandler(rq_list_cancel, pattern=fr"^{RQ_LIST_CANCEL}:\d+$"))
     app.add_handler(CallbackQueryHandler(request_info_dismiss, pattern=fr"^{RQ_INFO_DISMISS}$"))
+    # Approve / Decline / Retry on the Admin's Request DMs (webhook).
+    app.add_handler(CallbackQueryHandler(
+        rq_admin_action,
+        pattern=fr"^({RQ_ADMIN_APPROVE}|{RQ_ADMIN_DECLINE}|{RQ_ADMIN_RETRY}):\d+$"))
     # /trending browse callbacks (category switch / paging / detail cards).
     app.add_handler(CallbackQueryHandler(dv_category, pattern=fr"^{DV_CATEGORY}:"))
     app.add_handler(CallbackQueryHandler(dv_page, pattern=fr"^{DV_PAGE}:"))
