@@ -176,3 +176,23 @@ async def test_blank_field_telegram_test_uses_stored_token(client, monkeypatch):
     r = await _post(client, "/admin/test/telegram", {"telegram_bot_token": ""})
     assert (await r.json())["ok"] is True
     assert VALUES["telegram_bot_token"] in seen[0]
+
+
+async def test_typed_telegram_and_webhook_secrets_replace_stored(client):
+    await _post(client, "/admin/telegram",
+                {"telegram_bot_token": "222:new", "admin_telegram_id": "4242"})
+    await _post(client, "/admin/webhook", {"webhook_secret": "new-secret"})
+    assert client.store.settings.telegram_bot_token == "222:new"
+    assert client.store.settings.webhook_secret == "new-secret"
+
+
+async def test_whitespace_only_key_in_autofix_test_uses_stored_key(
+        client, monkeypatch):
+    _Ping.seen = []
+    monkeypatch.setattr(webui, "RadarrClient", _Ping)
+    r = await _post(client, "/admin/test/autofix",
+                    {"radarr_url": "http://192.0.2.10:7878",
+                     "radarr_api_key": "   "})
+    assert json.loads(await r.text())["ok"]
+    assert _Ping.seen == [("http://192.0.2.10:7878",
+                           VALUES["radarr_api_key"])]

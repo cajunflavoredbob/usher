@@ -207,6 +207,12 @@ def _current_user(request: web.Request) -> Optional[str]:
 SECRET_KEEP_NOTE = '<div class="note">Already set. Leave blank to keep it.</div>'
 
 
+def _form_secret(form, name: str, stored: str) -> str:
+    """A secret posted from the Settings page: the typed value, or the stored
+    one when the field was left blank."""
+    return (form.get(name) or "").strip() or stored
+
+
 def _secret_field(name: str, stored: str, *, required: bool = False,
                   field_id: str = "") -> str:
     """Password input plus the keep-note. The stored value is never rendered:
@@ -882,7 +888,7 @@ async def setup_get(request: web.Request) -> web.Response:
     s = store.settings
     # This page is public until an Admin account exists, so a stored secret or
     # the Admin's Telegram id is never echoed into it; a note says it is kept.
-    keep_note = '<div class="note">Already set. Leave blank to keep it.</div>'
+    keep_note = SECRET_KEEP_NOTE
     tok_set = bool(s.telegram_bot_token)
     admin_set = bool(s.admin_telegram_id)
     key_set = bool(s.seerr_api_key)
@@ -1223,8 +1229,7 @@ async def telegram_post(request: web.Request) -> web.Response:
     s = store.settings
     _orig_token = s.telegram_bot_token
     _orig_admin = s.admin_telegram_id
-    token = ((form.get("telegram_bot_token") or "").strip()
-             or s.telegram_bot_token)
+    token = _form_secret(form, "telegram_bot_token", s.telegram_bot_token)
     admin_tg_raw = (form.get("admin_telegram_id") or "").strip()
     if not token:
         return web.Response(
@@ -1294,8 +1299,7 @@ async def seerr_post(request: web.Request) -> web.Response:
                 content_type="text/html", status=400,
             )
     s.seerr_url = (form.get("seerr_url") or "").strip()
-    s.seerr_api_key = ((form.get("seerr_api_key") or "").strip()
-                       or s.seerr_api_key)
+    s.seerr_api_key = _form_secret(form, "seerr_api_key", s.seerr_api_key)
     s.seerr_public_url = (form.get("seerr_public_url") or "").strip()
     return await _save_and_render(request, active_tab="seerr")
 
@@ -1320,11 +1324,9 @@ async def autofix_post(request: web.Request) -> web.Response:
                 content_type="text/html", status=400,
             )
     s.radarr_url = (form.get("radarr_url") or "").strip()
-    s.radarr_api_key = ((form.get("radarr_api_key") or "").strip()
-                        or s.radarr_api_key)
+    s.radarr_api_key = _form_secret(form, "radarr_api_key", s.radarr_api_key)
     s.sonarr_url = (form.get("sonarr_url") or "").strip()
-    s.sonarr_api_key = ((form.get("sonarr_api_key") or "").strip()
-                        or s.sonarr_api_key)
+    s.sonarr_api_key = _form_secret(form, "sonarr_api_key", s.sonarr_api_key)
     ids_raw = form.get("allowed_autofix_telegram_ids") or ""
     parsed_ids: list[int] = []
     for chunk in ids_raw.split(","):
@@ -1378,8 +1380,7 @@ async def sabnzbd_post(request: web.Request) -> web.Response:
             content_type="text/html", status=400,
         )
     s.sabnzbd_url = value
-    s.sabnzbd_api_key = ((form.get("sabnzbd_api_key") or "").strip()
-                         or s.sabnzbd_api_key)
+    s.sabnzbd_api_key = _form_secret(form, "sabnzbd_api_key", s.sabnzbd_api_key)
     boost = (form.get("sabnzbd_boost") or "off").strip()
     s.sabnzbd_boost = boost if boost in ("off", "high", "force") else "off"
     return await _save_and_render(request, active_tab="sabnzbd")
@@ -1392,8 +1393,7 @@ async def webhook_post(request: web.Request) -> web.Response:
     if csrf_resp is not None:
         return csrf_resp
     s = store.settings
-    secret = ((form.get("webhook_secret") or "").strip()
-              or s.webhook_secret)
+    secret = _form_secret(form, "webhook_secret", s.webhook_secret)
     if not secret:
         return web.Response(
             text=_settings_page(s, error="Webhook secret cannot be empty.",
@@ -1767,8 +1767,8 @@ async def test_telegram(request: web.Request) -> web.Response:
     guard = await _test_csrf_guard(request, form)
     if guard is not None:
         return guard
-    token = ((form.get("telegram_bot_token") or "").strip()
-             or request.app["settings_store"].settings.telegram_bot_token)
+    saved = request.app["settings_store"].settings
+    token = _form_secret(form, "telegram_bot_token", saved.telegram_bot_token)
     if not token:
         return _test_json(False, "No bot token provided.")
     try:
@@ -1789,8 +1789,8 @@ async def test_seerr(request: web.Request) -> web.Response:
     if guard is not None:
         return guard
     url = (form.get("seerr_url") or "").strip()
-    key = ((form.get("seerr_api_key") or "").strip()
-           or request.app["settings_store"].settings.seerr_api_key)
+    key = _form_secret(form, "seerr_api_key",
+                       request.app["settings_store"].settings.seerr_api_key)
     if not url or not key:
         return _test_json(False, "Seerr URL and API key are required.")
     client = SeerrClient(url, key)
@@ -1813,9 +1813,9 @@ async def test_autofix(request: web.Request) -> web.Response:
     saved = request.app["settings_store"].settings
     targets = (
         ("Radarr", RadarrClient, form.get("radarr_url"),
-         form.get("radarr_api_key") or saved.radarr_api_key),
+         _form_secret(form, "radarr_api_key", saved.radarr_api_key)),
         ("Sonarr", SonarrClient, form.get("sonarr_url"),
-         form.get("sonarr_api_key") or saved.sonarr_api_key),
+         _form_secret(form, "sonarr_api_key", saved.sonarr_api_key)),
     )
     results: list[str] = []
     ok_all = True
@@ -1851,8 +1851,8 @@ async def test_sabnzbd(request: web.Request) -> web.Response:
     if guard is not None:
         return guard
     url = (form.get("sabnzbd_url") or "").strip()
-    key = ((form.get("sabnzbd_api_key") or "").strip()
-           or request.app["settings_store"].settings.sabnzbd_api_key)
+    key = _form_secret(form, "sabnzbd_api_key",
+                       request.app["settings_store"].settings.sabnzbd_api_key)
     if not url or not key:
         return _test_json(False, "SABnzbd URL and API key are required.")
     from sabnzbd import SabnzbdClient
