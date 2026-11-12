@@ -52,9 +52,11 @@ from bot.shared import (
     AWAIT_LINK_CONSENT,
     AWAIT_PLATFORM_CHOICE,
     edit_or_send,
+    flow_step_is_stale,
     require_seerr,
     record_btn,
     run_relink_resume,
+    track_flow_generation,
 )
 from const import (
     LINK_FLOW_TIMEOUT_S,
@@ -372,11 +374,15 @@ async def _start_plex_auth(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         pin = await plex.request_pin(strong=True)
     except Exception as exc:
         logger.exception("plex request_pin failed")
+        if flow_step_is_stale(ctx):
+            return ConversationHandler.END  # the user has moved on
         await end_flow(update, ctx,
                        f"Couldn't start Plex auth. {user_friendly_message(exc)}",
                        hub, retry)
         return ConversationHandler.END
 
+    if flow_step_is_stale(ctx):
+        return ConversationHandler.END  # a newer command ended this flow
     loop_id = secrets.token_hex(8)
     ctx.user_data["link_active_loop"] = loop_id
     ctx.user_data.pop(LINK_RETRY_KEY, None)
@@ -430,6 +436,7 @@ async def _start_plex_auth(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     return ConversationHandler.END
 
 
+@track_flow_generation
 async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles 'Having trouble?' / 'Didn't work?' button. Fires OUTSIDE the
     conversation so it can interrupt an in-progress poll. Issues a weak PIN
@@ -454,6 +461,8 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         pin = await plex.request_pin(strong=False)
     except Exception as exc:
         logger.exception("plex request_pin failed (fallback)")
+        if flow_step_is_stale(ctx):
+            return  # the user has moved on
         text = f"Couldn't get a fresh code. {user_friendly_message(exc)}"
         if hub is not None:
             # This message offers Try again too; let that tap through.
@@ -463,6 +472,8 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
 
     # Claim a new loop ID -- any prior poll will see this and exit on its
     # next check. No race because there's no reset-after-set sequence.
+    if flow_step_is_stale(ctx):
+        return  # a newer command ended this flow
     loop_id = secrets.token_hex(8)
     ctx.user_data["link_active_loop"] = loop_id
 

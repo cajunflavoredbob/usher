@@ -5,6 +5,7 @@ module can pull from it without circular imports.
 """
 from __future__ import annotations
 
+import contextlib
 import functools
 import html
 import logging
@@ -845,17 +846,35 @@ def guard_flow_steps(conv: ConversationHandler) -> None:
         handler.callback = _guarded_step(conv, cb)
 
 
+@contextlib.contextmanager
+def _step_scope(ctx):
+    """Run a step under the generation the user's flows have right now."""
+    cell = [_flow_gen(ctx)]
+    token = _STEP_GEN.set(cell)
+    try:
+        yield cell
+    finally:
+        _STEP_GEN.reset(token)
+
+
+def track_flow_generation(cb):
+    """For a handler that is not a conversation step but has the same hazard
+    (a write after an await that a force-end would have cleared): lets
+    flow_step_is_stale work inside it. Does not change what it returns."""
+    @functools.wraps(cb)
+    async def step(update, ctx):
+        with _step_scope(ctx):
+            return await cb(update, ctx)
+    return step
+
+
 def _guarded_step(conv: ConversationHandler, cb):
     @functools.wraps(cb)
     async def step(update, ctx):
-        cell = [_flow_gen(ctx)]
-        token = _STEP_GEN.set(cell)
-        try:
+        with _step_scope(ctx) as cell:
             result = await cb(update, ctx)
-        finally:
-            _STEP_GEN.reset(token)
-        if cell[0] == _flow_gen(ctx):
-            return result
+            if cell[0] == _flow_gen(ctx):
+                return result
         # Overtaken. If the conversation has a live state again, a newer step
         # (the user restarted the flow) owns it: leave it alone.
         try:

@@ -292,3 +292,138 @@ async def test_reply_start_without_force_end_still_sets_reply_target():
     state = await conv.entry_points[0].callback(upd, ctx)
     assert state == AWAIT_TICKET_REPLY
     assert ctx.user_data["tk_reply_id"] == 42
+
+
+# --- Link flow PIN polling marker ---------------------------------------------
+
+def _pin_plex(ctx, release, started):
+    from types import SimpleNamespace
+
+    async def request_pin(strong=True):
+        started.set()
+        await release.wait()
+        return SimpleNamespace(id=1, auth_url="https://example.invalid/auth", code="abcd")
+
+    ctx.bot_data["plex"].request_pin = request_pin
+
+
+async def test_platform_step_force_ended_during_pin_request_starts_no_poll():
+    from bot import link_flow
+    release, started = asyncio.Event(), asyncio.Event()
+    conv = link_flow._link_conversation()
+    guard_flow_steps(conv)
+    step = conv.states[link_flow.AWAIT_PLATFORM_CHOICE][0].callback
+    upd = make_update(callback_data="lnkplat:desktop", user_id=999)
+    ctx = make_ctx(admin_id=999)
+    ctx.bot_data["flow_convs"] = []
+    _pin_plex(ctx, release, started)
+    task = asyncio.create_task(step(upd, ctx))
+    await asyncio.wait_for(started.wait(), 5)
+    force_end_flow_conversations(ctx, make_update(callback_data="x", user_id=999))
+    release.set()
+    state = await asyncio.wait_for(task, 5)
+    assert state == ConversationHandler.END
+    assert "link_active_loop" not in ctx.user_data
+    assert upd.callback_query.edits == []
+
+
+async def test_didnt_work_tap_force_ended_during_pin_request_starts_no_poll():
+    from bot import link_flow
+    release, started = asyncio.Event(), asyncio.Event()
+    upd = make_update(callback_data=link_flow.LINK_HELP, user_id=999)
+    ctx = make_ctx(admin_id=999, user_data={"link_active_loop": "old"})
+    ctx.bot_data["flow_convs"] = []
+    _pin_plex(ctx, release, started)
+    task = asyncio.create_task(link_flow.cmd_link_didnt_work(upd, ctx))
+    await asyncio.wait_for(started.wait(), 5)
+    force_end_flow_conversations(ctx, make_update(callback_data="x", user_id=999))
+    release.set()
+    await asyncio.wait_for(task, 5)
+    assert "link_active_loop" not in ctx.user_data
+    assert upd.callback_query.edits == []
+
+
+async def test_didnt_work_pin_failure_after_force_end_leaves_no_retry_marker(monkeypatch):
+    from unittest.mock import AsyncMock
+    from bot import link_flow
+    from bot.hub import set_hub_origin
+    release, started = asyncio.Event(), asyncio.Event()
+    end = AsyncMock()
+    monkeypatch.setattr(link_flow, "end_flow", end)
+    upd = make_update(callback_data=link_flow.LINK_HELP, user_id=999)
+    ctx = make_ctx(admin_id=999, user_data={"link_active_loop": "old"})
+    ctx.bot_data["flow_convs"] = []
+    set_hub_origin(ctx, "account")
+
+    async def request_pin(strong=True):
+        started.set()
+        await release.wait()
+        raise RuntimeError("plex down")
+
+    ctx.bot_data["plex"].request_pin = request_pin
+    task = asyncio.create_task(link_flow.cmd_link_didnt_work(upd, ctx))
+    await asyncio.wait_for(started.wait(), 5)
+    force_end_flow_conversations(ctx, make_update(callback_data="x", user_id=999))
+    release.set()
+    await asyncio.wait_for(task, 5)
+    assert link_flow.LINK_RETRY_KEY not in ctx.user_data
+    end.assert_not_awaited()  # no failure message for a flow the user left
+
+
+async def test_platform_step_pin_failure_after_force_end_sends_no_failure_message(monkeypatch):
+    from unittest.mock import AsyncMock
+    from bot import link_flow
+    release, started = asyncio.Event(), asyncio.Event()
+    end = AsyncMock()
+    monkeypatch.setattr(link_flow, "end_flow", end)
+    conv = link_flow._link_conversation()
+    guard_flow_steps(conv)
+    step = conv.states[link_flow.AWAIT_PLATFORM_CHOICE][0].callback
+    upd = make_update(callback_data="lnkplat:desktop", user_id=999)
+    ctx = make_ctx(admin_id=999)
+    ctx.bot_data["flow_convs"] = []
+
+    async def request_pin(strong=True):
+        started.set()
+        await release.wait()
+        raise RuntimeError("plex down")
+
+    ctx.bot_data["plex"].request_pin = request_pin
+    task = asyncio.create_task(step(upd, ctx))
+    await asyncio.wait_for(started.wait(), 5)
+    force_end_flow_conversations(ctx, make_update(callback_data="x", user_id=999))
+    release.set()
+    assert await asyncio.wait_for(task, 5) == ConversationHandler.END
+    end.assert_not_awaited()
+
+
+# --- Wiring over the real app -------------------------------------------------
+
+def _all_conversations(app):
+    return [h for group in app.handlers.values() for h in group
+            if isinstance(h, ConversationHandler)]
+
+
+def test_every_step_of_every_registered_conversation_is_guarded(monkeypatch):
+    """Builds the app the way production does. A conversation added without
+    guard_flow_steps (or left out of flow_convs) fails here."""
+    from pathlib import Path
+    from unittest.mock import MagicMock
+    import bot.app as app_mod
+
+    monkeypatch.setattr(app_mod, "_build_clients_from_settings", lambda app: None)
+    settings = MagicMock()
+    settings.settings.telegram_bot_token = "123:abc"
+    settings.settings.admin_telegram_id = 1
+    app = app_mod._build_app(settings, b"secret", MagicMock(), MagicMock(),
+                             Path("."), Path("settings.json"), ":memory:",
+                             8080, "127.0.0.1")
+    convs = _all_conversations(app)
+    assert len(convs) == 6
+    assert all(c in app.bot_data["flow_convs"] for c in convs)
+    for conv in convs:
+        handlers = (list(conv.entry_points) + list(conv.fallbacks)
+                    + [h for hs in conv.states.values() for h in hs])
+        assert handlers
+        for h in handlers:
+            assert getattr(h.callback, "_flow_guarded", False), (conv.name, h)
