@@ -6,6 +6,7 @@ import asyncio
 import html
 import logging
 import os
+import signal
 from pathlib import Path
 from aiohttp import web
 import telegram
@@ -125,6 +126,9 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s | %(message)s",
     level=logging.INFO,
 )
+# httpx logs every request URL at INFO; those carry the bot token and the SABnzbd API key.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger("usher")
 
 
@@ -834,8 +838,15 @@ async def _run_setup_only(settings_store: SettingsStore, session_secret: bytes,
         http_port=http_port,
     )
     runner = await start_http_server(web_app, host=http_bind, port=http_port)
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, stop.set)
+        except NotImplementedError:
+            pass  # Windows event loops: keep the default signal behaviour
     try:
-        await asyncio.Event().wait()
+        await stop.wait()
     finally:
         await runner.cleanup()
 

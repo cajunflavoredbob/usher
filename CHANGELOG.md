@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Container logs no longer print the bot token or the SABnzbd API key in
+  request URLs, and finishing first-run setup now restarts Usher into
+  full mode instead of hanging.
+
 ## [0.18.0] - 2026-11-11
 
 Hubs: a short command menu with one button message per area.
