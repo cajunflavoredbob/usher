@@ -7,6 +7,8 @@ from telegram.ext import ConversationHandler
 
 from seerr import (
     MEDIA_STATUS_AVAILABLE,
+    MEDIA_STATUS_BLOCKLISTED,
+    PERMISSION_REQUEST_4K,
     MEDIA_STATUS_PENDING,
     REQUEST_STATUS_APPROVED,
     REQUEST_STATUS_PENDING,
@@ -858,3 +860,62 @@ async def test_submit_reports_seasons_seerr_actually_granted():
     text = upd.callback_query.edits[-1]["text"]
     assert "S2" in text and "Show - S1-S2" not in text
     assert "skipped" in text
+
+
+# --- trending tap runs the same availability checks as a search pick ----------
+
+def _trending_ctx(result, perms=0):
+    ctx = _linked_ctx(user_data={"dv_results": [result]})
+    ctx.bot_data["conversations"] = {}
+    ctx.bot_data["flow_convs"] = []
+    ctx.bot_data["seerr"].get_my_permissions.return_value = perms
+    return ctx
+
+
+async def test_trending_tap_on_available_movie_toasts_and_keeps_list():
+    from bot.request_flow import request_from_ticket
+    ctx = _trending_ctx(MediaResult("movie", 550, "Fight Club", "1999", 5,
+                                    status=MEDIA_STATUS_AVAILABLE))
+    upd = make_update(callback_data="rqfi:movie:550", user_id=USER_ID)
+    state = await request_from_ticket(upd, ctx)
+    assert state == ConversationHandler.END
+    assert upd.callback_query.answers == [("", False)]
+    assert upd.effective_message.reply_calls[0]["text"] == (
+        "Fight Club: Already available in Plex ✅")
+    assert upd.callback_query.edits == []
+    assert "rq_media" not in ctx.user_data
+
+
+async def test_trending_tap_on_blocklisted_title_toasts():
+    from bot.request_flow import request_from_ticket
+    ctx = _trending_ctx(MediaResult("movie", 550, "Fight Club", "1999", 5,
+                                    status=MEDIA_STATUS_BLOCKLISTED))
+    upd = make_update(callback_data="rqfi:movie:550", user_id=USER_ID)
+    state = await request_from_ticket(upd, ctx)
+    assert state == ConversationHandler.END
+    assert upd.callback_query.answers == [("", False)]
+    assert upd.effective_message.reply_calls[0]["text"] == (
+        "Fight Club: That title isn't requestable here 🚫")
+    assert upd.callback_query.edits == []
+
+
+async def test_trending_tap_on_available_movie_offers_4k_when_allowed():
+    from bot.request_flow import request_from_ticket
+    ctx = _trending_ctx(MediaResult("movie", 550, "Fight Club", "1999", 5,
+                                    status=MEDIA_STATUS_AVAILABLE),
+                        perms=PERMISSION_REQUEST_4K)
+    upd = make_update(callback_data="rqfi:movie:550", user_id=USER_ID)
+    state = await request_from_ticket(upd, ctx)
+    assert state == RQ_CONFIRM
+    assert ctx.user_data["rq_media"]["force_4k"] is True
+    assert ctx.user_data["rq_media"]["std_status"] == MEDIA_STATUS_AVAILABLE
+
+
+async def test_trending_tap_on_requestable_title_still_confirms():
+    from bot.request_flow import request_from_ticket
+    ctx = _trending_ctx(MediaResult("movie", 550, "Fight Club", "1999", 5,
+                                    status=None))
+    upd = make_update(callback_data="rqfi:movie:550", user_id=USER_ID)
+    state = await request_from_ticket(upd, ctx)
+    assert state == RQ_CONFIRM
+    assert upd.callback_query.answers == [("", False)]

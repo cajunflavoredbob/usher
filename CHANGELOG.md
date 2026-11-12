@@ -46,6 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Request cancelled." instead of leaving it on "Waiting for approval".
 - Typing a command in the middle of /issue, /request, /invite or /link now
   tells you the unfinished flow was stopped, instead of dropping it silently.
+- Tapping a number in /trending now runs the same checks as a search: a movie
+  already in Plex or a blocklisted title says so and keeps the list, and a
+  movie in Plex offers the 4K copy when you may request it.
 
 ## [0.18.0] - 2026-11-11
 

@@ -298,22 +298,82 @@ async def request_hub_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     return RQ_TITLE
 
 
+def _coverage_verdict(ctx: ContextTypes.DEFAULT_TYPE, media_type: str,
+                      selected: MediaResult) -> tuple[Optional[str], bool]:
+    """Availability checks shared by a search pick and a /trending tap.
+    Returns (toast, force_4k): a toast means "stop here, keep the list";
+    force_4k means offer the 4K-only confirm for a movie whose standard
+    track is already covered."""
+    status = selected.status or 0
+    # Blocklisted media isn't requestable in either tier or type; preempt
+    # before the user invests in the season picker just to be told no.
+    if status == MEDIA_STATUS_BLOCKLISTED:
+        return "That title isn't requestable here 🚫", False
+    if media_type == "movie" and status in _COVERED_STATUSES:
+        # Standard track already covered. A 4K-permitted user can still
+        # want the 4K copy, so pass through to a 4K-only confirm unless
+        # the 4K track is covered too.
+        perms = ctx.user_data.get("rq_perms", 0)
+        covered_4k = (selected.status_4k or 0) in _COVERED_STATUSES
+        if can_request_4k(perms, "movie") and not covered_4k:
+            return None, True
+        if status == MEDIA_STATUS_AVAILABLE:
+            msg = ("Already available in Plex ✅ (including 4K)"
+                   if covered_4k and can_request_4k(perms, "movie")
+                   else "Already available in Plex ✅")
+            return msg, False
+        return "Already requested. It's on its way ⏳", False
+    return None, False
+
+
+def _trending_result(ctx: ContextTypes.DEFAULT_TYPE,
+                     data: Optional[str]) -> Optional[MediaResult]:
+    """The /trending list entry a rqfi tap points at, or None (no list, a
+    different entry, or the /issue jump, which stashes its own title)."""
+    try:
+        _, media_type, tmdb_id_s = (data or "").split(":")
+        tmdb_id = int(tmdb_id_s)
+    except ValueError:
+        return None
+    stash = ctx.user_data.get("rq_jump_media") or {}
+    if stash.get("tmdb_id") == tmdb_id:
+        return None
+    return next((r for r in ctx.user_data.get("dv_results") or []
+                 if r.media_type == media_type and r.tmdb_id == tmdb_id), None)
+
+
 async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Entry via the /issue dead-end button. The tapped media is already
     known, so this drops straight into the season picker / confirm."""
     q = update.callback_query
+    # Ack first: the gate below can run a slow Seerr login, and a late
+    # answer to an expired tap raises out of the handler.
     await q.answer()
-    # Another flow may still be parked in a pick state; end everything (this
-    # conversation isn't active yet, so it's untouched) so no stale flow can
-    # fire a timeout notice mid-request.
-    force_end_flow_conversations(ctx, update)
+    # A /trending number tap carries no title, but the latest browse list is
+    # still in user_data with each title's status. The /issue jump stashes
+    # its own title and has no status to check.
+    tapped = _trending_result(ctx, q.data)
     # A pick from a Hub's list (the tapped message carries the back button)
     # ends back at that Hub; any other pick behaves like a typed /request.
     hub = REQUESTS_HUB if came_from_hub(q.message, REQUESTS_HUB) else None
     set_hub_origin(ctx, hub)
     await send_typing(update, ctx)  # gate + title fetch can be slow
     if not await _gate_entry(update, ctx, hub=hub):
+        force_end_flow_conversations(ctx, update)
         return ConversationHandler.END
+    force_4k = False
+    if tapped is not None:
+        refusal, force_4k = _coverage_verdict(ctx, tapped.media_type, tapped)
+        if refusal:
+            # Answer already spent, so the refusal goes out as a message.
+            # The list and any flow the user has open stay as they are.
+            await update.effective_message.reply_text(
+                f"{tapped.title}: {refusal}")
+            return ConversationHandler.END
+    # Another flow may still be parked in a pick state; end everything (this
+    # conversation isn't active yet, so it's untouched) so no stale flow can
+    # fire a timeout notice mid-request.
+    force_end_flow_conversations(ctx, update)
     try:
         _, media_type, tmdb_id_s = q.data.split(":")
         tmdb_id = int(tmdb_id_s)
@@ -339,6 +399,9 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     ctx.user_data["rq_search_version"] = _current_version(ctx) + 1
     ctx.user_data["rq_media"] = {"type": media_type, "tmdb_id": tmdb_id,
                                  "title": title, "year": year}
+    if force_4k:
+        ctx.user_data["rq_media"]["force_4k"] = True
+        ctx.user_data["rq_media"]["std_status"] = tapped.status or 0
     if media_type == "tv":
         return await _show_season_picker(update, ctx)
     return await _show_confirm(update, ctx)
@@ -563,31 +626,10 @@ async def request_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
         return ConversationHandler.END
 
     status = selected.status or 0
-    # Blocklisted media isn't requestable in either tier or type; preempt
-    # before the user invests in the season picker just to be told no.
-    if status == MEDIA_STATUS_BLOCKLISTED:
-        await q.answer("That title isn't requestable here 🚫", show_alert=True)
+    toast, force_4k = _coverage_verdict(ctx, media_type, selected)
+    if toast:
+        await q.answer(toast, show_alert=True)
         return RQ_PICK_MEDIA
-
-    force_4k = False
-    if media_type == "movie" and status in _COVERED_STATUSES:
-        # Standard track already covered. A 4K-permitted user can still
-        # want the 4K copy, so pass through to a 4K-only confirm unless
-        # the 4K track is covered too.
-        perms = ctx.user_data.get("rq_perms", 0)
-        covered_4k = (selected.status_4k or 0) in _COVERED_STATUSES
-        if can_request_4k(perms, "movie") and not covered_4k:
-            force_4k = True
-        elif status == MEDIA_STATUS_AVAILABLE:
-            msg = ("Already available in Plex ✅ (including 4K)"
-                   if covered_4k and can_request_4k(perms, "movie")
-                   else "Already available in Plex ✅")
-            await q.answer(msg, show_alert=True)
-            return RQ_PICK_MEDIA
-        else:
-            await q.answer("Already requested. It's on its way ⏳",
-                           show_alert=True)
-            return RQ_PICK_MEDIA
 
     await q.answer()
     ctx.user_data["rq_media"] = {
