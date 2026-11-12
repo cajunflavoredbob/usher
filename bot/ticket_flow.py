@@ -706,7 +706,7 @@ async def ticket_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
             if used >= daily_limit:
                 await update.effective_message.reply_text(
                     f"(You've used your {daily_limit} auto-fixes today; "
-                    f"submitting issue without auto-fix.)"
+                    f"submitting the Ticket without auto-fix.)"
                 )
                 return await _submit_ticket(update, ctx, autofix=False)
             remaining_msg = f"\n(Auto-fixes remaining today: {daily_limit - used})"

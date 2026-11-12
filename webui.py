@@ -681,7 +681,7 @@ def _settings_page(
 <form id="autofix-form" method="POST" action="/admin/autofix">
   {csrf}
   <h2>Auto-fix</h2>
-  <p class="intro">On a Video, Audio, or Subtitles issue, Radarr or Sonarr deletes the file and searches for a replacement.</p>
+  <p class="intro">On a Video, Audio, or Subtitles Ticket, Radarr or Sonarr deletes the file and searches for a replacement.</p>
 
   <label>Radarr URL <span class="note">optional</span></label>
   <input type="text" name="radarr_url" value="{_esc(s.radarr_url)}" placeholder="http://192.0.2.10:7878">
