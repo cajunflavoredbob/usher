@@ -698,6 +698,10 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
 # has to leave the conversation alive for that fallback to run.
 FLOW_RESET_EXEMPT_COMMANDS: Final = frozenset({"cancel"})
 
+# Flow registry names (bot_data["conversations"]) that are started by a
+# command of the same name; the others start from buttons.
+_FLOW_COMMANDS: Final = frozenset({"link", "issue", "request", "invite"})
+
 
 def command_name(msg) -> Optional[str]:
     """Return the bot-command at the start of `msg` (lowercased, without the
@@ -725,11 +729,32 @@ async def reset_stale_flows(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
     cmd = command_name(update.effective_message)
     if cmd is None or cmd in FLOW_RESET_EXEMPT_COMMANDS:
         return
-    force_end_flow_conversations(ctx, update)
+    ended = force_end_flow_conversations(ctx, update)
+    if not ended:
+        return
+    # Tell the user their flow ended, so the next text they type isn't met
+    # with silence. Name the flow only when exactly one flow ended and it maps
+    # to a command; skip the notice when the new command is that flow's own
+    # command (the user is restarting it).
+    names = {id(conv): name
+             for name, conv in ctx.application.bot_data.get("conversations", {}).items()
+             if name in _FLOW_COMMANDS}
+    flows = {names.get(id(conv)) for conv in ended}
+    if flows == {cmd}:
+        return
+    flows.discard(None)
+    if len(flows) == 1 and len(ended) == 1:
+        text = f"Stopped your unfinished /{next(iter(flows))}."
+    else:
+        text = "Stopped what you were in the middle of."
+    try:
+        await update.effective_message.reply_text(text)
+    except telegram.error.TelegramError as exc:
+        logger.debug("flow-reset notice failed", exc_info=exc)
 
 
 def force_end_flow_conversations(ctx: ContextTypes.DEFAULT_TYPE,
-                                 update: Update) -> None:
+                                 update: Update) -> list:
     """End every registered flow conversation for this update's (chat, user)
     and drop the free-text flow markers those conversations own. Shared by
     reset_stale_flows and by cross-flow jump entry points (e.g. the /issue
@@ -741,7 +766,10 @@ def force_end_flow_conversations(ctx: ContextTypes.DEFAULT_TYPE,
     The markers travel WITH the force-end, never separately: ending the link
     conversation also cancels the timeout job that would normally clear
     link_active_loop, so leaving the marker set would let an in-flight Plex
-    PIN poll outlive its conversation and fire _finalize_link mid-flow."""
+    PIN poll outlive its conversation and fire _finalize_link mid-flow.
+
+    Returns the conversations that were actually live and got ended."""
+    ended = []
     for conv in ctx.application.bot_data.get("flow_convs", ()):
         try:
             key = conv._get_key(update)
@@ -749,11 +777,13 @@ def force_end_flow_conversations(ctx: ContextTypes.DEFAULT_TYPE,
             continue
         if key in conv._conversations:
             conv._update_state(ConversationHandler.END, key)
+            ended.append(conv)
             job = conv.timeout_jobs.pop(key, None)
             if job is not None:
                 job.schedule_removal()
     for marker in ("tk_reply_id", "tk_close_after", "link_active_loop"):
         ctx.user_data.pop(marker, None)
+    return ended
 
 
 # Keycap-emoji labels for numbered pick lists (/issue and /request share the

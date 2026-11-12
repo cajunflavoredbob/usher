@@ -44,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deleting the current file again.
 - Cancelling a Request from /requests now closes its Progress card with
   "Request cancelled." instead of leaving it on "Waiting for approval".
+- Typing a command in the middle of /issue, /request, /invite or /link now
+  tells you the unfinished flow was stopped, instead of dropping it silently.
 
 ## [0.18.0] - 2026-11-11
 
