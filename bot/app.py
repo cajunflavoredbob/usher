@@ -611,6 +611,7 @@ async def _post_init(app: Application) -> None:
         trusted_proxies=app.bot_data["trusted_proxies"],
         http_port=app.bot_data["http_port"],
         user_store=app.bot_data["store"],
+        enc_key_path=_encryption_key_path(app.bot_data["data_dir"]),
     )
 
     runner = await start_http_server(
@@ -808,6 +809,11 @@ def _migrate_legacy_env_into_settings(settings_store: SettingsStore) -> bool:
     return changed
 
 
+def _encryption_key_path(data_dir: Path) -> Path:
+    """The key file TokenCrypto loads: ENCRYPTION_KEY_PATH, else data_dir/encryption.key."""
+    return Path(os.environ.get("ENCRYPTION_KEY_PATH", str(data_dir / "encryption.key")))
+
+
 async def _run_setup_only(settings_store: SettingsStore, session_secret: bytes,
                           data_dir: Path, settings_path: Path, db_path: str,
                           http_port: int, http_bind: str) -> None:
@@ -835,6 +841,7 @@ async def _run_setup_only(settings_store: SettingsStore, session_secret: bytes,
         on_settings_changed=_on_settings_changed,
         trusted_proxies=parse_trusted_proxies(os.environ.get("TRUSTED_PROXIES", "")),
         http_port=http_port,
+        enc_key_path=_encryption_key_path(data_dir),
     )
     runner = await start_http_server(web_app, host=http_bind, port=http_port)
     stop = asyncio.Event()
@@ -860,7 +867,7 @@ def main() -> None:
     settings_store = SettingsStore(settings_path)
     _migrate_legacy_env_into_settings(settings_store)
     session_secret = load_or_create_session_secret(data_dir / "session_secret")
-    crypto = TokenCrypto(key_path=os.environ.get("ENCRYPTION_KEY_PATH", str(data_dir / "encryption.key")))
+    crypto = TokenCrypto(key_path=_encryption_key_path(data_dir))
     user_store = UserStore(db_path, crypto=crypto)
     plex = PlexClient(
         client_id_path=os.environ.get("PLEX_CLIENT_ID_PATH", str(data_dir / "client_id")),

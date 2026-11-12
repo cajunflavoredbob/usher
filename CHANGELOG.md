@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Backup and restore now use the encryption key file Usher actually runs with,
+  so a custom ENCRYPTION_KEY_PATH is included in the backup and restored in
+  place instead of a stray copy in the data folder.
 - The Fix timeout message no longer tells a Reporter to check Sonarr or Radarr,
   which only the Admin can open.
 - When a Request or Ticket action expires before you finish re-linking, the

@@ -1447,7 +1447,7 @@ async def backup_download(request: web.Request) -> web.Response:
     data_dir: Path = request.app["data_dir"]
     settings_path: Path = request.app["settings_path"]
     db_path: Path = Path(request.app["db_path"])
-    enc_key_path = data_dir / "encryption.key"
+    enc_key_path: Path = request.app["enc_key_path"]
     store: SettingsStore = request.app["settings_store"]
 
     form = await request.post()
@@ -1554,7 +1554,7 @@ async def restore_upload(request: web.Request) -> web.Response:
     data_dir: Path = request.app["data_dir"]
     settings_path: Path = request.app["settings_path"]
     db_path: Path = Path(request.app["db_path"])
-    enc_key_path = data_dir / "encryption.key"
+    enc_key_path: Path = request.app["enc_key_path"]
 
     # Multipart parsing: pull CSRF token, optional passphrase, and the file.
     reader = await request.multipart()
@@ -1986,12 +1986,15 @@ def attach_webui(
     trusted_proxies: tuple = (),
     http_port: int = 8765,
     user_store=None,
+    enc_key_path: Optional[Path] = None,
 ) -> None:
     app["settings_store"] = settings_store
     app["session_secret"] = session_secret
     app["data_dir"] = data_dir
     app["settings_path"] = settings_path
     app["db_path"] = db_path
+    # The key file the bot actually loads (ENCRYPTION_KEY_PATH may move it).
+    app["enc_key_path"] = Path(enc_key_path) if enc_key_path else data_dir / "encryption.key"
     # UserStore (optional): restore uses its maintenance lock to serialize
     # the DB-file swap against in-flight store writes.
     app["user_store"] = user_store
