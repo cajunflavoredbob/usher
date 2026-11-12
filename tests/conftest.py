@@ -13,6 +13,16 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 
+@pytest.fixture(autouse=True)
+def _clear_restart_pending():
+    """procutil's restart-pending flag is process-wide: a test that schedules
+    a restart must not make later tests' panel saves answer 503."""
+    import procutil
+    procutil.reset_restart_pending()
+    yield
+    procutil.reset_restart_pending()
+
+
 @pytest.fixture
 def tmp_settings_path(tmp_path: Path) -> Path:
     return tmp_path / "settings.json"
