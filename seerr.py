@@ -254,6 +254,12 @@ class IssueListItem:
     comments: list = field(default_factory=list)  # Reply thread AFTER the original report
                                # (list of IssueComment); populated only by get_issue, empty
                                # for list_issues entries.
+    created_by_id: Optional[int] = None   # Seerr user id of the reporter; the
+                               # display name is user-editable, the id is not.
+                               # Populated by get_issue only.
+    last_comment_user_id: Optional[int] = None  # Seerr user id behind the newest
+                               # comment (the original report counts when there
+                               # are no replies). Populated by get_issue only.
 
 
 class SeerrClient:
@@ -617,8 +623,11 @@ class SeerrClient:
         # after it is the reply thread.
         description = ""
         thread: list = []
+        last_comment_user_id = None
         for idx, c in enumerate(d.get("comments") or []):
             c = c or {}
+            cuid = (c.get("user") or {}).get("id")
+            last_comment_user_id = cuid if isinstance(cuid, int) else None
             msg = (c.get("message") or "").strip()
             if idx == 0:
                 description = msg
@@ -643,6 +652,9 @@ class SeerrClient:
             created_by=created_by.get("displayName") or created_by.get("plexUsername") or "?",
             description=description,
             comments=thread,
+            created_by_id=(created_by.get("id")
+                           if isinstance(created_by.get("id"), int) else None),
+            last_comment_user_id=last_comment_user_id,
         )
 
     async def get_media_title(self, media_type: str, tmdb_id: int) -> tuple[str, str]:

@@ -49,6 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tapping a number in /trending now runs the same checks as a search: a movie
   already in Plex or a blocklisted title says so and keeps the list, and a
   movie in Plex offers the 4K copy when you may request it.
+- Ticket messages now reach the right person even when their Seerr Display Name
+  differs from their Plex name. A Display Name can no longer hide a Ticket
+  message or send it to someone else, and the Admin is not messaged about their
+  own comments.
 
 ## [0.18.0] - 2026-11-11
 

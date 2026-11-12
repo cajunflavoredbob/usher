@@ -99,3 +99,22 @@ async def test_only_original_report_no_replies(monkeypatch):
     issue = await c.get_issue(42)
     assert issue.description == "just the report"
     assert issue.comments == []
+
+
+async def test_keeps_reporter_and_newest_commenter_ids(monkeypatch):
+    p = _payload([
+        {"message": "broken", "user": {"id": 5, "displayName": "User2"}},
+        {"message": "on it", "user": {"id": 1, "displayName": "Admin"}},
+    ])
+    p["createdBy"] = {"id": 5, "displayName": "User2"}
+    issue = await _client(monkeypatch, p).get_issue(42)
+    assert issue.created_by_id == 5
+    assert issue.last_comment_user_id == 1
+
+
+async def test_ids_are_none_when_seerr_omits_them(monkeypatch):
+    issue = await _client(monkeypatch, _payload([
+        {"message": "broken", "user": {"displayName": "User2"}},
+    ])).get_issue(42)
+    assert issue.created_by_id is None
+    assert issue.last_comment_user_id is None

@@ -29,6 +29,50 @@ from bot.shared import (
 logger = logging.getLogger("usher")
 
 
+async def _issue_party_ids(
+    app: Application, ticket_id: int,
+) -> tuple[Optional[int], Optional[int]]:
+    """(reporter_seerr_id, newest_commenter_seerr_id) for a Ticket.
+
+    Display names in the webhook payload are user-editable in Seerr, so a
+    custom name hides a DM and a spoofed one can route it to someone else.
+    The ids come from fetching the issue with the admin key. Either is None
+    when the fetch fails or Seerr omits it; callers then fall back to the
+    historical username match."""
+    seerr: Optional[SeerrClient] = app.bot_data.get("seerr")
+    if seerr is None:
+        return None, None
+    try:
+        issue = await seerr.get_issue(ticket_id)
+    except Exception:
+        logger.debug("Ticket #%d party lookup failed; falling back to "
+                     "username match", ticket_id, exc_info=True)
+        return None, None
+    reporter = getattr(issue, "created_by_id", None)
+    commenter = getattr(issue, "last_comment_user_id", None)
+    return (reporter if isinstance(reporter, int) else None,
+            commenter if isinstance(commenter, int) else None)
+
+
+async def _admin_seerr_ids(app: Application, admin_link) -> set[int]:
+    """Seerr user ids that count as the admin: the linked admin account and
+    the account the admin API key acts as (used for key-attributed actions)."""
+    ids: set[int] = set()
+    sid = getattr(admin_link, "seerr_id", None)
+    if isinstance(sid, int):
+        ids.add(sid)
+    seerr: Optional[SeerrClient] = app.bot_data.get("seerr")
+    if seerr is not None:
+        try:
+            key_id = await seerr.get_admin_user_id()
+        except Exception:
+            logger.debug("admin-id lookup failed (non-fatal)", exc_info=True)
+            key_id = None
+        if isinstance(key_id, int):
+            ids.add(key_id)
+    return ids
+
+
 async def handle_seerr_comment(app: Application, payload: dict) -> None:
     """Process an ISSUE_COMMENT webhook and notify the other party in the
     conversation: the reporter when someone else comments, and the admin when
@@ -50,7 +94,8 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
     commenter_username = (comment.get("commentedBy_username") or "").strip()
     comment_text = (comment.get("comment_message") or "").strip()
 
-    if not reporter_username:
+    reporter_sid, commenter_sid = await _issue_party_ids(app, ticket_id)
+    if not reporter_username and reporter_sid is None:
         logger.info("Webhook comment on ticket #%d: no reporter username; dropping", ticket_id)
         return
     if not comment_text:
@@ -64,14 +109,20 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
     # this comment (and must therefore not be notified about it).
     admin_link = await store.get(admin_id) if admin_id else None
     admin_plex = (admin_link.plex_username if admin_link else "") or ""
-    commenter_is_admin = bool(
-        commenter_username and admin_plex
-        and commenter_username.lower() == admin_plex.lower()
-    )
-    commenter_is_reporter = bool(
-        commenter_username
-        and commenter_username.lower() == reporter_username.lower()
-    )
+    if commenter_sid is not None:
+        commenter_is_admin = commenter_sid in await _admin_seerr_ids(app, admin_link)
+    else:
+        commenter_is_admin = bool(
+            commenter_username and admin_plex
+            and commenter_username.lower() == admin_plex.lower()
+        )
+    if commenter_sid is not None and reporter_sid is not None:
+        commenter_is_reporter = commenter_sid == reporter_sid
+    else:
+        commenter_is_reporter = bool(
+            commenter_username and reporter_username
+            and commenter_username.lower() == reporter_username.lower()
+        )
 
     seerr: Optional[SeerrClient] = app.bot_data.get("seerr")
     title_line = await format_media_title_line(seerr, media)
@@ -128,7 +179,10 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
     # Notify the reporter unless they wrote the comment.
     reporter_tid = None
     if not commenter_is_reporter:
-        link = await store.find_by_plex_username(reporter_username)
+        if reporter_sid is not None:
+            link = await store.find_by_seerr_id(reporter_sid)
+        else:
+            link = await store.find_by_plex_username(reporter_username)
         if link is None:
             logger.info(
                 "Webhook comment on ticket #%d: reporter '%s' not linked; "
@@ -159,12 +213,16 @@ async def handle_seerr_resolved(app: Application, payload: dict) -> None:
         return
 
     reporter_username = (ticket.get("reportedBy_username") or "").strip()
-    if not reporter_username:
+    reporter_sid, _ = await _issue_party_ids(app, ticket_id)
+    if not reporter_username and reporter_sid is None:
         logger.info("Webhook resolved on ticket #%d: no reporter username; dropping", ticket_id)
         return
 
     store: UserStore = app.bot_data["store"]
-    link = await store.find_by_plex_username(reporter_username)
+    if reporter_sid is not None:
+        link = await store.find_by_seerr_id(reporter_sid)
+    else:
+        link = await store.find_by_plex_username(reporter_username)
     if link is None:
         logger.info(
             "Webhook resolved on ticket #%d: reporter '%s' not linked in Usher",
@@ -242,7 +300,8 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
         return
 
     reporter_username = (ticket.get("reportedBy_username") or "").strip()
-    if not reporter_username:
+    reporter_sid, _ = await _issue_party_ids(app, ticket_id)
+    if not reporter_username and reporter_sid is None:
         logger.info("Webhook reported on ticket #%d: no reporter username; dropping", ticket_id)
         return
 
@@ -253,8 +312,13 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
     # Skip if admin filed it themselves -- they already saw the /issue confirmation
     store: UserStore = app.bot_data["store"]
     admin_link = await store.get(admin_id)
-    if (admin_link and admin_link.plex_username
-            and admin_link.plex_username.lower() == reporter_username.lower()):
+    if reporter_sid is not None:
+        admin_filed = reporter_sid in await _admin_seerr_ids(app, admin_link)
+    else:
+        admin_filed = bool(
+            admin_link and admin_link.plex_username and reporter_username
+            and admin_link.plex_username.lower() == reporter_username.lower())
+    if admin_filed:
         logger.info("ISSUE_REPORTED #%d filed by admin themselves; not DMing", ticket_id)
         return
 
