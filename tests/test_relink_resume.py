@@ -8,7 +8,7 @@ import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from bot import shared
+from bot import shared, ticket_flow  # noqa: F401  (registers the submit_ticket executor)
 from bot.link_flow import _finalize_link, cmd_unlink
 from bot.resolve_flow import resolve_comment, resolve_start
 from bot.shared import RELINK_RESUME_EXECUTORS, run_relink_resume
