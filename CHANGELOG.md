@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The Auto-fix and SABnzbd tabs show a "Remove the saved key" box next to a
+  stored Radarr, Sonarr or SABnzbd API key; ticking it and saving clears the key.
+
 ### Fixed
+- A Test with the API key field left blank no longer sends the saved key to a
+  URL other than the saved one. Seerr, Radarr, Sonarr and SABnzbd Test now ask
+  you to type the key again for the new URL.
 - Mark Failed now blocklists the release that produced the file on disk (the
   grab matching the newest import) instead of the newest grab, which could be a
   later download still in flight. When that release can't be identified,

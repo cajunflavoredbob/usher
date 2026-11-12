@@ -207,21 +207,50 @@ def _current_user(request: web.Request) -> Optional[str]:
 SECRET_KEEP_NOTE = '<div class="note">Already set. Leave blank to keep it.</div>'
 
 
-def _form_secret(form, name: str, stored: str) -> str:
+def _form_secret(form, name: str, stored: str, *,
+                 clearable: bool = False) -> str:
     """A secret posted from the Settings page: the typed value, or the stored
-    one when the field was left blank."""
+    one when the field was left blank. On a clearable (optional) key, a ticked
+    "Remove the saved key" box wins over anything typed and yields empty."""
+    if clearable and form.get(f"clear_{name}") is not None:
+        return ""
     return (form.get(name) or "").strip() or stored
 
 
+def _same_url(a: str, b: str) -> bool:
+    """Whether two service URLs match after the Save path's strip, ignoring a
+    trailing slash."""
+    return (a or "").strip().rstrip("/") == (b or "").strip().rstrip("/")
+
+
+def _reuses_stored_key_for_new_url(form, key_name: str, stored_key: str,
+                                   typed_url: str, stored_url: str) -> bool:
+    """True when a Test would send the stored key to a URL other than the
+    stored one: the key field is blank, a key is stored, the URL differs."""
+    typed = (form.get(key_name) or "").strip()
+    return bool(not typed and stored_key
+                and not _same_url(typed_url, stored_url))
+
+
+def _key_retype_message(label: str) -> str:
+    return (f"{label} URL changed. Type the key again to test the new URL; "
+            f"the saved key is only sent to the saved URL.")
+
+
 def _secret_field(name: str, stored: str, *, required: bool = False,
-                  field_id: str = "") -> str:
+                  field_id: str = "", clearable: bool = False) -> str:
     """Password input plus the keep-note. The stored value is never rendered:
     a blank POST (or blank Test) falls back to it server-side."""
     id_attr = f' id="{field_id}"' if field_id else ""
     req = " required" if required and not stored else ""
     note = SECRET_KEEP_NOTE if stored else ""
+    clear = ""
+    if clearable and stored:
+        clear = (f'\n  <label class="inline-check">'
+                 f'<input type="checkbox" name="clear_{name}"> '
+                 f'Remove the saved key</label>')
     return (f'<input type="password"{id_attr} name="{name}" '
-            f'autocomplete="off"{req}>\n  {note}')
+            f'autocomplete="off"{req}>\n  {note}{clear}')
 
 
 def _esc(s) -> str:
@@ -707,12 +736,12 @@ def _settings_page(
   <label>Radarr URL <span class="note">optional</span></label>
   <input type="text" name="radarr_url" value="{_esc(s.radarr_url)}" placeholder="http://192.0.2.10:7878">
   <label>Radarr API Key</label>
-  {_secret_field("radarr_api_key", s.radarr_api_key)}
+  {_secret_field("radarr_api_key", s.radarr_api_key, clearable=True)}
 
   <label>Sonarr URL <span class="note">optional</span></label>
   <input type="text" name="sonarr_url" value="{_esc(s.sonarr_url)}" placeholder="http://192.0.2.10:8989">
   <label>Sonarr API Key</label>
-  {_secret_field("sonarr_api_key", s.sonarr_api_key)}
+  {_secret_field("sonarr_api_key", s.sonarr_api_key, clearable=True)}
 
   <label>Allowed Telegram User IDs</label>
   <label class="inline-check" for="autofix-allow-all">
@@ -750,7 +779,7 @@ def _settings_page(
   <label>SABnzbd URL <span class="note">optional</span></label>
   <input type="text" name="sabnzbd_url" value="{_esc(s.sabnzbd_url)}" placeholder="http://192.0.2.10:8080">
   <label>SABnzbd API Key</label>
-  {_secret_field("sabnzbd_api_key", s.sabnzbd_api_key)}
+  {_secret_field("sabnzbd_api_key", s.sabnzbd_api_key, clearable=True)}
   <label>Auto-bump priority</label>
   <select name="sabnzbd_boost">{boost_options}</select>
   <div class="note">Applied once per download. Force starts the job even if the queue is paused.</div>
@@ -1324,9 +1353,11 @@ async def autofix_post(request: web.Request) -> web.Response:
                 content_type="text/html", status=400,
             )
     s.radarr_url = (form.get("radarr_url") or "").strip()
-    s.radarr_api_key = _form_secret(form, "radarr_api_key", s.radarr_api_key)
+    s.radarr_api_key = _form_secret(
+        form, "radarr_api_key", s.radarr_api_key, clearable=True)
     s.sonarr_url = (form.get("sonarr_url") or "").strip()
-    s.sonarr_api_key = _form_secret(form, "sonarr_api_key", s.sonarr_api_key)
+    s.sonarr_api_key = _form_secret(
+        form, "sonarr_api_key", s.sonarr_api_key, clearable=True)
     ids_raw = form.get("allowed_autofix_telegram_ids") or ""
     parsed_ids: list[int] = []
     for chunk in ids_raw.split(","):
@@ -1380,7 +1411,8 @@ async def sabnzbd_post(request: web.Request) -> web.Response:
             content_type="text/html", status=400,
         )
     s.sabnzbd_url = value
-    s.sabnzbd_api_key = _form_secret(form, "sabnzbd_api_key", s.sabnzbd_api_key)
+    s.sabnzbd_api_key = _form_secret(
+        form, "sabnzbd_api_key", s.sabnzbd_api_key, clearable=True)
     boost = (form.get("sabnzbd_boost") or "off").strip()
     s.sabnzbd_boost = boost if boost in ("off", "high", "force") else "off"
     return await _save_and_render(request, active_tab="sabnzbd")
@@ -1789,8 +1821,12 @@ async def test_seerr(request: web.Request) -> web.Response:
     if guard is not None:
         return guard
     url = (form.get("seerr_url") or "").strip()
-    key = _form_secret(form, "seerr_api_key",
-                       request.app["settings_store"].settings.seerr_api_key)
+    saved = request.app["settings_store"].settings
+    if _reuses_stored_key_for_new_url(form, "seerr_api_key",
+                                      saved.seerr_api_key, url,
+                                      saved.seerr_url):
+        return _test_json(False, _key_retype_message("Seerr"))
+    key = _form_secret(form, "seerr_api_key", saved.seerr_api_key)
     if not url or not key:
         return _test_json(False, "Seerr URL and API key are required.")
     client = SeerrClient(url, key)
@@ -1826,6 +1862,13 @@ async def test_autofix(request: web.Request) -> web.Response:
         if not url:
             continue
         any_configured = True
+        key_field = f"{name.lower()}_api_key"
+        if _reuses_stored_key_for_new_url(
+                form, key_field, getattr(saved, key_field), url,
+                getattr(saved, f"{name.lower()}_url")):
+            ok_all = False
+            results.append(f"{name}: {_key_retype_message(name)}")
+            continue
         if not key:
             ok_all = False
             results.append(f"{name}: API key missing")
@@ -1851,8 +1894,12 @@ async def test_sabnzbd(request: web.Request) -> web.Response:
     if guard is not None:
         return guard
     url = (form.get("sabnzbd_url") or "").strip()
-    key = _form_secret(form, "sabnzbd_api_key",
-                       request.app["settings_store"].settings.sabnzbd_api_key)
+    saved = request.app["settings_store"].settings
+    if _reuses_stored_key_for_new_url(form, "sabnzbd_api_key",
+                                      saved.sabnzbd_api_key, url,
+                                      saved.sabnzbd_url):
+        return _test_json(False, _key_retype_message("SABnzbd"))
+    key = _form_secret(form, "sabnzbd_api_key", saved.sabnzbd_api_key)
     if not url or not key:
         return _test_json(False, "SABnzbd URL and API key are required.")
     from sabnzbd import SabnzbdClient
