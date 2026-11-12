@@ -19,7 +19,7 @@ from seerr import SeerrClient
 from store import UserStore
 
 from bot.callback_prefixes import SUBSCRIPTION_DEL
-from bot.hub import back_button, came_from_hub, end_markup
+from bot.hub import back_button, came_from_hub, end_markup, reply_end
 from bot.requests_hub import REQUESTS_HUB
 from bot.shared import (
     DECRYPT_FAILED_MSG,
@@ -101,11 +101,7 @@ async def _render_subscriptions(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         text = ("You're not watching anything. Tap 🔔 on a title's detail card "
                 "(🖼 in /request or /trending) to get a DM when it becomes "
                 "available.")
-        if hub:
-            sent = await reply_method(text, reply_markup=end_markup(hub))
-            record_btn(ctx.application, user_id, sent)
-        else:
-            await reply_method(text)
+        await reply_end(ctx, reply_method, text, hub, user_id=user_id)
         return
     lines = [f"🔔 Your availability watches ({len(subscriptions)}):", ""]
     rows: list[list[InlineKeyboardButton]] = []

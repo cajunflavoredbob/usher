@@ -25,7 +25,7 @@ from seerr import (
 from store import UserStore
 
 from bot.callback_prefixes import REQUESTS_MINE, RQ_LIST_CANCEL
-from bot.hub import back_button, came_from_hub, end_markup
+from bot.hub import back_button, came_from_hub, end_markup, reply_end
 from bot.requests_hub import REQUESTS_HUB
 from bot.shared import (
     DECRYPT_FAILED_MSG,
@@ -78,25 +78,17 @@ async def _render_requests(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         return
     except Exception as exc:
         logger.exception("list_requests failed")
-        if hub:
-            sent = await reply_method(
-                f"Couldn't fetch requests. {user_friendly_message(exc)}",
-                reply_markup=end_markup(hub, REQUESTS_MINE))
-            record_btn(ctx.application, user_id, sent)
-        else:
-            await reply_method(
-                f"Couldn't fetch requests. {user_friendly_message(exc)}")
+        await reply_end(
+            ctx, reply_method,
+            f"Couldn't fetch requests. {user_friendly_message(exc)}",
+            hub, REQUESTS_MINE, user_id=user_id)
         return
 
     if not requests:
         empty = ("No requests across all users yet." if is_admin
                  else "You haven't requested anything yet. /request to start!")
         empty_text = f"{notice}\n\n{empty}" if notice else empty
-        if hub:
-            sent = await reply_method(empty_text, reply_markup=end_markup(hub))
-            record_btn(ctx.application, user_id, sent)
-        else:
-            await reply_method(empty_text)
+        await reply_end(ctx, reply_method, empty_text, hub, user_id=user_id)
         return
 
     title_tasks = [seerr.get_media_title(r.media_type, r.tmdb_id) for r in requests]

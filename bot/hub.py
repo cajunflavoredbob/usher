@@ -126,6 +126,18 @@ def came_from_hub(message, hub: str) -> bool:
     return f"{HUB_OPEN}:{hub}" in keyboard_callbacks(message)
 
 
+async def reply_end(ctx, reply_method, text: str, hub: Optional[str],
+                    retry: Optional[str] = None, *, user_id: int) -> None:
+    """Send `text` through `reply_method` as the end of a list render. With a
+    Hub the text carries the end keyboard (Try again when `retry` is set) and
+    is recorded with the button gate; without one it goes out as plain text."""
+    if not hub:
+        await reply_method(text)
+        return
+    sent = await reply_method(text, reply_markup=end_markup(hub, retry))
+    record_btn(ctx.application, user_id, sent)
+
+
 async def end_flow(update, ctx, text: str, hub: Optional[str],
                    retry: Optional[str] = None, *,
                    typed_text: Optional[str] = None,

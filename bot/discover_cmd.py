@@ -26,7 +26,7 @@ from bot.callback_prefixes import (
     REQUESTS_TRENDING,
     RQ_FROM_TICKET,
 )
-from bot.hub import back_button, came_from_hub, end_markup
+from bot.hub import back_button, came_from_hub, end_markup, reply_end
 from bot.media_card import STATUS_NOTES, send_detail_card
 from bot.requests_hub import REQUESTS_HUB
 from bot.shared import (
@@ -142,20 +142,12 @@ async def _load_and_render(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     except Exception as exc:
         logger.exception("discover fetch failed")
         text = f"Couldn't fetch the list. {user_friendly_message(exc)}"
-        if hub:
-            sent = await reply_method(
-                text, reply_markup=end_markup(hub, REQUESTS_TRENDING))
-            record_btn(ctx.application, user_id, sent)
-        else:
-            await reply_method(text)
+        await reply_end(ctx, reply_method, text, hub, REQUESTS_TRENDING,
+                        user_id=user_id)
         return
     if not results:
         text = "Nothing in that list right now. Try another category."
-        if hub:
-            sent = await reply_method(text, reply_markup=end_markup(hub))
-            record_btn(ctx.application, user_id, sent)
-        else:
-            await reply_method(text)
+        await reply_end(ctx, reply_method, text, hub, user_id=user_id)
         return
     ctx.user_data["dv_version"] = _current_version(ctx) + 1
     ctx.user_data["dv_results"] = results

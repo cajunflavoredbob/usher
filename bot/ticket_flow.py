@@ -45,7 +45,7 @@ from bot.callback_prefixes import (
     TICKETS_REPORT,
 )
 from bot.hub import (back_button, end_flow, end_markup, hub_origin,
-                     set_hub_origin)
+                     reply_end, set_hub_origin)
 from bot.tickets_hub import TICKETS_HUB
 from bot.shared import (
     DECRYPT_FAILED_MSG,
@@ -278,12 +278,8 @@ async def _show_search_results(
         logger.exception("search failed")
         text = f"Search failed. {user_friendly_message(exc)}"
         hub = _tickets_origin(ctx)
-        if hub is None:
-            await reply_method(text)
-        else:
-            sent = await reply_method(
-                text, reply_markup=end_markup(hub, TICKETS_REPORT))
-            record_btn(ctx.application, user_id, sent)
+        await reply_end(ctx, reply_method, text, hub, TICKETS_REPORT,
+                        user_id=user_id)
         return ConversationHandler.END
     if not results:
         await reply_method(
