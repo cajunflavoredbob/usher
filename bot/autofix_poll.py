@@ -222,7 +222,8 @@ async def _notify_timeout(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:
     is_admin = fix.user_id == ctx.bot_data.get("admin_id")
     lines = [
         f"⏱️ Auto-fix timed out ({AUTOFIX_TIMEOUT_HOURS}h) for <b>{html.escape(fix.label)}</b>.",
-        "No new file was imported. Check Sonarr/Radarr to see if a release was grabbed.",
+        "No new file was imported."
+        + (" Check Sonarr/Radarr to see if a release was grabbed." if is_admin else ""),
         *_ticket_line(fix),
         "",
         "Want to add a note to the ticket?" if is_admin

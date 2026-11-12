@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- The Fix timeout message no longer tells a Reporter to check Sonarr or Radarr,
+  which only the Admin can open.
 - When a Request or Ticket action expires before you finish re-linking, the
   message now points you to the command that restarts that action (/request,
   /issue or /tickets) instead of always naming /issue and /tickets.

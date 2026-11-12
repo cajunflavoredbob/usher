@@ -89,6 +89,24 @@ async def test_timeout_copy_for_admin_omits_admin_reference():
     assert "for the admin" not in text
 
 
+async def test_timeout_arr_hint_is_admin_only():
+    """Only the Admin can open Sonarr/Radarr, so the Reporter's timeout DM
+    stops at 'No new file was imported.'"""
+    fix = _make_fix(timed_out=True)  # user_id=42
+    ctx = make_ctx(admin_id=999)
+    ctx.bot.send_message = AsyncMock(return_value=make_message(message_id=792))
+    await _notify_timeout(ctx, fix)
+    text = ctx.bot.send_message.call_args.kwargs["text"]
+    assert "No new file was imported." in text
+    assert "Sonarr/Radarr" not in text
+
+    ctx = make_ctx(admin_id=42)
+    ctx.bot.send_message = AsyncMock(return_value=make_message(message_id=793))
+    await _notify_timeout(ctx, fix)
+    text = ctx.bot.send_message.call_args.kwargs["text"]
+    assert "Check Sonarr/Radarr to see if a release was grabbed." in text
+
+
 async def test_notify_uses_html_and_escapes_title():
     """A title full of Markdown/HTML metacharacters must neither kill the
     send (legacy Markdown raised BadRequest) nor inject markup."""
