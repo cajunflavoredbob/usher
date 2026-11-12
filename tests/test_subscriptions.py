@@ -83,7 +83,7 @@ async def test_empty_list_hint():
     ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
     upd = make_update(text="/subscriptions", user_id=USER_ID)
     await cmd_subscriptions(upd, ctx)
-    assert "not watching anything" in upd.effective_message.reply_calls[-1]["text"]
+    assert "You have no Subscriptions" in upd.effective_message.reply_calls[-1]["text"]
 
 
 async def test_fan_out_dms_subscribers_except_already_notified():

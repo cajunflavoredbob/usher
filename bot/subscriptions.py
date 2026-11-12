@@ -98,12 +98,12 @@ async def _render_subscriptions(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     store: UserStore = ctx.bot_data["store"]
     subscriptions = await store.list_subscriptions(user_id)
     if not subscriptions:
-        text = ("You're not watching anything. Tap 🔔 on a title's detail card "
+        text = ("You have no Subscriptions. Tap 🔔 on a title's detail card "
                 "(🖼 in /request or /trending) to get a DM when it becomes "
                 "available.")
         await reply_end(ctx, reply_method, text, hub, user_id=user_id)
         return
-    lines = [f"🔔 Your availability watches ({len(subscriptions)}):", ""]
+    lines = [f"🔔 Your Subscriptions ({len(subscriptions)}):", ""]
     rows: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
     for n, (subscription_id, media_type, _tmdb_id, title) in enumerate(
@@ -120,7 +120,7 @@ async def _render_subscriptions(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     if hub:
         rows.append([back_button(hub)])
     lines.append("")
-    lines.append("❌ = stop watching")
+    lines.append("❌ = unsubscribe")
     sent = await reply_method(
         "\n".join(lines),
         reply_markup=InlineKeyboardMarkup(rows),

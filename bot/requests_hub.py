@@ -22,8 +22,8 @@ REQUESTS_HUB = "requests"
 async def render_requests_hub(update, ctx) -> HubView:
     return HubView(
         text=("🎬 <b>Requests</b>\nAsk for a movie or show, check on your "
-              "requests, browse what's trending, or see the titles you're "
-              "watching for."),
+              "requests, browse what's trending, or see your "
+              "Subscriptions."),
         buttons=[
             InlineKeyboardButton("➕ New request", callback_data=REQUESTS_NEW),
             InlineKeyboardButton("📥 My requests", callback_data=REQUESTS_MINE),

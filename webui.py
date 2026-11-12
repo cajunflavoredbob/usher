@@ -642,7 +642,7 @@ def _settings_page(
   <label class="inline-check"><input type="checkbox" name="tg_notify_admin_requests"{adm_chk}> New-request notices to the admin</label>
   <label class="inline-check"><input type="checkbox" name="tg_notify_admin_failed"{fail_chk}> Failed-download alarm to the admin</label>
   <label class="inline-check"><input type="checkbox" name="tg_notify_issues"{iss_chk}> Ticket DMs</label>
-  <label class="inline-check"><input type="checkbox" name="tg_notify_subscriptions"{subscriptions_chk}> Availability-watch notifications</label>
+  <label class="inline-check"><input type="checkbox" name="tg_notify_subscriptions"{subscriptions_chk}> Subscription DMs</label>
 
   <div class="btn-row divided">
     <button type="button" class="test-btn" data-test="telegram" data-form="telegram-form">Test</button>
@@ -783,7 +783,7 @@ def _settings_page(
 <form method="POST" action="/admin/backup">
   {csrf}
   <h2>Download Backup</h2>
-  <div class="note">ZIP of settings, the mappings database, and the encryption key.</div>
+  <div class="note">ZIP of settings, the database, and the encryption key.</div>
   <div class="note">⚠️ Unencrypted backups contain every key and token in plain text.</div>
   <label>Passphrase <span class="note">recommended</span></label>
   <input type="password" name="passphrase" placeholder="Encrypts the backup">
@@ -797,7 +797,7 @@ def _settings_page(
   <input type="file" name="backup" accept=".zip,.usher-backup,{LEGACY_BACKUP_EXT}" required>
   <label>Passphrase <span class="note">if encrypted</span></label>
   <input type="password" name="passphrase" placeholder="Leave blank for plain ZIP">
-  <div class="note">Overwrites settings, mappings, and the encryption key. A snapshot is saved first.</div>
+  <div class="note">Overwrites settings, the database, and the encryption key. A snapshot is saved first.</div>
   <button type="submit" class="danger">Restore</button>{marker("restore")}
 </form>
 """
