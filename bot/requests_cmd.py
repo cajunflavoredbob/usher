@@ -230,6 +230,11 @@ async def _close_progress_cards(ctx, info, *, fallback_user_id,
                 requester_tg = owner.telegram_id
         if requester_tg is None:
             return
+        # A show can hold several Requests (one per season pick) and card rows
+        # store no seasons, so a TV card can't be tied to the cancelled
+        # Request: leave TV cards alone rather than close a live one.
+        if info.media_type != "movie":
+            return
         cards = await store.find_progress_cards(info.media_type, info.tmdb_id)
         # Only a pending Request can be cancelled, and its card is still
         # "waiting". Cards carry no Request id, only the 4K flag (no

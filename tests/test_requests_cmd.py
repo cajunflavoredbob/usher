@@ -147,6 +147,25 @@ async def test_cancel_closes_requesters_progress_card():
     assert "/requests" not in edit["text"]
 
 
+async def test_tv_cancel_leaves_progress_cards_alone():
+    """Card rows store no seasons, so cancelling one season's Request must not
+    close the card of another season's Request for the same show."""
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
+    item = _items()[1]
+    item.requested_by_id = 7
+    seerr = ctx.bot_data["seerr"]
+    seerr.get_request.side_effect = None
+    seerr.get_request.return_value = item
+    store = ctx.bot_data["store"]
+    store.find_by_seerr_id.return_value = make_link(telegram_id=USER_ID)
+    store.find_progress_cards.return_value = [
+        _card(1, USER_ID, media_type="tv", tmdb_id=1399)]
+    upd = make_update(callback_data="rqlc:13", user_id=USER_ID)
+    await rq_list_cancel(upd, ctx)
+    store.delete_progress_card.assert_not_awaited()
+    ctx.bot.edit_message_text.assert_not_awaited()
+
+
 async def test_admin_cancel_closes_the_requesters_card_not_the_admins():
     ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=ADMIN_ID))
     item = _items()[0]
