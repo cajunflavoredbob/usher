@@ -876,9 +876,9 @@ async def tk_reply_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
             return ConversationHandler.END
         # Same text-capture guard as the resolve comment prompt:
         # an active /issue conversation would swallow the reply as its next input.
-        if user_in_conversation(ctx, update, "issue", "resolve"):
+        if user_in_conversation(ctx, update, "issue", "resolve", "request", "invite"):
             await q.message.reply_text(
-                "You're in the middle of another flow (like /issue). Finish or "
+                "You're in the middle of another flow (like /issue or /request). Finish or "
                 "/cancel it first, then tap Reply again."
             )
             return ConversationHandler.END
@@ -920,9 +920,9 @@ async def tk_close_with_comment_start(update: Update, ctx: ContextTypes.DEFAULT_
         if not await _require_admin(q, ctx, action_label="tk_close_with_comment_start"):
             return ConversationHandler.END
         # Same text-capture guard as tk_reply_start.
-        if user_in_conversation(ctx, update, "issue", "resolve"):
+        if user_in_conversation(ctx, update, "issue", "resolve", "request", "invite"):
             await q.message.reply_text(
-                "You're in the middle of another flow (like /issue). Finish or "
+                "You're in the middle of another flow (like /issue or /request). Finish or "
                 "/cancel it first, then tap the button again."
             )
             return ConversationHandler.END
