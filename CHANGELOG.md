@@ -39,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Telegram reject the message. Cut-off text now closes its formatting, so the
   Ticket detail, History and Back open again, and a very long comment or new
   Ticket still reaches the Admin's DM.
+- A resolved Ticket now shows Status: Resolved and offers only Reply, and a
+  Fix tapped from an older message on a resolved Ticket is refused instead of
+  deleting the current file again.
 
 ## [0.18.0] - 2026-11-11
 

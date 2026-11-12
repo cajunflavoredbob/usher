@@ -213,7 +213,7 @@ async def test_apply_fix_attaches_progress_card_message():
     result = FixResult(status="ok", message="deleted + search started",
                        steps_done=["delete", "search"],
                        poll_info={"series_id": 5, "episode_id": 9})
-    ticket = SimpleNamespace(id=12, media_type="tv", tmdb_id=1399,
+    ticket = SimpleNamespace(id=12, status=1, media_type="tv", tmdb_id=1399,
                              problem_season=1, problem_episode=2)
     with patch.object(tickets_mod, "_run_arr_action",
                       AsyncMock(return_value=result)), \

@@ -826,22 +826,25 @@ def truncate_message(text: str, limit: int = 4000, html: bool = True) -> str:
 
 # Ticket detail keyboard
 
-def ticket_detail_kb(ticket_id: int, is_admin: bool) -> InlineKeyboardMarkup:
+def ticket_detail_kb(ticket_id: int, is_admin: bool,
+                     resolved: bool = False) -> InlineKeyboardMarkup:
     """Top-level row for a ticket's detail view. Reply goes straight to the
-    reply input (no submenu); only Close and Fix have submenus."""
+    reply input (no submenu); only Close and Fix have submenus. A resolved
+    Ticket keeps Reply only: Fix would delete the current file again,
+    and there is nothing left to Close."""
     row = [InlineKeyboardButton("💬 Reply", callback_data=f"{TK_REPLY}:{ticket_id}")]
-    if is_admin:
+    if is_admin and not resolved:
         row.append(InlineKeyboardButton("🔧 Fix", callback_data=f"{TK_FIX}:{ticket_id}"))
         row.append(InlineKeyboardButton("✅ Close", callback_data=f"{TK_CLOSE}:{ticket_id}"))
     return InlineKeyboardMarkup([row])
 
 
-def new_ticket_dm_kb(ticket_id: int) -> InlineKeyboardMarkup:
+def new_ticket_dm_kb(ticket_id: int, resolved: bool = False) -> InlineKeyboardMarkup:
     """The new-Ticket DM's buttons: the Admin's Ticket row, then "📜 History".
     A Fix on that card puts this back (`tickets._restore_ticket_card`) once
     the Ticket loads."""
     return InlineKeyboardMarkup([
-        list(ticket_detail_kb(ticket_id, True).inline_keyboard[0]),
+        list(ticket_detail_kb(ticket_id, True, resolved).inline_keyboard[0]),
         [InlineKeyboardButton("📜 History", callback_data=f"{TK_OPEN}:{ticket_id}")],
     ])
 

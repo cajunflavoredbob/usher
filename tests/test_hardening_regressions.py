@@ -138,7 +138,7 @@ async def test_fix_context_rejects_tv_with_episode_but_null_season():
 
     seerr = AsyncMock()
     seerr.get_issue.return_value = SimpleNamespace(
-        media_type="tv", tmdb_id=1, problem_season=None, problem_episode=9)
+        status=1, media_type="tv", tmdb_id=1, problem_season=None, problem_episode=9)
 
     fix, err = await _resolve_fix_context(seerr, 42, action_name="Fix")
     assert fix is None
@@ -153,7 +153,7 @@ async def test_fix_context_allows_specials_season_zero():
 
     seerr = AsyncMock()
     seerr.get_issue.return_value = SimpleNamespace(
-        media_type="tv", tmdb_id=1, problem_season=0, problem_episode=3)
+        status=1, media_type="tv", tmdb_id=1, problem_season=0, problem_episode=3)
     seerr.get_media_title.return_value = ("Foo", "2020")
     seerr.get_tv_seasons.return_value = ([], 55)
 

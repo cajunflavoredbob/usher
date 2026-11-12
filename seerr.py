@@ -233,6 +233,9 @@ class IssueComment:
     created_at: str = ""       # ISO 8601
 
 
+ISSUE_STATUS_RESOLVED = 2
+
+
 @dataclass
 class IssueListItem:
     id: int

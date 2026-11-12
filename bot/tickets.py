@@ -37,7 +37,7 @@ from telegram.ext import (
 from fix_result import FixResult
 from http_util import user_friendly_message
 from radarr import RadarrClient
-from seerr import PlexTokenInvalidError, SeerrClient
+from seerr import ISSUE_STATUS_RESOLVED, PlexTokenInvalidError, SeerrClient
 from sonarr import SonarrClient
 from store import UserStore
 
@@ -48,6 +48,7 @@ from bot.callback_prefixes import (
     TK_BACK_LIST,
     TK_CLOSE_DIRECT,
     TK_CLOSE_WITH_COMMENT,
+    TK_FIX,
     TK_FIX_MARK_FAILED,
     TK_FIX_REDOWNLOAD,
     TK_OPEN,
@@ -351,8 +352,10 @@ async def _build_ticket_detail(
     age = ""
     description = ""
     comments: list = []
+    resolved = False
     try:
         ticket = await seerr.get_issue(ticket_id, as_plex_token=None if is_admin else token)
+        resolved = ticket.status == ISSUE_STATUS_RESOLVED
         type_emoji, type_name = ISSUE_TYPES.get(ticket.issue_type, ("❓", "Other"))
         reporter = ticket.created_by or ""
         age = format_age(ticket.created_at) if ticket.created_at else ""
@@ -384,6 +387,7 @@ async def _build_ticket_detail(
     if media_label:
         lines.append(html.escape(media_label))
     lines.append(f"<b>Issue type:</b> {type_emoji} {type_name}")
+    lines.append(f"<b>Status:</b> {'Resolved' if resolved else 'Open'}")
     if reporter:
         lines.append(f"<b>Reported by:</b> {html.escape(reporter)}")
     if age:
@@ -405,7 +409,7 @@ async def _build_ticket_detail(
             if age_c:
                 head += f" · {age_c}"
             lines.append(f"{head}: <i>\"{html.escape(c.message)}\"</i>")
-    return truncate_message("\n".join(lines)), ticket_detail_kb(ticket_id, is_admin)
+    return truncate_message("\n".join(lines)), ticket_detail_kb(ticket_id, is_admin, resolved)
 
 
 async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -444,7 +448,7 @@ async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if from_list:
         kb = _with_list_back(kb, ticket_id, retry=False)
     elif from_dm:
-        kb = (new_ticket_dm_kb(ticket_id) if kb is not None and is_admin
+        kb = (new_ticket_dm_kb(ticket_id, _kb_is_resolved(kb)) if kb is not None and is_admin
               else kb or InlineKeyboardMarkup([[_ticket_back_button(ticket_id, False, True)]]))
     try:
         await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
@@ -554,6 +558,9 @@ async def _resolve_fix_context(
         logger.exception("get_issue failed for #%d", ticket_id)
         return None, f"{_FETCH_FAILED} #{ticket_id}. {user_friendly_message(exc)}"
 
+    if ticket.status == ISSUE_STATUS_RESOLVED:
+        return None, f"Ticket #{ticket_id} is already resolved, so there is nothing to fix."
+
     media_type = ticket.media_type
     tmdb_id = ticket.tmdb_id
     season = ticket.problem_season
@@ -640,6 +647,12 @@ def _fix_end_markup(ticket_id: int, from_list: bool,
     return InlineKeyboardMarkup([row])
 
 
+def _kb_is_resolved(kb: InlineKeyboardMarkup) -> bool:
+    """True when a detail keyboard carries no Fix button (an Admin's resolved Ticket)."""
+    return not any((b.callback_data or "").startswith(f"{TK_FIX}:")
+                   for row in kb.inline_keyboard for b in row)
+
+
 async def _restore_ticket_card(q, ctx, ticket_id: int, from_list: bool,
                                from_dm: bool = False) -> None:
     """Edit the Ticket card back into the Ticket with its buttons, the same
@@ -655,7 +668,7 @@ async def _restore_ticket_card(q, ctx, ticket_id: int, from_list: bool,
     elif kb is None:
         kb = InlineKeyboardMarkup([[_ticket_back_button(ticket_id, False, from_dm)]])
     elif from_dm:
-        kb = new_ticket_dm_kb(ticket_id)
+        kb = new_ticket_dm_kb(ticket_id, _kb_is_resolved(kb))
     try:
         sent = await edit_or_send(q, text, parse_mode="HTML", reply_markup=kb)
     except Exception:
