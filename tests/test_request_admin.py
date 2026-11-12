@@ -340,3 +340,13 @@ async def test_admin_own_failed_request_keeps_retry_with_admin_alarm_off():
     markup, text = _admin_markup(app)
     assert "admin has been notified" not in text
     assert ("🔁 Retry", "rqrt:12", None) in _buttons(markup)
+
+
+def test_seerr_link_builds_title_url_from_string_tmdb_id():
+    """Seerr's default webhook template sends every value as a string."""
+    assert seerr_link(PUBLIC_URL, {"media_type": "movie", "tmdbId": "550"}) \
+        == f"{PUBLIC_URL}/movie/550"
+    assert seerr_link(PUBLIC_URL, {"media_type": "tv", "tmdbId": ""}) \
+        == f"{PUBLIC_URL}/requests"
+    assert seerr_link(PUBLIC_URL, {"media_type": "tv", "tmdbId": "abc"}) \
+        == f"{PUBLIC_URL}/requests"

@@ -29,7 +29,7 @@ from seerr import (
 )
 
 from bot.callback_prefixes import RQ_ADMIN_APPROVE, RQ_ADMIN_DECLINE, RQ_ADMIN_RETRY
-from bot.shared import end_action, try_begin_action
+from bot.shared import coerce_tmdb_id, end_action, try_begin_action
 from bot.tickets import _require_admin
 
 logger = logging.getLogger("usher")
@@ -66,9 +66,9 @@ def seerr_link(public_url: str, media: dict) -> Optional[str]:
     base = (public_url or "").strip().rstrip("/")
     if not base:
         return None
-    tmdb_id = media.get("tmdbId")
+    tmdb_id = coerce_tmdb_id(media.get("tmdbId"))
     media_type = media.get("media_type")
-    if isinstance(tmdb_id, int) and media_type in ("movie", "tv"):
+    if tmdb_id is not None and media_type in ("movie", "tv"):
         return f"{base}/{media_type}/{tmdb_id}"
     return f"{base}/requests"
 

@@ -233,6 +233,19 @@ def format_scope_label(media_type, season, episode) -> str:
     return f"Season {season}"
 
 
+def coerce_tmdb_id(raw) -> Optional[int]:
+    """A TMDb id from a Seerr webhook value, or None. Seerr's default
+    template sends every value as a string ("550"), so accept ints and
+    digit strings; "", junk, bools and non-positive numbers give None."""
+    if isinstance(raw, bool):
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return value if value > 0 else None
+
+
 async def followup_scope_label(seerr, payload: dict, ticket_id, media_type) -> str:
     """Scope line for follow-up events (ISSUE_COMMENT / ISSUE_RESOLVED).
 
@@ -283,11 +296,7 @@ async def format_media_title_line(
     if seerr is None:
         return ""
     media_type = media.get("media_type") or ""
-    tmdb_raw = media.get("tmdbId")
-    try:
-        tmdb_id = int(tmdb_raw) if tmdb_raw not in (None, "") else 0
-    except (TypeError, ValueError):
-        tmdb_id = 0
+    tmdb_id = coerce_tmdb_id(media.get("tmdbId")) or 0
     if media_type not in ("movie", "tv") or not tmdb_id:
         return ""
     try:

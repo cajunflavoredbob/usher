@@ -16,6 +16,7 @@ from bot.callback_prefixes import TK_OPEN, TK_REPLY
 from bot.request_admin import admin_request_kb, seerr_link
 from bot.shared import (
     ISSUE_TYPE_LABELS,
+    coerce_tmdb_id,
     extract_affected_se,
     followup_scope_label,
     format_media_title_line,
@@ -508,9 +509,9 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
 
     # Update any Progress cards tracking this media (approved -> grabbing,
     # terminal events paint the final line and close the Progress card).
-    tmdb_for_card = media.get("tmdbId")
+    tmdb_for_card = coerce_tmdb_id(media.get("tmdbId"))
     type_for_card = media.get("media_type")
-    if isinstance(tmdb_for_card, int) and type_for_card in ("movie", "tv"):
+    if tmdb_for_card is not None and type_for_card in ("movie", "tv"):
         from bot.progress_card import apply_webhook_event
         try:
             await apply_webhook_event(app, nt, type_for_card, tmdb_for_card)
@@ -520,9 +521,9 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
     # Subscriptions: one-shot fan-out to subscribers, minus whoever
     # this event already DMed as the requester.
     if nt == "MEDIA_AVAILABLE":
-        tmdb_id = media.get("tmdbId")
+        tmdb_id = coerce_tmdb_id(media.get("tmdbId"))
         m_type = media.get("media_type")
-        if isinstance(tmdb_id, int) and m_type in ("movie", "tv"):
+        if tmdb_id is not None and m_type in ("movie", "tv"):
             from bot.subscriptions import fan_out_availability
             # Exclude the requester only when the requester DM actually
             # went out: with that class silenced, their subscription row is

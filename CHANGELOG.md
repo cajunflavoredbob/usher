@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The first-run setup page no longer shows a bot token, Seerr API key or Admin
   Telegram id that were set from the environment. It says "Already set" and
   keeps the stored value when you leave the field blank.
+- Progress cards now update from Seerr webhooks (Approved, Available,
+  Declined), Subscriptions fire, and Open in Seerr opens the title page, even
+  when Seerr sends the TMDb id as text, which its default template does.
 
 ## [0.18.0] - 2026-11-11
 

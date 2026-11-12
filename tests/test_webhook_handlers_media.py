@@ -282,3 +282,20 @@ async def test_failed_card_line_honors_admin_alarm_toggle():
     text = app.bot.edit_message_text.call_args.kwargs.get("text") or \
         app.bot.edit_message_text.call_args.args[0]
     assert "Download failed" in text and "admin has been notified" not in text
+
+
+async def test_string_tmdb_id_reaches_card_update_and_fan_out():
+    """Seerr's default template sends tmdbId as "550": the Progress card
+    update and the Subscription fan-out must still run."""
+    from unittest.mock import patch
+    app = _app(requester_link=make_link(telegram_id=USER_ID))
+    app.bot_data["store"].pop_subscribers = AsyncMock(return_value=[])
+    payload = _payload("MEDIA_AVAILABLE")
+    payload["media"]["tmdbId"] = "550"
+    with patch("bot.progress_card.apply_webhook_event",
+               new=AsyncMock()) as card, \
+         patch("bot.subscriptions.fan_out_availability",
+               new=AsyncMock()) as fan:
+        await handle_seerr_media(app, payload)
+    card.assert_awaited_once_with(app, "MEDIA_AVAILABLE", "movie", 550)
+    assert fan.await_args.args[1:3] == ("movie", 550)
