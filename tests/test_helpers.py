@@ -90,7 +90,7 @@ def test_bot_command_menu_covers_registered_commands():
     which /admin replaces) are excluded."""
     import re
     from bot.app import _BOT_COMMANDS, _ADMIN_BOT_COMMANDS
-    src = open("bot/app.py").read()
+    src = open("bot/app.py", encoding="utf-8").read()
     registered = set(re.findall(r'CommandHandler\("([a-z]+)"', src))
     registered |= {"request"}  # conversation entry lives in request_flow
     menu = {c for c, _ in _ADMIN_BOT_COMMANDS}
