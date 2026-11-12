@@ -1,4 +1,4 @@
 python-telegram-bot[ext]==22.7
 httpx==0.27.2
 cryptography==50.0.2
-aiohttp==3.14.3
+aiohttp==3.14.4
