@@ -204,6 +204,20 @@ def _current_user(request: web.Request) -> Optional[str]:
 
 # HTML rendering
 
+SECRET_KEEP_NOTE = '<div class="note">Already set. Leave blank to keep it.</div>'
+
+
+def _secret_field(name: str, stored: str, *, required: bool = False,
+                  field_id: str = "") -> str:
+    """Password input plus the keep-note. The stored value is never rendered:
+    a blank POST (or blank Test) falls back to it server-side."""
+    id_attr = f' id="{field_id}"' if field_id else ""
+    req = " required" if required and not stored else ""
+    note = SECRET_KEEP_NOTE if stored else ""
+    return (f'<input type="password"{id_attr} name="{name}" '
+            f'autocomplete="off"{req}>\n  {note}')
+
+
 def _esc(s) -> str:
     if not s:
         return ""
@@ -630,7 +644,7 @@ def _settings_page(
   <h2>Telegram</h2>
   <div class="note">Changing the bot token or admin ID restarts the container.</div>
   <label>Bot Token <span class="note">from @BotFather</span></label>
-  <input type="password" name="telegram_bot_token" value="{_esc(s.telegram_bot_token)}" autocomplete="off" required>
+  {_secret_field("telegram_bot_token", s.telegram_bot_token, required=True)}
   <label>Admin Telegram User ID <span class="note">DM @userinfobot</span></label>
   <input type="text" name="admin_telegram_id" value="{_esc(admin_tg_val)}" inputmode="numeric" pattern="[0-9]+" required>
   <label>Usher Admin UI URL <span class="note">optional</span></label>
@@ -667,7 +681,7 @@ def _settings_page(
   <label>Seerr URL</label>
   <input type="text" name="seerr_url" value="{_esc(s.seerr_url)}" placeholder="http://192.0.2.10:5056" required>
   <label>Seerr API Key</label>
-  <input type="password" name="seerr_api_key" value="{_esc(s.seerr_api_key)}" autocomplete="off" required>
+  {_secret_field("seerr_api_key", s.seerr_api_key, required=True)}
   <label>Seerr Public URL <span class="note">optional; used in user-facing links</span></label>
   <input type="text" name="seerr_public_url" value="{_esc(s.seerr_public_url)}" placeholder="https://seerr.example.com">
   <div class="btn-row divided">
@@ -687,12 +701,12 @@ def _settings_page(
   <label>Radarr URL <span class="note">optional</span></label>
   <input type="text" name="radarr_url" value="{_esc(s.radarr_url)}" placeholder="http://192.0.2.10:7878">
   <label>Radarr API Key</label>
-  <input type="password" name="radarr_api_key" value="{_esc(s.radarr_api_key)}" autocomplete="off">
+  {_secret_field("radarr_api_key", s.radarr_api_key)}
 
   <label>Sonarr URL <span class="note">optional</span></label>
   <input type="text" name="sonarr_url" value="{_esc(s.sonarr_url)}" placeholder="http://192.0.2.10:8989">
   <label>Sonarr API Key</label>
-  <input type="password" name="sonarr_api_key" value="{_esc(s.sonarr_api_key)}" autocomplete="off">
+  {_secret_field("sonarr_api_key", s.sonarr_api_key)}
 
   <label>Allowed Telegram User IDs</label>
   <label class="inline-check" for="autofix-allow-all">
@@ -730,7 +744,7 @@ def _settings_page(
   <label>SABnzbd URL <span class="note">optional</span></label>
   <input type="text" name="sabnzbd_url" value="{_esc(s.sabnzbd_url)}" placeholder="http://192.0.2.10:8080">
   <label>SABnzbd API Key</label>
-  <input type="password" name="sabnzbd_api_key" value="{_esc(s.sabnzbd_api_key)}" autocomplete="off">
+  {_secret_field("sabnzbd_api_key", s.sabnzbd_api_key)}
   <label>Auto-bump priority</label>
   <select name="sabnzbd_boost">{boost_options}</select>
   <div class="note">Applied once per download. Force starts the job even if the queue is paused.</div>
@@ -751,8 +765,8 @@ def _settings_page(
   <div class="note">In Seerr: Settings → Notifications → Webhook. Set this URL and enable every issue and request event.</div>
 
   <label>Webhook Secret</label>
-  <input type="password" id="webhook_secret" name="webhook_secret" value="{_esc(s.webhook_secret)}" autocomplete="off">
-  <div class="note">Paste the same value into Seerr's <code>Authorization Header</code> field. Test uses the saved secret: Generate &rarr; Save &rarr; Test.</div>
+  {_secret_field("webhook_secret", s.webhook_secret, field_id="webhook_secret")}
+  <div class="note">Paste the same value into Seerr's <code>Authorization Header</code> field. The saved secret is never shown again: Generate a new one, Save, then paste it into Seerr. Test uses the saved secret.</div>
   <div class="btn-row">
     <button type="button" class="secondary" id="wh-show">Show</button>
     <button type="button" class="secondary" id="wh-generate">Generate</button>
@@ -1209,7 +1223,8 @@ async def telegram_post(request: web.Request) -> web.Response:
     s = store.settings
     _orig_token = s.telegram_bot_token
     _orig_admin = s.admin_telegram_id
-    token = (form.get("telegram_bot_token") or "").strip()
+    token = ((form.get("telegram_bot_token") or "").strip()
+             or s.telegram_bot_token)
     admin_tg_raw = (form.get("admin_telegram_id") or "").strip()
     if not token:
         return web.Response(
@@ -1279,7 +1294,8 @@ async def seerr_post(request: web.Request) -> web.Response:
                 content_type="text/html", status=400,
             )
     s.seerr_url = (form.get("seerr_url") or "").strip()
-    s.seerr_api_key = (form.get("seerr_api_key") or "").strip()
+    s.seerr_api_key = ((form.get("seerr_api_key") or "").strip()
+                       or s.seerr_api_key)
     s.seerr_public_url = (form.get("seerr_public_url") or "").strip()
     return await _save_and_render(request, active_tab="seerr")
 
@@ -1304,9 +1320,11 @@ async def autofix_post(request: web.Request) -> web.Response:
                 content_type="text/html", status=400,
             )
     s.radarr_url = (form.get("radarr_url") or "").strip()
-    s.radarr_api_key = (form.get("radarr_api_key") or "").strip()
+    s.radarr_api_key = ((form.get("radarr_api_key") or "").strip()
+                        or s.radarr_api_key)
     s.sonarr_url = (form.get("sonarr_url") or "").strip()
-    s.sonarr_api_key = (form.get("sonarr_api_key") or "").strip()
+    s.sonarr_api_key = ((form.get("sonarr_api_key") or "").strip()
+                        or s.sonarr_api_key)
     ids_raw = form.get("allowed_autofix_telegram_ids") or ""
     parsed_ids: list[int] = []
     for chunk in ids_raw.split(","):
@@ -1360,7 +1378,8 @@ async def sabnzbd_post(request: web.Request) -> web.Response:
             content_type="text/html", status=400,
         )
     s.sabnzbd_url = value
-    s.sabnzbd_api_key = (form.get("sabnzbd_api_key") or "").strip()
+    s.sabnzbd_api_key = ((form.get("sabnzbd_api_key") or "").strip()
+                         or s.sabnzbd_api_key)
     boost = (form.get("sabnzbd_boost") or "off").strip()
     s.sabnzbd_boost = boost if boost in ("off", "high", "force") else "off"
     return await _save_and_render(request, active_tab="sabnzbd")
@@ -1373,7 +1392,8 @@ async def webhook_post(request: web.Request) -> web.Response:
     if csrf_resp is not None:
         return csrf_resp
     s = store.settings
-    secret = (form.get("webhook_secret") or "").strip()
+    secret = ((form.get("webhook_secret") or "").strip()
+              or s.webhook_secret)
     if not secret:
         return web.Response(
             text=_settings_page(s, error="Webhook secret cannot be empty.",
@@ -1747,7 +1767,8 @@ async def test_telegram(request: web.Request) -> web.Response:
     guard = await _test_csrf_guard(request, form)
     if guard is not None:
         return guard
-    token = (form.get("telegram_bot_token") or "").strip()
+    token = ((form.get("telegram_bot_token") or "").strip()
+             or request.app["settings_store"].settings.telegram_bot_token)
     if not token:
         return _test_json(False, "No bot token provided.")
     try:
@@ -1768,7 +1789,8 @@ async def test_seerr(request: web.Request) -> web.Response:
     if guard is not None:
         return guard
     url = (form.get("seerr_url") or "").strip()
-    key = (form.get("seerr_api_key") or "").strip()
+    key = ((form.get("seerr_api_key") or "").strip()
+           or request.app["settings_store"].settings.seerr_api_key)
     if not url or not key:
         return _test_json(False, "Seerr URL and API key are required.")
     client = SeerrClient(url, key)
@@ -1788,9 +1810,12 @@ async def test_autofix(request: web.Request) -> web.Response:
     guard = await _test_csrf_guard(request, form)
     if guard is not None:
         return guard
+    saved = request.app["settings_store"].settings
     targets = (
-        ("Radarr", RadarrClient, form.get("radarr_url"), form.get("radarr_api_key")),
-        ("Sonarr", SonarrClient, form.get("sonarr_url"), form.get("sonarr_api_key")),
+        ("Radarr", RadarrClient, form.get("radarr_url"),
+         form.get("radarr_api_key") or saved.radarr_api_key),
+        ("Sonarr", SonarrClient, form.get("sonarr_url"),
+         form.get("sonarr_api_key") or saved.sonarr_api_key),
     )
     results: list[str] = []
     ok_all = True
@@ -1826,7 +1851,8 @@ async def test_sabnzbd(request: web.Request) -> web.Response:
     if guard is not None:
         return guard
     url = (form.get("sabnzbd_url") or "").strip()
-    key = (form.get("sabnzbd_api_key") or "").strip()
+    key = ((form.get("sabnzbd_api_key") or "").strip()
+           or request.app["settings_store"].settings.sabnzbd_api_key)
     if not url or not key:
         return _test_json(False, "SABnzbd URL and API key are required.")
     from sabnzbd import SabnzbdClient
