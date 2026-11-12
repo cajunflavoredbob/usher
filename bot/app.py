@@ -736,7 +736,7 @@ async def _post_shutdown(app: Application) -> None:
 # mid-conversation crash doesn't leak half-state into the next flow.
 _CONVERSATION_USER_DATA_KEYS = (
     "tk_reply_id", "tk_close_after",
-    "link_active_loop", "hub_origin",
+    "link_active_loop", "link_retry_ok", "hub_origin",
     "media", "search_results", "seasons", "season",
     "episode", "issue_type", "description",
     "search_version", "submitting_ticket",

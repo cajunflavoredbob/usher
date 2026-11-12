@@ -792,7 +792,8 @@ def force_end_flow_conversations(ctx: ContextTypes.DEFAULT_TYPE,
             job = conv.timeout_jobs.pop(key, None)
             if job is not None:
                 job.schedule_removal()
-    for marker in ("tk_reply_id", "tk_close_after", "link_active_loop"):
+    for marker in ("tk_reply_id", "tk_close_after", "link_active_loop",
+                   "link_retry_ok"):
         ctx.user_data.pop(marker, None)
     return ended
 

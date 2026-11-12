@@ -97,8 +97,18 @@ async def test_sign_in_post_send_timeout_is_transient(monkeypatch):
     client = SeerrClient("http://seerr.test", "key")
     client._client = httpx.AsyncClient(base_url="http://seerr.test",
                                        transport=httpx.MockTransport(handler))
+    calls = []
+    inner = handler
+
+    def counting(request):
+        calls.append(1)
+        return inner(request)
+
+    client._client = httpx.AsyncClient(base_url="http://seerr.test",
+                                       transport=httpx.MockTransport(counting))
     with pytest.raises(TransientAPIError) as ei:
         await client.login_with_plex("tok")
     assert not isinstance(ei.value, AmbiguousWriteError)
+    assert len(calls) == 1
     await client._client.aclose()
     await client.close()

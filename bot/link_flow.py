@@ -440,7 +440,9 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         return
     # Live flow, or the Try again offered by this user's own weak-PIN timeout
     # (single use; a stray tap with neither marker is refused).
-    retry_ok = ctx.user_data.pop(LINK_RETRY_KEY, None)
+    # The marker holds the Hub whose timeout message carries that Try again.
+    retry_hub = ctx.user_data.pop(LINK_RETRY_KEY, None)
+    retry_ok = retry_hub is not None and retry_hub == hub_origin(ctx)
     if not ctx.user_data.get("link_active_loop") and not retry_ok:
         await q.answer("That sign-in has ended. Use /link to start again.")
         return
@@ -453,6 +455,9 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     except Exception as exc:
         logger.exception("plex request_pin failed (fallback)")
         text = f"Couldn't get a fresh code. {user_friendly_message(exc)}"
+        if hub is not None:
+            # This message offers Try again too; let that tap through.
+            ctx.user_data[LINK_RETRY_KEY] = hub
         await end_flow(update, ctx, text, hub, LINK_HELP)
         return
 
@@ -493,8 +498,10 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
             await end_flow(update, ctx, RESTARTING_TEXT, hub, None,
                            typed_text=RESTARTING_TEXT)
             return
-        # The Try again below is this user's own: let it past the live-flow check.
-        ctx.user_data[LINK_RETRY_KEY] = True
+        # The Try again below is this user's own: let it past the live-flow
+        # check. Only a Hub message carries that button (typed flows get none).
+        if hub is not None:
+            ctx.user_data[LINK_RETRY_KEY] = hub
         await end_flow(update, ctx, "⏱️ Plex auth timed out.", hub, LINK_HELP,
                        typed_text="⏱️ Plex auth timed out. /link to try again.")
         return
