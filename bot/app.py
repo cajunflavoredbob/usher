@@ -8,10 +8,12 @@ import html
 import logging
 import os
 import signal
+import sys
 from pathlib import Path
 from aiohttp import web
 import telegram
 from telegram import Update
+from telegram.error import InvalidToken
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -123,10 +125,55 @@ from const import (
     PROGRESS_CARD_POLL_INTERVAL_S,
 )
 
+_LOG_SECRETS: set[str] = set()
+_REDACTED = "<bot-token>"
+
+
+def register_log_secret(secret: str) -> None:
+    """Have every log handler replace this value with a placeholder from now on."""
+    if secret:
+        _LOG_SECRETS.add(secret)
+
+
+def unregister_log_secret(secret: str) -> None:
+    _LOG_SECRETS.discard(secret)
+
+
+def _redact(text: str) -> str:
+    for secret in tuple(_LOG_SECRETS):
+        text = text.replace(secret, _REDACTED)
+    return text
+
+
+class TokenRedactor(logging.Filter):
+    """Strip registered secrets (the bot token) from the message, exception text and
+    stack info. python-telegram-bot puts the token in InvalidToken's message."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not _LOG_SECRETS:
+            return True
+        try:
+            message = record.getMessage()
+        except (TypeError, ValueError):
+            message = str(record.msg)
+        record.msg = _redact(message)
+        record.args = None
+        if record.exc_info and not record.exc_text:
+            record.exc_text = logging.Formatter().formatException(record.exc_info)
+        if record.exc_text:
+            record.exc_text = _redact(record.exc_text)
+        if record.stack_info:
+            record.stack_info = _redact(record.stack_info)
+        return True
+
+
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s | %(message)s",
     level=logging.INFO,
 )
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(TokenRedactor())
+del _handler
 # httpx logs every request URL at INFO; those carry the bot token and the SABnzbd API key.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -585,6 +632,7 @@ async def _post_init(app: Application) -> None:
 
     async def _on_settings_changed() -> None:
         s = settings_store.settings
+        register_log_secret(s.telegram_bot_token)
         if s.telegram_bot_token != boot_token or s.admin_telegram_id != boot_admin_id:
             logger.info("Bot token or admin id changed; exiting in 2s to restart")
             app.bot_data["shutting_down"] = True
@@ -828,6 +876,7 @@ async def _run_setup_only(settings_store: SettingsStore, session_secret: bytes,
     web_app = web.Application(client_max_size=ADMIN_UPLOAD_MAX_BYTES)
 
     async def _on_settings_changed() -> None:
+        register_log_secret(settings_store.settings.telegram_bot_token)
         if settings_store.settings.is_bot_configured():
             logger.info("Setup complete; exiting in 2s so container restarts into full mode")
             schedule_clean_exit(2.0)
@@ -857,6 +906,15 @@ async def _run_setup_only(settings_store: SettingsStore, session_secret: bytes,
         await runner.cleanup()
 
 
+def _run_polling(app: Application) -> None:
+    try:
+        app.run_polling(drop_pending_updates=True)
+    except InvalidToken:
+        logger.error("Telegram rejected the bot token. Check the token in the Admin "
+                     "page (Settings) and restart.")
+        sys.exit(1)
+
+
 def main() -> None:
     data_dir = Path(os.environ.get("DATA_DIR", "/data"))
     db_path = os.environ.get("STORE_PATH", str(data_dir / "mappings.sqlite"))
@@ -866,6 +924,7 @@ def main() -> None:
 
     settings_store = SettingsStore(settings_path)
     _migrate_legacy_env_into_settings(settings_store)
+    register_log_secret(settings_store.settings.telegram_bot_token)
     session_secret = load_or_create_session_secret(data_dir / "session_secret")
     crypto = TokenCrypto(key_path=_encryption_key_path(data_dir))
     user_store = UserStore(db_path, crypto=crypto)
@@ -893,7 +952,7 @@ def main() -> None:
         http_bind=http_bind,
     )
     logger.info("Starting bot (polling)")
-    app.run_polling(drop_pending_updates=True)
+    _run_polling(app)
 
 
 if __name__ == "__main__":

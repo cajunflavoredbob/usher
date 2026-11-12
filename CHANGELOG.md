@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stored Radarr, Sonarr or SABnzbd API key; ticking it and saving clears the key.
 
 ### Fixed
+- The bot token is replaced with a placeholder in log output once it is loaded from
+  settings. If Telegram rejects the token at startup, the log now says so in one
+  line instead of printing an error message and traceback.
 - A Test with the API key field left blank no longer sends the saved key to a
   URL other than the saved one. Seerr, Radarr, Sonarr and SABnzbd Test now ask
   you to type the key again for the new URL.
