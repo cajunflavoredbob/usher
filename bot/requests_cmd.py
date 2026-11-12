@@ -38,6 +38,7 @@ from bot.shared import (
     send_typing,
     truncate_message,
 )
+from bot.progress_card import _edit_card
 from bot.request_flow import _summarize_seasons
 from const import REQUEST_LIST_TAKE, TICKET_BUTTONS_PER_ROW
 
@@ -202,6 +203,51 @@ async def requests_hub_mine(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
                            hub=REQUESTS_HUB)
 
 
+CANCELLED_CARD_LINE = "🚫 Request cancelled."
+
+
+async def _close_progress_cards(ctx, info, *, fallback_user_id,
+                                tapper_seerr_id=None) -> None:
+    """Paint a final line on the requester's Progress card(s) for a Request
+    that was just cancelled, and drop the rows. Best effort: the cancel has
+    already succeeded, so nothing here may fail the handler. Only cards of
+    the Request's requester are touched; another user's Progress card for
+    the same title is a Request of their own."""
+    if info is None:
+        return
+    store: UserStore = ctx.bot_data["store"]
+    try:
+        requester_tg = None
+        if info.requested_by_id is None:
+            requester_tg = fallback_user_id
+        elif tapper_seerr_id == info.requested_by_id:
+            # Several Telegram accounts can share one Seerr account; the
+            # tapper's own card is the one this cancel was about.
+            requester_tg = fallback_user_id
+        else:
+            owner = await store.find_by_seerr_id(info.requested_by_id)
+            if owner is not None:
+                requester_tg = owner.telegram_id
+        if requester_tg is None:
+            return
+        cards = await store.find_progress_cards(info.media_type, info.tmdb_id)
+        # Only a pending Request can be cancelled, and its card is still
+        # "waiting". Cards carry no Request id, so when the requester has
+        # several waiting cards for the title (standard and 4K, or two
+        # season picks) we cannot tell which one this was: leave them all
+        # rather than close a live Request's card.
+        mine = [c for c in cards
+                if c["user_id"] == requester_tg and c["status"] == "waiting"]
+        if len(mine) != 1:
+            return
+        card = mine[0]
+        # Delete first so a mid-tick poller cannot paint over the line.
+        await store.delete_progress_card(card["id"])
+        await _edit_card(ctx, card, CANCELLED_CARD_LINE, footer=False)
+    except Exception:
+        logger.exception("closing Progress card after cancel failed")
+
+
 async def rq_list_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Cancel button on the /requests list. Seerr enforces ownership: a
     regular user may only delete their own request while it is PENDING, so
@@ -231,6 +277,14 @@ async def rq_list_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     # edits instead.
     await q.answer()
     seerr: SeerrClient = ctx.bot_data["seerr"]
+    # Read the Request first: once deleted it 404s, and its media and
+    # requester are how we find the Progress card to close.
+    try:
+        info = await seerr.get_request(request_id, as_plex_token=token)
+    except Exception:
+        logger.debug("pre-cancel lookup of #%s failed (non-fatal)",
+                     request_id, exc_info=True)
+        info = None
     try:
         await seerr.delete_request(request_id, as_plex_token=token)
     except NotFoundAPIError:
@@ -249,6 +303,9 @@ async def rq_list_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
             notice=f"⚠️ Couldn't cancel #{request_id}. {user_friendly_message(exc)}",
             hub=hub)
         return
+    await _close_progress_cards(
+        ctx, info, fallback_user_id=None if is_admin else user_id,
+        tapper_seerr_id=None if is_admin or not link else link.seerr_id)
     # Re-render the list in place so the cancelled entry disappears.
     await _render_requests(update, ctx, q.edit_message_text, user_id=user_id,
                            notice=f"✅ Request #{request_id} cancelled.",
