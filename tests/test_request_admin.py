@@ -274,3 +274,69 @@ async def test_in_flight_slot_released_after_tap():
     upd, ctx, _ = _tap("rqap:12")
     await rq_admin_action(upd, ctx)
     assert "rqadmin:12" not in ctx.bot_data.get("inflight_actions", set())
+
+
+# --- The Admin's own failed Request (#43) ------------------------------------
+
+def _admin_requested_app():
+    app = _app()
+    app.bot_data["store"].find_by_plex_username = AsyncMock(
+        return_value=make_link(telegram_id=ADMIN_ID))
+    return app
+
+
+async def test_admin_own_failed_request_dm_has_retry_and_open_in_seerr():
+    app = _admin_requested_app()
+    await handle_seerr_media(app, _payload("MEDIA_FAILED"))
+    markup, text = _admin_markup(app)
+    assert "failed to download" in text
+    assert _buttons(markup) == [
+        ("🔁 Retry", "rqrt:12", None),
+        ("Open in Seerr", None, f"{PUBLIC_URL}/movie/550"),
+    ]
+    assert len(app.bot_data["btn_msgs"][ADMIN_ID]) == 1
+
+
+async def test_admin_own_failed_request_without_request_id_has_link_only():
+    app = _admin_requested_app()
+    await handle_seerr_media(app, _payload("MEDIA_FAILED", request_id=None))
+    markup, _ = _admin_markup(app)
+    assert _buttons(markup) == [
+        ("Open in Seerr", None, f"{PUBLIC_URL}/movie/550")]
+
+
+async def test_admin_own_approved_request_dm_stays_bare():
+    app = _admin_requested_app()
+    await handle_seerr_media(app, _payload("MEDIA_APPROVED"))
+    markup, _ = _admin_markup(app)
+    assert markup is None
+
+
+async def test_user_failed_request_dm_to_requester_stays_bare():
+    app = _app()
+    await handle_seerr_media(app, _payload("MEDIA_FAILED"))
+    user_calls = [c for c in app.bot.send_message.call_args_list
+                  if c.kwargs["chat_id"] == USER_ID]
+    assert len(user_calls) == 1
+    assert user_calls[0].kwargs.get("reply_markup") is None
+
+
+async def test_retry_tap_on_the_requester_line_dm_reads_retrying():
+    upd, ctx, seerr = _tap("rqrt:12", status=REQUEST_STATUS_FAILED)
+    upd.callback_query.message.text_html = (
+        "⚠️ Your request failed to download.\nSome Movie (2026)")
+    await rq_admin_action(upd, ctx)
+    seerr.retry_request.assert_awaited_once_with(12)
+    edit = _last_edit(upd)
+    assert edit["text"] == ("⚠️ Your request failed to download.\n"
+                            "Some Movie (2026)\n\n🔁 Retrying")
+    assert [b[0] for b in _buttons(edit["reply_markup"])] == ["Open in Seerr"]
+
+
+async def test_admin_own_failed_request_keeps_retry_with_admin_alarm_off():
+    app = _admin_requested_app()
+    app.bot_data["settings_store"].settings.tg_notify_admin_failed = False
+    await handle_seerr_media(app, _payload("MEDIA_FAILED"))
+    markup, text = _admin_markup(app)
+    assert "admin has been notified" not in text
+    assert ("🔁 Retry", "rqrt:12", None) in _buttons(markup)

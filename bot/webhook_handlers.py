@@ -486,7 +486,14 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
         requester_chat_id = admin_id
     requester_dmed = False
     if requester_line and requester_chat_id:
-        await _dm(requester_chat_id, requester_line, with_requester=False)
+        # The Admin's own failed Request: the admin DM below is skipped for
+        # them, so their requester DM carries Retry and Open in Seerr.
+        own_failed_kb = None
+        if requester_is_admin and nt == "MEDIA_FAILED":
+            own_failed_kb = admin_request_kb(
+                nt, request_id, seerr_link(cfg.seerr_public_url, media))
+        await _dm(requester_chat_id, requester_line, with_requester=False,
+                  reply_markup=own_failed_kb)
         requester_dmed = True
 
     # The admin line is skipped when the admin is the requester: their own
