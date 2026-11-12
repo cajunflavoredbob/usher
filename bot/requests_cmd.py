@@ -72,6 +72,7 @@ async def _render_requests(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         requests, total = await seerr.list_requests(
             take=REQUEST_LIST_TAKE,
             as_plex_token=None if is_admin else link.plex_token,
+            requested_by=None if is_admin else link.seerr_id,
         )
     except PlexTokenInvalidError:
         await prompt_plex_relink(update, ctx,

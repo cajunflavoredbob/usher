@@ -50,6 +50,17 @@ async def test_list_renders_statuses_and_cancel_buttons():
     assert kwargs["as_plex_token"] == "plex-abc"
 
 
+async def test_user_list_asks_seerr_for_only_their_own_requests():
+    """A user with MANAGE_REQUESTS or REQUEST_VIEW gets everyone's requests
+    from Seerr unless the query names them, so the fetch passes the Link's
+    Seerr id."""
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
+    upd = make_update(text="/requests", user_id=USER_ID)
+    await cmd_requests(upd, ctx)
+    kwargs = ctx.bot_data["seerr"].list_requests.call_args.kwargs
+    assert kwargs["requested_by"] == 7
+
+
 async def test_admin_list_shows_requesters_and_uses_admin_key():
     ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=ADMIN_ID))
     ctx.bot_data["seerr"].list_requests.return_value = (_items(), 2)
@@ -57,7 +68,9 @@ async def test_admin_list_shows_requesters_and_uses_admin_key():
     await cmd_requests(upd, ctx)
     call = upd.effective_message.reply_calls[-1]
     assert "user1" in call["text"]
-    assert ctx.bot_data["seerr"].list_requests.call_args.kwargs["as_plex_token"] is None
+    kwargs = ctx.bot_data["seerr"].list_requests.call_args.kwargs
+    assert kwargs["as_plex_token"] is None
+    assert kwargs["requested_by"] is None
 
 
 async def test_unlinked_user_is_gated():

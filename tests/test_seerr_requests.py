@@ -208,6 +208,21 @@ async def test_list_requests_parses_items_and_total(monkeypatch):
     await client.close()
 
 
+async def test_list_requests_sends_requested_by_only_when_given(monkeypatch):
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.url.params))
+        return httpx.Response(200, json={"results": []})
+
+    client = _client(monkeypatch, handler)
+    await client.list_requests(requested_by=7)
+    await client.list_requests()
+    assert seen[0]["requestedBy"] == "7"
+    assert "requestedBy" not in seen[1]
+    await client.close()
+
+
 async def test_get_request_parses_single_item(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/request/12")

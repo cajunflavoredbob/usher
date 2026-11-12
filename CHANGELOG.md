@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- "Your requests" no longer lists other people's Requests (with Cancel buttons
+  on their pending ones) for a user whose Seerr account can manage or view all
+  Requests; the list is now limited to the user's own.
 - The logged-in Settings page no longer shows the bot token, Seerr, Radarr,
   Sonarr or SABnzbd API keys or the webhook secret. A stored secret shows an
   empty field with "Already set"; saving with the field blank keeps the stored

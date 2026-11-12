@@ -880,14 +880,20 @@ class SeerrClient:
         filter: str = "all",
         take: int = 25,
         as_plex_token: Optional[str] = None,
+        requested_by: Optional[int] = None,
     ) -> tuple[list[RequestListItem], int]:
-        """List requests. With as_plex_token, Seerr returns only that user's
-        requests; the admin-key client sees everyone's. Returns (items,
-        total) like list_issues -- total can exceed len(items) at `take`."""
+        """List requests. The admin-key client sees everyone's. With
+        as_plex_token, Seerr narrows to that user's requests only when the
+        user lacks MANAGE_REQUESTS and REQUEST_VIEW; a user holding either
+        still gets everyone's, so pass requested_by (a Seerr user id) to
+        pin the list to one user. Returns (items, total) like list_issues --
+        total can exceed len(items) at `take`."""
         client = await self._client_for(as_plex_token)
+        params: dict = {"filter": filter, "take": take, "sort": "added"}
+        if requested_by is not None:
+            params["requestedBy"] = requested_by
         r = await execute(client, "GET", "/request", service=_SERVICE,
-                          params={"filter": filter, "take": take,
-                                  "sort": "added"})
+                          params=params)
         data = _json_or_raise(r, what="request list")
         out: list[RequestListItem] = []
         for item in data.get("results", []):
