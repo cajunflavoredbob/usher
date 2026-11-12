@@ -10,8 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - The logged-in Settings page no longer shows the bot token, Seerr, Radarr,
   Sonarr or SABnzbd API keys or the webhook secret. A stored secret shows an
-  empty field with "Already set"; saving or testing with the field blank uses
-  the stored value.
+  empty field with "Already set"; saving with the field blank keeps the stored
+  value, and the Telegram, Seerr, Auto-fix and SABnzbd Test buttons use it.
 
 ## [0.18.1] - 2026-11-12
 
