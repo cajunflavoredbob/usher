@@ -91,6 +91,16 @@ class RadarrClient:
                           service=_SERVICE)
         return bool(json_or_raise(r, service=_SERVICE, what="movie detail").get("hasFile"))
 
+    async def _file_is_gone(self, exc: APIError, has_file) -> bool:
+        """After a failed delete: True when a re-fetch shows the file is
+        already gone (usually the delete landed and only its reply was lost)."""
+        try:
+            return not await has_file()
+        except APIError as recheck_exc:
+            logger.warning("%s: delete failed (%s) and the re-check failed too (%s)",
+                           _SERVICE, exc.user_message, recheck_exc.user_message)
+            return False
+
     async def _run_movie_workflow(
         self, *, movie: RadarrMovie, blocklist: bool,
     ) -> FixResult:
@@ -130,11 +140,16 @@ class RadarrClient:
                 await self.delete_movie_file(movie.movie_file_id)
                 steps.append("delete")
             except APIError as exc:
-                prefix = "Blocklisted release but " if blocklisted else ""
-                return FixResult.partial(
-                    f"{prefix}couldn't delete file: {exc.user_message}",
-                    steps_done=steps, poll_info=poll_info,
-                )
+                # DELETE is retried after a timeout; when the first attempt
+                # landed, the retry gets a 404. Re-check before giving up.
+                if await self._file_is_gone(exc, lambda: self.movie_has_file(movie.id)):
+                    steps.append("delete")
+                else:
+                    prefix = "Blocklisted release but " if blocklisted else ""
+                    return FixResult.partial(
+                        f"{prefix}couldn't delete file: {exc.user_message}",
+                        steps_done=steps, poll_info=poll_info,
+                    )
 
         try:
             await self.trigger_search(movie.id)

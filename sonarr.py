@@ -89,6 +89,16 @@ class SonarrClient:
                       json={"name": "EpisodeSearch", "episodeIds": episode_ids})
 
 
+    async def _file_is_gone(self, exc: APIError, has_file) -> bool:
+        """After a failed delete: True when a re-fetch shows the file is
+        already gone (usually the delete landed and only its reply was lost)."""
+        try:
+            return not await has_file()
+        except APIError as recheck_exc:
+            logger.warning("%s: delete failed (%s) and the re-check failed too (%s)",
+                           _SERVICE, exc.user_message, recheck_exc.user_message)
+            return False
+
     async def _run_episode_workflow(
         self, *, series: SonarrSeries, match: SonarrEpisode, blocklist: bool,
     ) -> FixResult:
@@ -134,11 +144,16 @@ class SonarrClient:
                 await self.delete_episode_file(match.episode_file_id)
                 steps.append("delete")
             except APIError as exc:
-                prefix = "Blocklisted release but " if blocklisted else ""
-                return FixResult.partial(
-                    f"{prefix}couldn't delete file: {exc.user_message}",
-                    steps_done=steps, poll_info=poll_info,
-                )
+                # DELETE is retried after a timeout; when the first attempt
+                # landed, the retry gets a 404. Re-check before giving up.
+                if await self._file_is_gone(exc, lambda: self.episode_has_file(match.id)):
+                    steps.append("delete")
+                else:
+                    prefix = "Blocklisted release but " if blocklisted else ""
+                    return FixResult.partial(
+                        f"{prefix}couldn't delete file: {exc.user_message}",
+                        steps_done=steps, poll_info=poll_info,
+                    )
 
         try:
             await self.trigger_episode_search([match.id])

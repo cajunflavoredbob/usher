@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plex.tv outage cannot leave you unlinked. The Plex sign-in link and code are
   only shown in a private chat, and the "Didn't work?" button only acts while a
   sign-in is in progress.
+- A Fix whose file delete timed out after Radarr or Sonarr had already removed
+  the file no longer stops with "couldn't delete file". Usher checks the file is
+  gone and still triggers the new search.
 
 ## [0.18.0] - 2026-11-11
 

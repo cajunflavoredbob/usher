@@ -142,23 +142,21 @@ async def test_whole_season_tv_rejected():
 # --- partial success ---
 
 
-async def test_partial_success_still_enqueues_poller():
-    """Search ran but delete failed before it -> partial. Poller should still
-    be enqueued (the new file is incoming) but message reflects the partial."""
+async def test_partial_after_blocklist_shows_partial_prefix():
+    """Blocklisted but the delete failed (and the re-check found the file still
+    there) -> partial with no search: the card says so and no poller is queued."""
     upd = make_update(callback_data="tkfm:42", user_id=999)
     ctx = make_ctx(admin_id=999)
     ctx.bot_data["seerr"].get_issue.return_value = _ticket(media_type="movie")
     ctx.bot_data["radarr"].mark_failed.return_value = FixResult.partial(
         "Blocklisted release but couldn't delete file: <permanent>",
-        steps_done=["blocklist", "search"],
+        steps_done=["blocklist"],
         poll_info={"movie_id": 555},
     )
 
     await _apply_fix(upd, ctx, strategy="mark_failed")
 
-    # Poller IS enqueued (should_poll is True because 'search' is in steps_done)
-    ctx.bot_data["store"].add_pending_autofix.assert_called_once()
-    # Message uses the partial prefix
+    ctx.bot_data["store"].add_pending_autofix.assert_not_called()
     text = _card_text(ctx)
     assert "⚠️ Mark Failed for #42" in text
 

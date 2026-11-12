@@ -127,3 +127,64 @@ async def test_queue_progress_filters_when_episode_ids_present():
     progress = await c.get_queue_progress(5, episode_ids=[9])
     assert progress.count == 1 and progress.percent == 100
     await c.close()
+
+
+def _stateful_client(*, delete_landed: bool):
+    """Mock Sonarr whose first DELETE times out; the retry gets a 404."""
+    state = {"has_file": True, "deletes": 0}
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        path = request.url.path
+        if path == "/api/v3/series":
+            return httpx.Response(200, json=[{"id": 8, "tvdbId": 42, "title": "Show"}])
+        if path == "/api/v3/episode" and request.method == "GET":
+            return httpx.Response(200, json=[{
+                "id": 70, "seasonNumber": 1, "episodeNumber": 9, "title": "E",
+                "hasFile": True, "episodeFileId": 33}])
+        if path == "/api/v3/episode/70" and request.method == "GET":
+            return httpx.Response(200, json={"id": 70, "hasFile": state["has_file"]})
+        if path == "/api/v3/episodefile/33" and request.method == "DELETE":
+            state["deletes"] += 1
+            if state["deletes"] == 1:
+                if delete_landed:
+                    state["has_file"] = False
+                raise httpx.ReadTimeout("slow")
+            return httpx.Response(404, json={"message": "NotFound"})
+        if path == "/api/v3/command" and request.method == "POST":
+            return httpx.Response(201, json={})
+        return httpx.Response(404, json={"message": "unexpected"})
+
+    client = SonarrClient("http://sonarr.test", "key")
+    client._client = httpx.AsyncClient(
+        base_url="http://sonarr.test/api/v3",
+        transport=httpx.MockTransport(handler),
+    )
+    return client, requests
+
+
+async def test_auto_fix_episode_searches_when_retried_delete_404s_after_landing(monkeypatch):
+    async def _no_sleep(_):
+        return None
+    monkeypatch.setattr("http_util.asyncio.sleep", _no_sleep)
+    client, requests = _stateful_client(delete_landed=True)
+    result = await client.auto_fix_episode(tvdb_id=42, season=1, episode=9)
+    await client.close()
+
+    assert result.status == "ok"
+    assert result.steps_done == ["delete", "search"]
+    assert any(r.url.path == "/api/v3/command" for r in requests)
+
+
+async def test_auto_fix_episode_stays_partial_when_file_still_there(monkeypatch):
+    async def _no_sleep(_):
+        return None
+    monkeypatch.setattr("http_util.asyncio.sleep", _no_sleep)
+    client, requests = _stateful_client(delete_landed=False)
+    result = await client.auto_fix_episode(tvdb_id=42, season=1, episode=9)
+    await client.close()
+
+    assert result.status == "partial"
+    assert "couldn't delete file" in result.message
+    assert not any(r.url.path == "/api/v3/command" for r in requests)

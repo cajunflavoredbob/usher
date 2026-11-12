@@ -110,3 +110,84 @@ async def test_mark_failed_no_grab_falls_back_to_delete_search():
     assert result.steps_done == ["delete", "search"]
     assert "No prior grab to blocklist" in result.message
     assert not any("/history/failed/" in r.url.path for r in requests)
+
+
+def _stateful_client(*, delete_landed: bool):
+    """Mock Radarr whose first DELETE times out; the retry gets a 404 because
+    the first one landed (delete_landed) or is a plain 404 with the file kept."""
+    state = {"has_file": True, "deletes": 0}
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        path = request.url.path
+        if path == "/api/v3/movie" and request.method == "GET":
+            return httpx.Response(200, json=[MOVIE])
+        if path == "/api/v3/movie/5" and request.method == "GET":
+            return httpx.Response(200, json={**MOVIE, "hasFile": state["has_file"]})
+        if path == "/api/v3/moviefile/9" and request.method == "DELETE":
+            state["deletes"] += 1
+            if state["deletes"] == 1:
+                if delete_landed:
+                    state["has_file"] = False
+                raise httpx.ReadTimeout("slow")
+            return httpx.Response(404, json={"message": "NotFound"})
+        if path == "/api/v3/command" and request.method == "POST":
+            return httpx.Response(201, json={})
+        return httpx.Response(404, json={"message": "unexpected"})
+
+    client = RadarrClient("http://radarr.test", "key")
+    client._client = httpx.AsyncClient(
+        base_url="http://radarr.test/api/v3",
+        transport=httpx.MockTransport(handler),
+    )
+    return client, requests
+
+
+async def test_auto_fix_searches_when_retried_delete_404s_after_landing(monkeypatch):
+    async def _no_sleep(_):
+        return None
+    monkeypatch.setattr("http_util.asyncio.sleep", _no_sleep)
+    client, requests = _stateful_client(delete_landed=True)
+    result = await client.auto_fix(tmdb_id=42)
+    await client.close()
+
+    assert result.status == "ok"
+    assert result.steps_done == ["delete", "search"]
+    assert any(r.url.path == "/api/v3/command" for r in requests)
+
+
+async def test_auto_fix_stays_partial_when_file_still_there_after_failed_delete(monkeypatch):
+    async def _no_sleep(_):
+        return None
+    monkeypatch.setattr("http_util.asyncio.sleep", _no_sleep)
+    client, requests = _stateful_client(delete_landed=False)
+    result = await client.auto_fix(tmdb_id=42)
+    await client.close()
+
+    assert result.status == "partial"
+    assert "couldn't delete file" in result.message
+    assert not any(r.url.path == "/api/v3/command" for r in requests)
+
+
+async def test_auto_fix_stays_partial_when_recheck_also_fails(monkeypatch):
+    async def _no_sleep(_):
+        return None
+    monkeypatch.setattr("http_util.asyncio.sleep", _no_sleep)
+    client, requests = _stateful_client(delete_landed=True)
+    inner = client._client._transport
+
+    def handler(request):
+        if request.url.path == "/api/v3/movie/5":
+            return httpx.Response(400, json={"message": "bad"})
+        return inner.handler(request)
+
+    client._client = httpx.AsyncClient(
+        base_url="http://radarr.test/api/v3",
+        transport=httpx.MockTransport(handler),
+    )
+    result = await client.auto_fix(tmdb_id=42)
+    await client.close()
+
+    assert result.status == "partial"
+    assert not any(r.url.path == "/api/v3/command" for r in requests)
