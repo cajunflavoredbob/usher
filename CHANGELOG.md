@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from an older message. Approve, Decline and Retry on the Admin's Request messages keep
   working after 6 hours or newer messages. A button from a different chat is no
   longer mistaken for a live one.
+- Linking again after a revoked Plex sign-in no longer unlinks you first, so a
+  plex.tv outage cannot leave you unlinked. The Plex sign-in link and code are
+  only shown in a private chat, and the "Didn't work?" button only acts while a
+  sign-in is in progress.
 
 ## [0.18.0] - 2026-11-11
 

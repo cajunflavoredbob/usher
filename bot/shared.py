@@ -560,7 +560,7 @@ async def prompt_plex_relink(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *,
                              resume_payload: Optional[dict] = None,
                              back: Optional[InlineKeyboardButton] = None) -> None:
     """Recovery prompt for a revoked Plex token (PlexTokenInvalidError): one
-    tap unlinks the dead session and drops the user into the sign-in flow
+    tap drops the user into the sign-in flow
     (link_flow.cmd_relink). Works from both callback and message contexts.
     `back` (a flow started from a Hub) goes on its own row below the relink
     button.

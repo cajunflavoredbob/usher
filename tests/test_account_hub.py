@@ -304,6 +304,7 @@ async def test_hub_link_weak_pin_failure_offers_try_again_and_back():
     ctx = make_ctx()
     ctx.bot_data["plex"].request_pin.side_effect = RuntimeError("down")
     hub.set_hub_origin(ctx, "account")
+    ctx.user_data["link_active_loop"] = "loop1"
     upd = make_update(callback_data=LINK_HELP)
     await link_flow.cmd_link_didnt_work(upd, ctx)
     edit = upd.callback_query.edits[0]
@@ -317,6 +318,7 @@ async def test_hub_link_weak_pin_timeout_offers_try_again_and_back(monkeypatch):
     monkeypatch.setattr(link_flow, "_poll_with_cancel",
                         AsyncMock(return_value=None))
     hub.set_hub_origin(ctx, "account")
+    ctx.user_data["link_active_loop"] = "loop1"
     upd = make_update(callback_data=LINK_HELP)
     await link_flow.cmd_link_didnt_work(upd, ctx)
     edit = upd.callback_query.edits[-1]

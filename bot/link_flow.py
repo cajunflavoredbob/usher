@@ -153,23 +153,35 @@ async def account_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     return AWAIT_LINK_CONSENT
 
 
+async def _refuse_non_private(update: Update) -> bool:
+    """True (after replying) when the tap came from a group: the Plex sign-in
+    URL or PIN code must never be shown where another member can use it."""
+    if update.effective_chat.type == ChatType.PRIVATE:
+        return False
+    await update.effective_message.reply_text("Please DM me to link your account.")
+    return True
+
+
 async def cmd_relink(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """'Unlink & sign in again' tap (revoked-token recovery): clear the dead
     token and drop straight into the platform-choice step. The consent step
     is skipped -- tapping the recovery button IS the consent."""
     q = update.callback_query
     await q.answer()
+    if await _refuse_non_private(update):
+        return ConversationHandler.END
     set_hub_origin(ctx, None)
     if await require_seerr(update, ctx) is None:
         return ConversationHandler.END
-    store: UserStore = ctx.bot_data["store"]
-    await store.unlink(update.effective_user.id)
+    # The old link stays until _finalize_link stores the new one: Seerr's
+    # "Unable to authenticate." also comes back for plex.tv outages, and
+    # unlinking here would strand a working user on a transient failure.
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("💻 Desktop", callback_data=f"{LINK_PLATFORM}:desktop"),
         InlineKeyboardButton("📱 iOS / Android", callback_data=f"{LINK_PLATFORM}:mobile"),
     ]])
     sent = await q.edit_message_text(
-        "🔓 Old Plex session cleared.\n\n"
+        "🔓 Your old Plex sign-in is no longer valid.\n\n"
         "Now let's get you signed back in. Where are you using Telegram?",
         reply_markup=kb,
     )
@@ -327,6 +339,8 @@ async def hub_retry_linkplat(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     the Account Hub: re-run the PIN step for the same platform."""
     q = update.callback_query
     await q.answer()
+    if await _refuse_non_private(update):
+        return ConversationHandler.END
     platform = q.data.split(":")[2]
     set_hub_origin(ctx, "account")
     return await _start_plex_auth(update, ctx, platform)
@@ -397,6 +411,12 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     conversation so it can interrupt an in-progress poll. Issues a weak PIN
     and starts a fresh poll loop."""
     q = update.callback_query
+    if await _refuse_non_private(update):
+        await q.answer()
+        return
+    if not ctx.user_data.get("link_active_loop"):
+        await q.answer("That sign-in has ended. Use /link to start again.")
+        return
     await q.answer()
     hub = hub_origin(ctx)
 

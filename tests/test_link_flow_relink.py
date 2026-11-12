@@ -3,18 +3,22 @@ one tap clears the dead token and drops the user into the platform-choice
 step of the existing link conversation, skipping the consent step."""
 from __future__ import annotations
 
-from bot.callback_prefixes import LINK_PLATFORM, RELINK
-from bot.link_flow import _link_conversation, cmd_relink
+from telegram.ext import ConversationHandler
+
+from bot.callback_prefixes import HUB_RETRY, LINK_HELP, LINK_PLATFORM, RELINK
+from bot.link_flow import (
+    _link_conversation, cmd_link_didnt_work, cmd_relink, hub_retry_linkplat,
+)
 from bot.shared import AWAIT_PLATFORM_CHOICE
 from tests._handler_harness import make_ctx, make_update
 
 
-async def test_relink_unlinks_and_enters_platform_choice():
+async def test_relink_enters_platform_choice():
     upd = make_update(callback_data=RELINK, user_id=42)
     ctx = make_ctx(admin_id=999)
     state = await cmd_relink(upd, ctx)
     assert state == AWAIT_PLATFORM_CHOICE
-    ctx.bot_data["store"].unlink.assert_called_once_with(42)
+    ctx.bot_data["store"].unlink.assert_not_called()
     edit = upd.callback_query.edits[0]
     assert "signed back in" in edit["text"]
     callbacks = [b.callback_data
@@ -29,3 +33,54 @@ def test_relink_is_conversation_entry_point():
     conv = _link_conversation()
     patterns = [getattr(ep, "pattern", None) for ep in conv.entry_points]
     assert any(p is not None and p.pattern == f"^{RELINK}$" for p in patterns)
+
+
+async def test_relink_keeps_existing_link_until_new_one_is_stored():
+    """A plex.tv outage after the tap must not leave a working user unlinked:
+    the old link is only replaced by _finalize_link's upsert."""
+    upd = make_update(callback_data=RELINK, user_id=42)
+    ctx = make_ctx(admin_id=999)
+    await cmd_relink(upd, ctx)
+    ctx.bot_data["store"].unlink.assert_not_called()
+
+
+def _in_group(upd):
+    upd.effective_chat.type = "group"
+    return upd
+
+
+async def test_relink_refused_in_group():
+    upd = _in_group(make_update(callback_data=RELINK, user_id=42))
+    ctx = make_ctx(admin_id=999)
+    state = await cmd_relink(upd, ctx)
+    assert state == ConversationHandler.END
+    assert upd.callback_query.edits == []
+    assert upd.message.reply_calls[0]["text"] == "Please DM me to link your account."
+
+
+async def test_hub_retry_linkplat_refused_in_group():
+    upd = _in_group(make_update(
+        callback_data=f"{HUB_RETRY}:linkplat:desktop", user_id=42))
+    ctx = make_ctx(admin_id=999)
+    state = await hub_retry_linkplat(upd, ctx)
+    assert state == ConversationHandler.END
+    ctx.bot_data["plex"].request_pin.assert_not_called()
+    assert upd.message.reply_calls[0]["text"] == "Please DM me to link your account."
+
+
+async def test_didnt_work_refused_in_group():
+    upd = _in_group(make_update(callback_data=LINK_HELP, user_id=42))
+    ctx = make_ctx(admin_id=999)
+    ctx.user_data["link_active_loop"] = "abc"
+    await cmd_link_didnt_work(upd, ctx)
+    ctx.bot_data["plex"].request_pin.assert_not_called()
+    assert upd.message.reply_calls[0]["text"] == "Please DM me to link your account."
+
+
+async def test_didnt_work_without_live_link_flow_does_nothing():
+    upd = make_update(callback_data=LINK_HELP, user_id=42)
+    ctx = make_ctx(admin_id=999)
+    await cmd_link_didnt_work(upd, ctx)
+    ctx.bot_data["plex"].request_pin.assert_not_called()
+    assert upd.callback_query.edits == []
+    assert upd.callback_query.answers[-1][0]
