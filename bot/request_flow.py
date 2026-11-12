@@ -356,9 +356,9 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     # A pick from a Hub's list (the tapped message carries the back button)
     # ends back at that Hub; any other pick behaves like a typed /request.
     hub = REQUESTS_HUB if came_from_hub(q.message, REQUESTS_HUB) else None
-    set_hub_origin(ctx, hub)
     await send_typing(update, ctx)  # gate + title fetch can be slow
     if not await _gate_entry(update, ctx, hub=hub):
+        set_hub_origin(ctx, hub)
         force_end_flow_conversations(ctx, update)
         return ConversationHandler.END
     force_4k = False
@@ -366,10 +366,14 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         refusal, force_4k = _coverage_verdict(ctx, tapped.media_type, tapped)
         if refusal:
             # Answer already spent, so the refusal goes out as a message.
-            # The list and any flow the user has open stay as they are.
+            # The list stays, and so does the Hub origin of any flow the
+            # user has open (set_hub_origin only runs once the tap proceeds).
+            # An open /request flow is still ended: returning END from this
+            # re-entered entry point ends its conversation.
             await update.effective_message.reply_text(
                 f"{tapped.title}: {refusal}")
             return ConversationHandler.END
+    set_hub_origin(ctx, hub)
     # Another flow may still be parked in a pick state; end everything (this
     # conversation isn't active yet, so it's untouched) so no stale flow can
     # fire a timeout notice mid-request.

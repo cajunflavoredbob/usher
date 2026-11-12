@@ -919,3 +919,25 @@ async def test_trending_tap_on_requestable_title_still_confirms():
     state = await request_from_ticket(upd, ctx)
     assert state == RQ_CONFIRM
     assert upd.callback_query.answers == [("", False)]
+
+
+async def test_trending_refusal_keeps_the_hub_origin_of_an_open_flow():
+    from bot.hub import HUB_ORIGIN_KEY
+    from bot.request_flow import request_from_ticket
+    ctx = _trending_ctx(MediaResult("movie", 550, "Fight Club", "1999", 5,
+                                    status=MEDIA_STATUS_AVAILABLE))
+    ctx.user_data[HUB_ORIGIN_KEY] = "account"
+    upd = make_update(callback_data="rqfi:movie:550", user_id=USER_ID)
+    await request_from_ticket(upd, ctx)
+    assert ctx.user_data[HUB_ORIGIN_KEY] == "account"
+
+
+async def test_trending_tap_that_proceeds_sets_the_hub_origin():
+    from bot.hub import HUB_ORIGIN_KEY
+    from bot.request_flow import request_from_ticket
+    ctx = _trending_ctx(MediaResult("movie", 550, "Fight Club", "1999", 5,
+                                    status=None))
+    ctx.user_data[HUB_ORIGIN_KEY] = "account"
+    upd = make_update(callback_data="rqfi:movie:550", user_id=USER_ID)
+    await request_from_ticket(upd, ctx)
+    assert HUB_ORIGIN_KEY not in ctx.user_data  # typed entry: no Hub
