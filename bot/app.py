@@ -59,6 +59,7 @@ from bot.callback_prefixes import (
     SHARE_MATCHES,
     SHARE_VIEW,
     TK_BACK,
+    TK_BACK_DM,
     TK_BACK_LIST,
     TK_CLOSE,
     TK_CLOSE_DIRECT,
@@ -444,7 +445,7 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CallbackQueryHandler(tk_fix, pattern=fr"^{TK_FIX}:\d+$"))
     app.add_handler(CallbackQueryHandler(tk_fix_redownload, pattern=fr"^{TK_FIX_REDOWNLOAD}:\d+$"))
     app.add_handler(CallbackQueryHandler(tk_fix_mark_failed, pattern=fr"^{TK_FIX_MARK_FAILED}:\d+$"))
-    app.add_handler(CallbackQueryHandler(tk_back, pattern=fr"^({TK_BACK}|{TK_BACK_LIST}):\d+$"))
+    app.add_handler(CallbackQueryHandler(tk_back, pattern=fr"^({TK_BACK}|{TK_BACK_LIST}|{TK_BACK_DM}):\d+$"))
     app.add_handler(ticket_conv)
     app.add_handler(CallbackQueryHandler(cmd_link_didnt_work, pattern=fr"^{LINK_HELP}$"))
     # Hub back button + Account Hub Unlink (Link is a link-conversation entry).

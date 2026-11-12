@@ -43,6 +43,7 @@ from store import UserStore
 from bot.callback_prefixes import (
     TICKETS_LIST,
     TK_BACK,
+    TK_BACK_DM,
     TK_BACK_LIST,
     TK_CLOSE_DIRECT,
     TK_CLOSE_WITH_COMMENT,
@@ -71,6 +72,7 @@ from bot.shared import (
     end_action,
     force_end_flow_conversations,
     media_action_key,
+    new_ticket_dm_kb,
     prompt_plex_relink,
     send_typing,
     try_begin_action,
@@ -225,6 +227,17 @@ def _opened_from_list(message) -> bool:
     and a Close or Fix sub-menu, or a Fix that couldn't start or didn't run,
     carries a `TK_BACK_LIST` button."""
     return any(cb == TICKETS_LIST or cb.startswith(f"{TK_BACK_LIST}:")
+               for cb in keyboard_callbacks(message))
+
+
+def _opened_from_dm(message) -> bool:
+    """True when `message` carries a "📜 History" button (`TK_OPEN`) or a
+    `TK_BACK_DM` button, and is not opened from the list. Only the new-Ticket
+    DM's card, its Close or Fix sub-menu, or a Fix that couldn't start or
+    didn't run, reach it with a Fix or Close to act on."""
+    if _opened_from_list(message):
+        return False
+    return any(cb.startswith(f"{TK_OPEN}:") or cb.startswith(f"{TK_BACK_DM}:")
                for cb in keyboard_callbacks(message))
 
 
@@ -397,10 +410,13 @@ async def _build_ticket_detail(
 async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Back from a sub-menu -- edit the message back to the ticket detail view.
     `tkbl:<id>` (a sub-menu of a detail opened from the list) keeps the
-    detail's "⬅️ Tickets" row; `tkback:<id>` does not."""
+    detail's "⬅️ Tickets" row; `tkbd:<id>` (a sub-menu of a new-Ticket DM)
+    brings back the DM's buttons, History included; `tkback:<id>` does
+    neither."""
     q = update.callback_query
     await q.answer()
     from_list = q.data.startswith(f"{TK_BACK_LIST}:")
+    from_dm = q.data.startswith(f"{TK_BACK_DM}:")
     try:
         ticket_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
@@ -426,6 +442,9 @@ async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if from_list:
         kb = _with_list_back(kb, ticket_id, retry=False)
+    elif from_dm:
+        kb = (new_ticket_dm_kb(ticket_id) if kb is not None and is_admin
+              else kb or InlineKeyboardMarkup([[_ticket_back_button(ticket_id, False, True)]]))
     try:
         await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
     except Exception:
@@ -437,7 +456,10 @@ async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 def _back_prefix(q) -> str:
     """The sub-menu Back callback: keep the list-back row when the detail card
-    it was opened from carries it."""
+    it was opened from carries it, and the new-Ticket DM's History row when
+    the card is that DM."""
+    if _opened_from_dm(q.message):
+        return TK_BACK_DM
     return TK_BACK_LIST if TICKETS_LIST in keyboard_callbacks(q.message) else TK_BACK
 
 
@@ -596,27 +618,32 @@ async def _enqueue_fix_completion(
     return await store.add_pending_autofix(**kwargs)
 
 
-def _ticket_back_button(ticket_id: int, from_list: bool) -> InlineKeyboardButton:
+def _ticket_back_button(ticket_id: int, from_list: bool,
+                        from_dm: bool = False) -> InlineKeyboardButton:
     """"⬅️ Ticket": shows the Ticket again with its buttons (through
-    `tk_back`), keeping the "⬅️ Tickets" row when it was opened from the list."""
-    prefix = TK_BACK_LIST if from_list else TK_BACK
+    `tk_back`), keeping the "⬅️ Tickets" row when it was opened from the list
+    and the History row when it is a new-Ticket DM."""
+    prefix = TK_BACK_LIST if from_list else TK_BACK_DM if from_dm else TK_BACK
     return InlineKeyboardButton("⬅️ Ticket", callback_data=f"{prefix}:{ticket_id}")
 
 
 def _fix_end_markup(ticket_id: int, from_list: bool,
-                    retry: Optional[str] = None) -> InlineKeyboardMarkup:
+                    retry: Optional[str] = None,
+                    from_dm: bool = False) -> InlineKeyboardMarkup:
     """Keyboard for a Fix that couldn't start or didn't run: "⬅️ Ticket",
     with Try again (callback `retry`) before it when the card was opened from
     the list and the step failed."""
-    row = [_ticket_back_button(ticket_id, from_list)]
+    row = [_ticket_back_button(ticket_id, from_list, from_dm)]
     if from_list and retry is not None:
         row.insert(0, try_again_button(retry))
     return InlineKeyboardMarkup([row])
 
 
-async def _restore_ticket_card(q, ctx, ticket_id: int, from_list: bool) -> None:
+async def _restore_ticket_card(q, ctx, ticket_id: int, from_list: bool,
+                               from_dm: bool = False) -> None:
     """Edit the Ticket card back into the Ticket with its buttons, the same
-    view its Back shows (plus "⬅️ Tickets" when opened from the list)."""
+    view its Back shows (plus "⬅️ Tickets" when opened from the list, or
+    "📜 History" when it is a new-Ticket DM)."""
     try:
         text, kb = await _build_ticket_detail(ctx, ticket_id, True, None)
     except Exception:
@@ -625,7 +652,9 @@ async def _restore_ticket_card(q, ctx, ticket_id: int, from_list: bool) -> None:
     if from_list:
         kb = _with_list_back(kb, ticket_id, retry=False)
     elif kb is None:
-        kb = InlineKeyboardMarkup([[_ticket_back_button(ticket_id, False)]])
+        kb = InlineKeyboardMarkup([[_ticket_back_button(ticket_id, False, from_dm)]])
+    elif from_dm:
+        kb = new_ticket_dm_kb(ticket_id)
     try:
         sent = await edit_or_send(q, text, parse_mode="HTML", reply_markup=kb)
     except Exception:
@@ -687,6 +716,7 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
         return
     # Read before the first edit below strips the keyboard.
     from_list = _opened_from_list(q.message)
+    from_dm = _opened_from_dm(q.message)
     retry = q.data
     seerr: SeerrClient = ctx.bot_data["seerr"]
     radarr: Optional[RadarrClient] = ctx.bot_data.get("radarr")
@@ -702,7 +732,7 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
     if err is not None:
         fetch_failed = err.startswith(_FETCH_FAILED)
         await _edit_result(q, ctx, err, _fix_end_markup(
-            ticket_id, from_list, retry if fetch_failed else None))
+            ticket_id, from_list, retry if fetch_failed else None, from_dm))
         return
     assert fix is not None
 
@@ -714,7 +744,7 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
         await _edit_result(q, ctx,
             f"⏳ Another fix for {fix.label or f'#{ticket_id}'} is already "
             "running. Wait for its result before retrying.",
-            _fix_end_markup(ticket_id, from_list),
+            _fix_end_markup(ticket_id, from_list, from_dm=from_dm),
         )
         return
     try:
@@ -722,7 +752,7 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
         # the Ticket card shows the Ticket again.
         card = _ProgressCard(ctx, q.message.chat_id)
         await card.show(f"⏳ {action_name} for #{ticket_id} - working...")
-        await _restore_ticket_card(q, ctx, ticket_id, from_list)
+        await _restore_ticket_card(q, ctx, ticket_id, from_list, from_dm)
 
         action: FixAction = "fix" if strategy == "redownload" else "mark_failed"
         result = await _run_arr_action(
@@ -733,7 +763,7 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
             await card.delete()
             await _edit_result(
                 q, ctx, f"⚠️ {action_name} for #{ticket_id} didn't run: {result.message}",
-                _fix_end_markup(ticket_id, from_list, retry))
+                _fix_end_markup(ticket_id, from_list, retry, from_dm))
             return
 
         # ok or partial: always log the autofix event (mirrors _submit_ticket,

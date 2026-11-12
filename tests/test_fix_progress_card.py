@@ -7,8 +7,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from bot.callback_prefixes import TK_BACK, TK_BACK_LIST
-from bot.tickets import _apply_fix, tk_back
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+from bot.callback_prefixes import TK_BACK, TK_BACK_DM, TK_BACK_LIST
+from bot.shared import new_ticket_dm_kb
+from bot.tickets import _apply_fix, tk_back, tk_close_menu, tk_fix
 from fix_result import FixResult
 from seerr import IssueListItem
 from tests._handler_harness import make_ctx, make_update
@@ -210,3 +213,55 @@ async def test_admin_fix_enqueues_its_action_name_for_the_poller():
     ctx.bot_data["store"].add_pending_autofix = AsyncMock(return_value=41)
     await _fix(ctx)
     assert ctx.bot_data["store"].add_pending_autofix.call_args.kwargs["action_name"] == "Redownload"
+
+
+# --- a Fix on a new-Ticket DM keeps its History row (#39) ------------------------------
+
+DM_BUTTONS = TICKET_BUTTONS + [("📜 History", "tkopen:5")]
+
+
+def _from_dm(upd, markup=None):
+    """The tapped message is the new-Ticket DM (or a sub-menu of it)."""
+    upd.callback_query.message.reply_markup = markup or new_ticket_dm_kb(5)
+    return upd
+
+
+async def test_new_ticket_dm_keeps_history_after_a_fix_starts():
+    ctx = _ctx()
+    upd = make_update(callback_data="tkfd:5", user_id=ADMIN_ID)
+    _from_dm(upd, InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⬅️ Back", callback_data=f"{TK_BACK_DM}:5")]]))
+    await _apply_fix(upd, ctx, strategy="redownload")
+    assert _flat(upd.callback_query.edits[-1]["reply_markup"]) == DM_BUTTONS
+
+
+async def test_new_ticket_dm_submenus_back_shows_dm_buttons_with_history():
+    ctx = _ctx()
+    for handler, data in ((tk_fix, "tkf:5"), (tk_close_menu, "tkc:5")):
+        upd = _from_dm(make_update(callback_data=data, user_id=ADMIN_ID))
+        await handler(upd, ctx)
+        assert ("⬅️ Back", f"{TK_BACK_DM}:5") in _flat(
+            upd.callback_query.edits[0]["reply_markup"])
+    upd = make_update(callback_data=f"{TK_BACK_DM}:5", user_id=ADMIN_ID)
+    await tk_back(upd, ctx)
+    assert _flat(upd.callback_query.edits[-1]["reply_markup"]) == DM_BUTTONS
+
+
+async def test_new_ticket_dm_fix_that_cannot_start_backs_to_dm_buttons():
+    ctx = _ctx()
+    ctx.bot_data["seerr"].get_issue.side_effect = RuntimeError("boom")
+    upd = _from_dm(make_update(callback_data="tkfd:5", user_id=ADMIN_ID),
+                   InlineKeyboardMarkup(
+                       [[InlineKeyboardButton("⬅️ Back", callback_data=f"{TK_BACK_DM}:5")]]))
+    await _apply_fix(upd, ctx, strategy="redownload")
+    assert _flat(upd.callback_query.edits[-1]["reply_markup"]) == [
+        ("⬅️ Ticket", f"{TK_BACK_DM}:5")]
+
+
+async def test_ticket_view_card_still_has_no_history_after_a_fix():
+    ctx = _ctx()
+    upd = make_update(callback_data="tkfd:5", user_id=ADMIN_ID)
+    upd.callback_query.message.reply_markup = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⬅️ Back", callback_data=f"{TK_BACK}:5")]])
+    await _apply_fix(upd, ctx, strategy="redownload")
+    assert _flat(upd.callback_query.edits[-1]["reply_markup"]) == TICKET_BUTTONS

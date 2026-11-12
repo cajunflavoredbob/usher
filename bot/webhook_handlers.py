@@ -12,7 +12,7 @@ from telegram.ext import Application
 from seerr import SeerrClient
 from store import UserStore
 
-from bot.callback_prefixes import TK_CLOSE, TK_FIX, TK_OPEN, TK_REPLY
+from bot.callback_prefixes import TK_OPEN, TK_REPLY
 from bot.request_admin import admin_request_kb, seerr_link
 from bot.shared import (
     ISSUE_TYPE_LABELS,
@@ -20,6 +20,7 @@ from bot.shared import (
     followup_scope_label,
     format_media_title_line,
     format_scope_label,
+    new_ticket_dm_kb,
     record_btn,
 )
 
@@ -284,14 +285,7 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
         f"<i>\"{safe_desc}\"</i>",
     ]
 
-    kb = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("💬 Reply", callback_data=f"{TK_REPLY}:{ticket_id}"),
-            InlineKeyboardButton("🔧 Fix", callback_data=f"{TK_FIX}:{ticket_id}"),
-            InlineKeyboardButton("✅ Close", callback_data=f"{TK_CLOSE}:{ticket_id}"),
-        ],
-        [InlineKeyboardButton("📜 History", callback_data=f"{TK_OPEN}:{ticket_id}")],
-    ])
+    kb = new_ticket_dm_kb(ticket_id)
 
     try:
         sent = await app.bot.send_message(

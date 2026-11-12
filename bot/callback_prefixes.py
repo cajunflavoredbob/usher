@@ -17,6 +17,7 @@ TK_CLOSE: Final = "tkc"               # [✅ Close] sub-menu opener (admin)
 TK_BACK: Final = "tkback"             # [⬅️ Back] in sub-menus
 TK_BACK_LIST: Final = "tkbl"          # [⬅️ Back] in sub-menus of a detail card
                                       # opened from the ticket list
+TK_BACK_DM: Final = "tkbd"            # [⬅️ Back] in sub-menus of a new-Ticket DM
 
 # Sub-menu actions
 TK_FIX_REDOWNLOAD: Final = "tkfd"     # delete + search

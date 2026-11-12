@@ -372,7 +372,7 @@ def test_tickets_list_button_registered():
         r'CallbackQueryHandler\(tickets_hub_list,\s*pattern=fr"\^\{TICKETS_LIST\}\$"\)', src)
     assert found and found.start() < last
     assert re.search(
-        r'CallbackQueryHandler\(tk_back,\s*pattern=fr"\^\(\{TK_BACK\}\|\{TK_BACK_LIST\}\):', src)
+        r'CallbackQueryHandler\(tk_back,\s*pattern=fr"\^\(\{TK_BACK\}\|\{TK_BACK_LIST\}\|\{TK_BACK_DM\}\):', src)
 
 
 # --- the detail card ---------------------------------------------------------------

@@ -20,7 +20,7 @@ from store import UserStore
 
 from procutil import schedule_clean_exit  # noqa: F401  (re-export for bot.*)
 
-from bot.callback_prefixes import RELINK, RQ_INFO_DISMISS, TK_CLOSE, TK_FIX, TK_REPLY
+from bot.callback_prefixes import RELINK, RQ_INFO_DISMISS, TK_CLOSE, TK_FIX, TK_OPEN, TK_REPLY
 from const import RELINK_RESUME_TTL_S
 
 logger = logging.getLogger("usher")
@@ -748,6 +748,16 @@ def ticket_detail_kb(ticket_id: int, is_admin: bool) -> InlineKeyboardMarkup:
         row.append(InlineKeyboardButton("🔧 Fix", callback_data=f"{TK_FIX}:{ticket_id}"))
         row.append(InlineKeyboardButton("✅ Close", callback_data=f"{TK_CLOSE}:{ticket_id}"))
     return InlineKeyboardMarkup([row])
+
+
+def new_ticket_dm_kb(ticket_id: int) -> InlineKeyboardMarkup:
+    """The new-Ticket DM's buttons: the Admin's Ticket row, then "📜 History".
+    A Fix on that card puts this back (`tickets._restore_ticket_card`) once
+    the Ticket loads."""
+    return InlineKeyboardMarkup([
+        list(ticket_detail_kb(ticket_id, True).inline_keyboard[0]),
+        [InlineKeyboardButton("📜 History", callback_data=f"{TK_OPEN}:{ticket_id}")],
+    ])
 
 
 # The underscore-prefix alias block (`_foo = foo`) was removed in 0.12.0
