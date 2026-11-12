@@ -212,6 +212,12 @@ async def cmd_link_consent(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
 
 
 LINK_RETRY_KEY = "link_retry_ok"
+RESTARTING_TEXT = "Usher is restarting. Run /link again in a minute."
+
+
+def _restarting(ctx: ContextTypes.DEFAULT_TYPE) -> bool:
+    """True when _poll_with_cancel gave up because a restart is scheduled."""
+    return restart_pending() or bool(ctx.application.bot_data.get("shutting_down"))
 
 
 async def _poll_with_cancel(plex: PlexClient, pin_id: int, max_iters: int,
@@ -233,7 +239,7 @@ async def _poll_with_cancel(plex: PlexClient, pin_id: int, max_iters: int,
             return None
         # A scheduled restart must not wait out the poll (PTB's stop() waits
         # for in-flight update tasks).
-        if restart_pending() or ctx.application.bot_data.get("shutting_down"):
+        if _restarting(ctx):
             return None
         sleep_s = min(
             PLEX_POLL_MAX_BACKOFF_S,
@@ -406,6 +412,10 @@ async def _start_plex_auth(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             return ConversationHandler.END
         # Ours and over: leave no stale "live flow" mark for Didn't work?.
         ctx.user_data.pop("link_active_loop", None)
+        if _restarting(ctx):
+            await end_flow(update, ctx, RESTARTING_TEXT, hub, retry,
+                           typed_text=RESTARTING_TEXT)
+            return ConversationHandler.END
         await end_flow(update, ctx, "⏱️ Plex auth timed out.", hub, retry,
                        typed_text="⏱️ Plex auth timed out. /link to try again.")
         return ConversationHandler.END
@@ -479,6 +489,10 @@ async def cmd_link_didnt_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         # Clear the loop key explicitly so the parent /link conversation
         # doesn't think it's still polling.
         ctx.user_data.pop("link_active_loop", None)
+        if _restarting(ctx):
+            await end_flow(update, ctx, RESTARTING_TEXT, hub, None,
+                           typed_text=RESTARTING_TEXT)
+            return
         # The Try again below is this user's own: let it past the live-flow check.
         ctx.user_data[LINK_RETRY_KEY] = True
         await end_flow(update, ctx, "⏱️ Plex auth timed out.", hub, LINK_HELP,

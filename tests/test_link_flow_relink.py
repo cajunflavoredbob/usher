@@ -143,3 +143,31 @@ async def test_stray_tap_without_any_marker_is_refused(monkeypatch):
     await cmd_link_didnt_work(make_update(callback_data=LINK_HELP, user_id=42), ctx)
     ctx.bot_data["plex"].request_pin.assert_not_called()
 
+
+
+async def test_restart_during_strong_poll_says_restarting_not_timed_out(monkeypatch):
+    from unittest.mock import AsyncMock
+    from bot import link_flow
+    end = AsyncMock()
+    monkeypatch.setattr(link_flow, "end_flow", end)
+    monkeypatch.setattr(link_flow, "restart_pending", lambda: True)
+    await _run_strong_pin(monkeypatch, None)
+    texts = [a for c in end.await_args_list for a in c.args + tuple(c.kwargs.values())
+             if isinstance(a, str)]
+    assert any("Usher is restarting. Run /link again in a minute." in t for t in texts)
+    assert not any("timed out" in t for t in texts)
+
+
+async def test_restart_during_weak_poll_says_restarting_not_timed_out(monkeypatch):
+    from unittest.mock import AsyncMock
+    from bot import link_flow
+    end = AsyncMock()
+    monkeypatch.setattr(link_flow, "end_flow", end)
+    monkeypatch.setattr(link_flow, "restart_pending", lambda: True)
+    ctx = make_ctx(admin_id=999)
+    await _weak_timeout(monkeypatch, ctx)
+    texts = [a for c in end.await_args_list for a in c.args + tuple(c.kwargs.values())
+             if isinstance(a, str)]
+    assert any("Usher is restarting. Run /link again in a minute." in t for t in texts)
+    assert not any("timed out" in t for t in texts)
+    assert "link_retry_ok" not in ctx.user_data
