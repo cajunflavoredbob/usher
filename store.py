@@ -1715,6 +1715,18 @@ class UserStore:
                     "ORDER BY telegram_id").fetchall()]
         return await self._run(_do)
 
+    async def list_linked_users(self) -> list[tuple[int, int, str]]:
+        """(telegram_id, seerr_id, seerr_display) of every Linked user, by
+        name. No Plex token is read or decrypted."""
+        def _do() -> list[tuple[int, int, str]]:
+            with self._conn() as c:
+                return [(r[0], r[1], r[2] or "") for r in c.execute(
+                    "SELECT telegram_id, seerr_id, seerr_display "
+                    "FROM user_mapping "
+                    "ORDER BY seerr_display COLLATE NOCASE, telegram_id"
+                ).fetchall()]
+        return await self._run(_do)
+
     async def create_broadcast(self, text: str, chat_id: int,
                                message_id: Optional[int],
                                recipient_ids: list[int]) -> int:

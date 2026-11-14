@@ -116,6 +116,10 @@ REQUESTS_TRENDING: Final = "rqht"     # Requests Hub "Trending" (global handler)
 REQUESTS_SUBSCRIPTIONS: Final = "rqhs"  # Requests Hub "Subscriptions" (global
                                       # handler)
 REQUESTS_FOLLOWS: Final = "rqhf"      # Requests Hub "Follows" (global handler)
+REQUESTS_BEHALF: Final = "rqhb"       # Requests Hub "Request for someone" (Admin
+                                      # only; request conversation entry point)
+RQ_BEHALF_PAGE: Final = "rqbp"        # rqbp:<page> its Linked-user list paging
+RQ_BEHALF_PICK: Final = "rqbu"        # rqbu:<seerr_user_id> a Linked user picked
 REQUESTS_WEEK: Final = "rqhw"         # Requests Hub "Coming this week"; its
                                       # filter and paging use rqhw:<0|1>:<page>
 TICKETS_REPORT: Final = "tkhr"        # Tickets Hub "Report a problem" (new-Ticket

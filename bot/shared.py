@@ -61,6 +61,7 @@ RQ_TITLE = 300
 RQ_PICK_MEDIA = 301
 RQ_PICK_SEASONS = 302
 RQ_CONFIRM = 303
+RQ_PICK_USER = 304
 # Ticket management (reply to existing ticket)
 AWAIT_TICKET_REPLY = 400
 # Admin provisioning (/invite)

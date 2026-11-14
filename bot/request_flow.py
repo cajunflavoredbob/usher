@@ -69,6 +69,8 @@ from seerr import (
 from store import UserStore
 
 from bot.callback_prefixes import (
+    RQ_BEHALF_PAGE,
+    RQ_BEHALF_PICK,
     RQ_CANCEL,
     RQ_FROM_TICKET,
     RQ_GO,
@@ -82,6 +84,7 @@ from bot.callback_prefixes import (
     RQ_SEASON_ALL,
     RQ_SEASON_DONE,
     RQ_SEASON_NA,
+    REQUESTS_BEHALF,
     REQUESTS_NEW,
 )
 from bot.hub import (
@@ -103,6 +106,7 @@ from bot.shared import (
     day_count,
     RQ_CONFIRM,
     RQ_PICK_MEDIA,
+    RQ_PICK_USER,
     RQ_PICK_SEASONS,
     RQ_TITLE,
     RELINK_RESUME_EXECUTORS,
@@ -133,7 +137,7 @@ logger = logging.getLogger("usher")
 # fresh flow's counter restarting at 1.
 _RQ_KEYS = ("rq_media", "rq_search_results",
             "rq_results", "rq_screen", "rq_perms", "rq_is4k",
-            "rq_seasons", "rq_selected", "rq_submitting")
+            "rq_seasons", "rq_selected", "rq_submitting", "rq_for")
 
 # Availability annotations for the search list. UNKNOWN/DELETED get none:
 # they're plainly requestable.
@@ -189,6 +193,9 @@ def _request_conversation() -> ConversationHandler:
             CommandHandler("request", request_start),
             # Requests Hub "New request" button.
             CallbackQueryHandler(request_hub_new, pattern=fr"^{REQUESTS_NEW}$"),
+            # Requests Hub "Request for someone" (Admin only).
+            CallbackQueryHandler(request_hub_behalf,
+                                 pattern=fr"^{REQUESTS_BEHALF}$"),
             # Jump-in from the /issue not-in-library dead-end.
             CallbackQueryHandler(request_from_ticket, pattern=fr"^{RQ_FROM_TICKET}:"),
         ],
@@ -196,6 +203,12 @@ def _request_conversation() -> ConversationHandler:
             RQ_TITLE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, request_title),
                 MessageHandler(~filters.COMMAND, _request_expect_text_title),
+            ],
+            RQ_PICK_USER: [
+                CallbackQueryHandler(request_behalf_page,
+                                     pattern=fr"^{RQ_BEHALF_PAGE}:"),
+                CallbackQueryHandler(request_behalf_pick,
+                                     pattern=fr"^{RQ_BEHALF_PICK}:"),
             ],
             RQ_PICK_MEDIA: [
                 CallbackQueryHandler(request_pick_media, pattern=fr"^{RQ_MEDIA}:"),
@@ -268,6 +281,7 @@ async def _gate_entry(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *,
 async def request_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     # A typed /request is never a Hub flow, even if a Hub left its mark behind.
     set_hub_origin(ctx, None)
+    ctx.user_data.pop("rq_for", None)
     # Bare `/request` opens the Requests Hub; it needs no gate (each button
     # runs the same checks as its typed command).
     query = " ".join(ctx.args or ()).strip()
@@ -294,11 +308,122 @@ async def request_hub_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     await q.answer()
     force_end_flow_conversations(ctx, update)
     set_hub_origin(ctx, REQUESTS_HUB)
+    ctx.user_data.pop("rq_for", None)
     await send_typing(update, ctx)
     if not await _gate_entry(update, ctx, hub=REQUESTS_HUB):
         return ConversationHandler.END
     await edit_or_send(q, "What movie or show do you want? (Reply with the title.)")
     return RQ_TITLE
+
+
+# Request for someone (Admin): pick a Linked user, then the normal flow
+
+BEHALF_PER_PAGE = 8
+
+
+def _behalf_screen(users: list, page: int, version: int):
+    """(text, markup) for one page of the Linked-user list."""
+    pages = max(1, -(-len(users) // BEHALF_PER_PAGE))
+    page = min(max(page, 0), pages - 1)
+    chunk = users[page * BEHALF_PER_PAGE:(page + 1) * BEHALF_PER_PAGE]
+    rows = [[InlineKeyboardButton(
+        name or f"User {seerr_id}",
+        callback_data=f"{RQ_BEHALF_PICK}:{seerr_id}")]
+        for _tg, seerr_id, name in chunk]
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(
+            "◀️ Prev", callback_data=f"{RQ_BEHALF_PAGE}:{page - 1}"))
+    if page < pages - 1:
+        nav.append(InlineKeyboardButton(
+            "Next ▶️", callback_data=f"{RQ_BEHALF_PAGE}:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(
+        "🛑 Cancel", callback_data=f"{RQ_CANCEL}:{version}")])
+    text = "👥 <b>Request for someone</b>\nWho is it for?"
+    if pages > 1:
+        text += f" (page {page + 1} of {pages})"
+    return text, InlineKeyboardMarkup(rows)
+
+
+async def request_hub_behalf(update: Update,
+                             ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Requests Hub "Request for someone": the Admin's list of Linked users."""
+    q = update.callback_query
+    if update.effective_user.id != ctx.bot_data.get("admin_id"):
+        # The button is only drawn for the Admin; a forged tap gets nothing.
+        await q.answer("Only the Admin can do that.", show_alert=True)
+        return ConversationHandler.END
+    await q.answer()
+    force_end_flow_conversations(ctx, update)
+    set_hub_origin(ctx, REQUESTS_HUB)
+    ctx.user_data.pop("rq_for", None)
+    await send_typing(update, ctx)
+    if not await _gate_entry(update, ctx, hub=REQUESTS_HUB):
+        return ConversationHandler.END
+    store: UserStore = ctx.bot_data["store"]
+    users = await store.list_linked_users()
+    if not users:
+        await end_flow(update, ctx, "No one has linked their Plex account yet.",
+                       REQUESTS_HUB)
+        return ConversationHandler.END
+    # A fresh version so buttons of an older flow's messages go stale.
+    version = _current_version(ctx) + 1
+    ctx.user_data["rq_search_version"] = version
+    text, markup = _behalf_screen(users, 0, version)
+    sent = await edit_or_send(q, text, reply_markup=markup, parse_mode="HTML")
+    record_btn(ctx.application, update.effective_user.id, sent)
+    return RQ_PICK_USER
+
+
+async def request_behalf_page(update: Update,
+                              ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query
+    await q.answer()
+    try:
+        page = int(q.data.split(":")[1])
+    except (ValueError, IndexError):
+        return RQ_PICK_USER
+    store: UserStore = ctx.bot_data["store"]
+    users = await store.list_linked_users()
+    text, markup = _behalf_screen(users, page, _current_version(ctx))
+    sent = await edit_or_send(q, text, reply_markup=markup, parse_mode="HTML")
+    record_btn(ctx.application, update.effective_user.id, sent)
+    return RQ_PICK_USER
+
+
+async def request_behalf_pick(update: Update,
+                              ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query
+    await q.answer()
+    hub = hub_origin(ctx)
+    try:
+        seerr_id = int(q.data.split(":")[1])
+    except (ValueError, IndexError):
+        return RQ_PICK_USER
+    store: UserStore = ctx.bot_data["store"]
+    picked = next((u for u in await store.list_linked_users()
+                   if u[1] == seerr_id), None)
+    if picked is None:
+        await end_flow(update, ctx, "That user isn't linked any more.", hub,
+                       REQUESTS_BEHALF)
+        _clear_rq_state(ctx)
+        return ConversationHandler.END
+    name = picked[2] or f"User {seerr_id}"
+    ctx.user_data["rq_for"] = {"seerr_id": seerr_id, "name": name,
+                               "telegram_id": picked[0]}
+    sent = await edit_or_send(
+        q, f"Requesting for <b>{html.escape(name)}</b>. What movie or show "
+           "do you want? (Reply with the title.)", parse_mode="HTML")
+    record_btn(ctx.application, update.effective_user.id, sent)
+    return RQ_TITLE
+
+
+def _behalf_target(ctx: ContextTypes.DEFAULT_TYPE) -> Optional[dict]:
+    """The Linked user the Admin is requesting for, or None. Only the Admin
+    can have one: nobody else can reach the picker."""
+    return ctx.user_data.get("rq_for")
 
 
 def _coverage_verdict(ctx: ContextTypes.DEFAULT_TYPE, media_type: str,
@@ -349,6 +474,7 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     """Entry via the /issue dead-end button. The tapped media is already
     known, so this drops straight into the season picker / confirm."""
     q = update.callback_query
+    ctx.user_data.pop("rq_for", None)
     # Ack first: the gate below can run a slow Seerr login, and a late
     # answer to an expired tap raises out of the handler.
     await q.answer()
@@ -875,25 +1001,32 @@ def _summarize_seasons(numbers: list[int]) -> str:
 
 
 async def _quota_line(ctx: ContextTypes.DEFAULT_TYPE, tg_id: int,
-                      media_type: str) -> str:
+                      media_type: str, *, for_picked: bool = True) -> str:
     """One line of quota context for the confirm screen, or "" when the
     user's quota is unlimited, unknown, or the lookup fails (the submit
     itself is the authority; this is a courtesy preview). An exhausted
     quota says so plainly instead of offering doomed arithmetic."""
     try:
         is_admin, token, _ = await token_for(ctx, tg_id)
-        store: UserStore = ctx.bot_data["store"]
-        link = await store.get(tg_id)
-        if link is None or not link.seerr_id:
-            return ""
+        target = (_behalf_target(ctx) if is_admin and for_picked
+                  else None)
+        if target is not None:
+            # The Admin's own key reads the picked user's quota.
+            seerr_id, token, whose = target["seerr_id"], None, "Their"
+        else:
+            store: UserStore = ctx.bot_data["store"]
+            link = await store.get(tg_id)
+            if link is None or not link.seerr_id:
+                return ""
+            seerr_id, whose = link.seerr_id, "Your"
         seerr: SeerrClient = ctx.bot_data["seerr"]
-        quota = await seerr.get_quota(link.seerr_id, as_plex_token=token)
+        quota = await seerr.get_quota(seerr_id, as_plex_token=token)
         bucket = quota.movie if media_type == "movie" else quota.tv
         if not bucket.limit or bucket.remaining is None:
             return ""
         unit = "requests" if media_type == "movie" else "seasons"
         if bucket.remaining <= 0:
-            return (f"\n🙅 Your quota ({bucket.limit} {unit} per "
+            return (f"\n🙅 {whose} quota ({bucket.limit} {unit} per "
                     f"{day_count(bucket.days)}) is used up, Seerr will reject "
                     "this until older requests age out of the window.")
         return (f"\nQuota: {bucket.remaining} of {bucket.limit} {unit} left "
@@ -917,6 +1050,10 @@ async def _show_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     version = _current_version(ctx)
 
     text = f"Request <b>{html.escape(label)}</b>?"
+    target = _behalf_target(ctx)
+    if target is not None:
+        text = (f"Request <b>{html.escape(label)}</b> for "
+                f"<b>{html.escape(target['name'])}</b>?")
     buttons: list[InlineKeyboardButton] = []
     if force_4k:
         # Word the standard-track coverage honestly: available vs merely
@@ -1018,6 +1155,8 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     await send_typing(update, ctx)
 
     seerr: SeerrClient = ctx.bot_data["seerr"]
+    target = _behalf_target(ctx) if is_admin else None
+    who = target["name"] if target else None
     try:
         created = await seerr.create_request(
             media_type=media["type"],
@@ -1025,6 +1164,7 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             seasons=seasons,
             is4k=is4k,
             as_plex_token=token,
+            user_id=target["seerr_id"] if target else None,
         )
     except PlexTokenInvalidError:
         # The draft stays in user_data for the post-relink resume.
@@ -1054,13 +1194,13 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     except QuotaExceededError as exc:
         await end_flow(
             update, ctx,
-            _quota_text(exc), hub, parse_mode="HTML",
+            _quota_text(exc, who), hub, parse_mode="HTML",
         )
         _clear_rq_state(ctx)
         return ConversationHandler.END
     except RequestPermissionError as exc:
         await end_flow(
-            update, ctx, _permission_text(exc), hub, parse_mode="HTML",
+            update, ctx, _permission_text(exc, who), hub, parse_mode="HTML",
         )
         _clear_rq_state(ctx)
         return ConversationHandler.END
@@ -1091,15 +1231,17 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     settings_store = ctx.bot_data.get("settings_store")
     dms_on = (settings_store is None
               or settings_store.settings.tg_notify_requester)
+    for_whom = f" for {html.escape(who)}" if who else ""
+    dm_to = html.escape(who) if who else "you"
     if approved:
-        text = (f"✅ Approved: <b>{html.escape(label)}</b> is being grabbed."
-                f"{html.escape(dropped_note)}"
-                + ("\nI'll DM you when it's available." if dms_on else ""))
+        text = (f"✅ Approved{for_whom}: <b>{html.escape(label)}</b> is "
+                f"being grabbed.{html.escape(dropped_note)}"
+                + (f"\nI'll DM {dm_to} when it's available." if dms_on else ""))
     else:
-        text = (f"📨 Requested: <b>{html.escape(label)}</b>."
+        text = (f"📨 Requested{for_whom}: <b>{html.escape(label)}</b>."
                 f"{html.escape(dropped_note)}\n"
                 "Waiting for approval."
-                + (" I'll DM you when it moves." if dms_on else ""))
+                + (f" I'll DM {dm_to} when it moves." if dms_on else ""))
     # The result stays on the flow message, with the way back to the Hub.
     sent = await edit_or_send(q, text, parse_mode="HTML",
                               reply_markup=end_markup(REQUESTS_HUB))
@@ -1142,12 +1284,20 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     return ConversationHandler.END
 
 
-def _quota_text(exc: Exception) -> str:
+def _quota_text(exc: Exception, who: Optional[str] = None) -> str:
+    """`who` names the user an Admin requested for; None means the
+    requester's own quota."""
+    if who:
+        return (f"🙅 {html.escape(who)}: {html.escape(str(exc))} Their quota "
+                "frees up as older requests age out of the window.")
     return (f"🙅 {html.escape(str(exc))} Your quota frees up as older "
             "requests age out of the window.")
 
 
-def _permission_text(exc: Exception) -> str:
+def _permission_text(exc: Exception, who: Optional[str] = None) -> str:
+    if who:
+        return (f"🚫 Seerr said no for {html.escape(who)}: "
+                f"{html.escape(str(exc))}")
     return f"🚫 Seerr said no: {html.escape(str(exc))}"
 
 
@@ -1196,7 +1346,8 @@ async def remaining_seasons_ask(update: Update,
     except Exception:
         title, year = f"TMDb {tmdb_id}", ""
     label = _media_label({"title": title, "year": year})
-    quota_note = await _quota_line(ctx, user_id, "tv")
+    # Outside the conversation: a stale pick must not change whose quota shows.
+    quota_note = await _quota_line(ctx, user_id, "tv", for_picked=False)
     text = (f"Request the remaining seasons of <b>{html.escape(label)}</b>?\n"
             f"Seasons: {_summarize_seasons(left)}" + html.escape(quota_note))
     sent = await q.message.reply_text(

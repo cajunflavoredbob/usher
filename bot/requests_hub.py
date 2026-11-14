@@ -9,6 +9,7 @@ from __future__ import annotations
 from telegram import InlineKeyboardButton
 
 from bot.callback_prefixes import (
+    REQUESTS_BEHALF,
     REQUESTS_FOLLOWS,
     REQUESTS_MINE,
     REQUESTS_NEW,
@@ -22,22 +23,26 @@ REQUESTS_HUB = "requests"
 
 
 async def render_requests_hub(update, ctx) -> HubView:
-    return HubView(
-        text=("🎬 <b>Requests</b>\nAsk for a movie or show, check on your "
-              "requests, browse what's trending, see your "
-              "Subscriptions and the shows you follow, or what's coming "
-              "this week."),
-        buttons=[
-            InlineKeyboardButton("➕ New request", callback_data=REQUESTS_NEW),
-            InlineKeyboardButton("📥 My requests", callback_data=REQUESTS_MINE),
-            InlineKeyboardButton("🔥 Trending", callback_data=REQUESTS_TRENDING),
-            InlineKeyboardButton("🔔 Subscriptions",
-                                 callback_data=REQUESTS_SUBSCRIPTIONS),
-            InlineKeyboardButton("📺 Follows", callback_data=REQUESTS_FOLLOWS),
-            InlineKeyboardButton("🗓 Coming this week",
-                                 callback_data=REQUESTS_WEEK),
-        ],
-    )
+    buttons = [
+        InlineKeyboardButton("➕ New request", callback_data=REQUESTS_NEW),
+        InlineKeyboardButton("📥 My requests", callback_data=REQUESTS_MINE),
+        InlineKeyboardButton("🔥 Trending", callback_data=REQUESTS_TRENDING),
+        InlineKeyboardButton("🔔 Subscriptions",
+                             callback_data=REQUESTS_SUBSCRIPTIONS),
+        InlineKeyboardButton("📺 Follows", callback_data=REQUESTS_FOLLOWS),
+        InlineKeyboardButton("🗓 Coming this week",
+                             callback_data=REQUESTS_WEEK),
+    ]
+    text = ("🎬 <b>Requests</b>\nAsk for a movie or show, check on your "
+            "requests, browse what's trending, see your "
+            "Subscriptions and the shows you follow, or what's coming "
+            "this week.")
+    user = getattr(update, "effective_user", None)
+    if user is not None and user.id == ctx.bot_data.get("admin_id"):
+        buttons.append(InlineKeyboardButton("👥 Request for someone",
+                                            callback_data=REQUESTS_BEHALF))
+        text += " As the Admin you can also request for a Linked user."
+    return HubView(text=text, buttons=buttons)
 
 
 register_hub(REQUESTS_HUB, "Requests", render_requests_hub)

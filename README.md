@@ -33,7 +33,7 @@ The bot's command menu lists the Hubs plus `/help`. A Hub is a command that open
 
 | Menu entry | Shown to | What it holds |
 |---|---|---|
-| `/request` | everyone | **Requests Hub**: New request, My requests, Trending, Subscriptions, Follows, Coming this week. `/request <title>` skips the Hub and starts a Request for that title. |
+| `/request` | everyone | **Requests Hub**: New request, My requests, Trending, Subscriptions, Follows, Coming this week, and for the Admin Request for someone (pick a Linked user, then request as them: Seerr applies their permissions and quota, and they get the Requester DMs). `/request <title>` skips the Hub and starts a Request for that title. |
 | `/tickets` | everyone | **Tickets Hub**: Report a problem, and My tickets (Open tickets for the Admin). |
 | `/account` | everyone | **Account Hub**: Link, or Unlink once linked, and 🔔 Notices (daily digest, automatic follows). |
 | `/help` | everyone | The command list. For the Admin it also shows connection status. |

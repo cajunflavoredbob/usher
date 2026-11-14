@@ -827,6 +827,7 @@ class SeerrClient:
         seasons: Union[list, str, None] = None,
         is4k: bool = False,
         as_plex_token: Optional[str] = None,
+        user_id: Optional[int] = None,
     ) -> CreatedRequest:
         """Create a media request. Unlike create_issue, `mediaId` here IS the
         TMDb id (Seerr creates its media record on demand).
@@ -834,6 +835,9 @@ class SeerrClient:
         With `as_plex_token`, the request is submitted as that user, so
         Seerr's own permissions, quotas, and auto-approve rules apply to
         them. Without a token the API-key client attributes it to the admin.
+
+        `user_id` (a Seerr user id, admin-key calls only): Seerr saves the
+        request as that user and checks THEIR permissions and quota.
 
         `seasons` (TV only): a list of season numbers, or the literal "all"
         (Seerr expands it to every non-special season). Seerr silently drops
@@ -850,6 +854,8 @@ class SeerrClient:
             payload["seasons"] = seasons
         if is4k:
             payload["is4k"] = True
+        if user_id is not None:
+            payload["userId"] = user_id
         client = await self._client_for(as_plex_token)
         try:
             r = await execute(client, "POST", "/request", service=_SERVICE,
