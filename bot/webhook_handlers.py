@@ -603,8 +603,9 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
             await apply_webhook_event(
                 app, nt, type_for_card, tmdb_for_card,
                 requester_id=requester_chat_id,
-                requester_known=bool(link is not None or requester_seerr_id
-                                     or requester_username))
+                # Known only when Seerr itself named the requester: a missed
+                # username fallback says nothing about who asked.
+                requester_known=link is not None or requester_seerr_id is not None)
         except Exception as exc:
             logger.exception("progress card update failed for %s", nt, exc_info=exc)
 

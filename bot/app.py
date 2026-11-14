@@ -13,7 +13,7 @@ from pathlib import Path
 from aiohttp import web
 import telegram
 from telegram import InlineKeyboardMarkup, Update
-from telegram.error import InvalidToken
+from telegram.error import InvalidToken, NetworkError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -254,9 +254,11 @@ def _build_clients_from_settings(app: Application) -> None:
             return None
         try:
             return factory()
-        except Exception:
-            logger.error("%s URL in settings is not usable; %s stays off "
-                         "until it is fixed in the Admin page", name, name)
+        except Exception as exc:
+            # The exception type only: the message could quote the key.
+            logger.error("%s settings are not usable (%s: check the URL and "
+                         "API key); %s stays off until they are fixed in the "
+                         "Admin page", name, type(exc).__name__, name)
             return None
 
     seerr = _client("Seerr", lambda: SeerrClient(
@@ -1074,7 +1076,14 @@ async def _run_setup_only(settings_store: SettingsStore, session_secret: bytes,
 def _run_polling(app: Application) -> None:
     try:
         app.run_polling(drop_pending_updates=True)
-    except InvalidToken:
+    except (InvalidToken, NetworkError) as exc:
+        # A token that can't even form a request URL surfaces as a
+        # NetworkError, not InvalidToken; it is just as permanent, so it
+        # gets the same panel-only fallback. Other network errors (Telegram
+        # unreachable at boot) re-raise and the restart policy retries.
+        if isinstance(exc, NetworkError) and not isinstance(exc, InvalidToken) \
+                and "InvalidURL" not in str(exc):
+            raise
         logger.error("Telegram rejected the bot token. Check the token in the Admin "
                      "page (Settings).")
         bot_data = app.bot_data

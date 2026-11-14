@@ -409,6 +409,21 @@ def public_base_url(url: str) -> str:
     return base
 
 
+def validate_bot_token(token: str) -> Optional[str]:
+    """None if the token can be used in a Telegram API URL, else an error.
+    Telegram decides whether the token is right; this only refuses what
+    could never form a URL (a space or tab inside, non-ASCII, absurd
+    length), which would otherwise stop the bot before the Admin page
+    starts."""
+    token = token or ""
+    if len(token) > 200:
+        return "That bot token is far too long."
+    if not token.isascii() or any(c.isspace() or not c.isprintable()
+                                  for c in token):
+        return "That bot token contains spaces or unusual characters."
+    return None
+
+
 def validate_public_url(url: str) -> Optional[str]:
     """Return None if the URL is acceptable, else a user-facing error string.
     Empty is acceptable (means: not configured)."""

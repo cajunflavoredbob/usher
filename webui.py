@@ -71,6 +71,7 @@ from settings import (
     hash_password,
     public_base_url,
     iterations_of,
+    validate_bot_token,
     validate_public_url,
     verify_password,
 )
@@ -135,8 +136,11 @@ async def _read_unauth_form(request: web.Request):
         return None, rejection
     try:
         return await request.post(), None
-    except (UnicodeDecodeError, LookupError, ValueError):
-        # Undecodable bytes, an unknown charset, a nameless multipart part.
+    except web.HTTPException:
+        raise
+    except Exception:
+        # Undecodable bytes, an unknown charset, a malformed multipart part:
+        # an unauthenticated client's bad body is a 400, never a 500.
         return None, web.Response(text="Form could not be read.", status=400)
 
 
@@ -768,7 +772,7 @@ def _settings_page(
   <div class="note">A daily DM to each user who opted in (Account, Notices) listing what was added to the server the day before. A day with nothing new sends nothing.</div>
   <label class="inline-check"><input type="checkbox" name="digest_enabled"{digest_on_chk}> Send the daily Digest</label>
   <label>Digest hour <span class="note">0 to 23, the server's local time</span></label>
-  <input type="text" name="digest_hour" value="{_esc(s.digest_hour)}" inputmode="numeric" pattern="[0-9]+" required>
+  <input type="text" name="digest_hour" value="{int(s.digest_hour)}" inputmode="numeric" pattern="[0-9]+" required>
 
   <h2>Alarms</h2>
   <div class="note">DMs to the admin when something needs attention, checked every 5 minutes, once for each new problem and once when it clears.</div>
@@ -1139,6 +1143,8 @@ async def setup_post(request: web.Request) -> web.Response:
         errors.append(f"Password must be at least {ADMIN_PASSWORD_MIN_CHARS} chars and match confirm.")
     if not bot_token:
         errors.append("Telegram bot token required.")
+    elif (token_err := validate_bot_token(bot_token)):
+        errors.append(token_err)
     try:
         admin_tg = int(admin_tg_raw)
         if admin_tg <= 0:
@@ -1389,6 +1395,15 @@ async def telegram_post(request: web.Request) -> web.Response:
     _orig_admin = s.admin_telegram_id
     token = _form_secret(form, "telegram_bot_token", s.telegram_bot_token)
     admin_tg_raw = (form.get("admin_telegram_id") or "").strip()
+    token_err = validate_bot_token(token) if token else None
+    if token_err:
+        return web.Response(
+            text=_settings_page(s, error=token_err,
+                                active_tab="telegram",
+                                webhook_url=_webhook_url_from_request(request),
+                                csrf_token=csrf_for_request(request)),
+            content_type="text/html", status=400,
+        )
     if not token:
         return web.Response(
             text=_settings_page(s, error="Bot token is required.",
@@ -2223,7 +2238,11 @@ async def newplex_warning_check(request: web.Request) -> web.Response:
     s = store.settings
     if not (s.seerr_url and s.seerr_api_key):
         return web.json_response({"show": False})
-    client = SeerrClient(s.seerr_url, s.seerr_api_key)
+    try:
+        client = SeerrClient(s.seerr_url, s.seerr_api_key)
+    except Exception:
+        logger.debug("newplex check: Seerr client unusable", exc_info=True)
+        return web.json_response({"show": False})
     try:
         main = await client.get_main_settings()
     except Exception:
