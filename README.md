@@ -256,10 +256,13 @@ segment, and Usher logs a startup warning saying so. Recommended setups:
   login throttling keys on the real client IP and cookies get the `Secure`
   flag. Without `TRUSTED_PROXIES`, those headers are ignored (they're
   client-forgeable) and every client behind the proxy looks like one address
-  to the login limits. Failed logins under other usernames then use up the
-  shared allowance (20 failures per 5 minutes) and block further attempts
-  from that address, though the Admin's own username is not blocked by them.
-  The Admin username's own limit (5 failures per 5 minutes) still applies.
+  to the login limits. Failed logins from anyone then use up the shared
+  allowance (20 failures per 5 minutes) and block further attempts from that
+  address. A browser that has signed in before carries a signed known-device
+  cookie (180 days, cleared by a password change, kept across logout) and
+  keeps working during such a flood, with its own limit of 5 failures per
+  5 minutes. A new browser can be locked out until the flood stops, so set
+  `TRUSTED_PROXIES`.
   Usher logs a warning once when it sees `X-Forwarded-For` from an address
   that is not in `TRUSTED_PROXIES`; set the variable to the proxy's IP or
   CIDR to fix it.

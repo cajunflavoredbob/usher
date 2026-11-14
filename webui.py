@@ -85,6 +85,8 @@ logger = logging.getLogger("usher.webui")
 
 SESSION_COOKIE = "usher_session"
 SESSION_TTL_SECONDS = 7 * 24 * 3600
+DEVICE_COOKIE = "usher_device"
+DEVICE_TTL_SECONDS = 180 * 24 * 3600
 
 ReloadCallback = Callable[[], Awaitable[None]]
 
@@ -93,6 +95,10 @@ _throttle = LoginThrottle()
 # Coarser per-IP throttle checked before any PBKDF2, so a username-rotating
 # flood can't drive unbounded password hashing on the event loop.
 _ip_throttle = LoginThrottle(max_failures=THROTTLE_IP_MAX_FAILURES)
+# Per-device lockout for logins that carry a valid known-device cookie. Those
+# logins skip the two address-keyed throttles above, so strangers sharing the
+# peer address cannot lock a browser that has signed in before out.
+_device_throttle = LoginThrottle()
 
 # Verified against instead of the real hash when the username doesn't match,
 # so wrong-username and wrong-password attempts cost the same PBKDF2 work
@@ -152,6 +158,14 @@ def _set_session_cookie(resp, cookie_value: str, *, secure: bool) -> None:
     )
 
 
+def _set_device_cookie(resp, cookie_value: str, *, secure: bool) -> None:
+    resp.set_cookie(
+        DEVICE_COOKIE, cookie_value,
+        max_age=DEVICE_TTL_SECONDS,
+        httponly=True, samesite="Strict", secure=secure,
+    )
+
+
 # _schedule_clean_exit moved to procutil.schedule_clean_exit (it was a
 # verbatim copy between here and bot/shared.py).
 
@@ -182,6 +196,43 @@ def _make_session_cookie(secret: bytes, username: str, pwd_ver: int = 0) -> str:
     body = _b64(payload)
     sig = _b64(_sign(secret, body.encode()))
     return f"{body}.{sig}"
+
+
+def _make_device_cookie(secret: bytes, username: str, pwd_ver: int,
+                        device_id: Optional[str] = None) -> str:
+    """Signed known-device marker: random device id, admin username and
+    password_version. Marks the browser, not the session."""
+    payload = json.dumps({
+        "d": device_id or uuid.uuid4().hex, "u": username, "v": pwd_ver,
+        "exp": int(time.time()) + DEVICE_TTL_SECONDS}).encode()
+    body = _b64(payload)
+    return f"{body}.{_b64(_sign(secret, body.encode()))}"
+
+
+def _verify_device_cookie(secret: bytes, cookie: Optional[str],
+                          username: str, pwd_ver: int) -> Optional[str]:
+    """Return the device id when the cookie is signed, unexpired and bound to
+    this admin username and password_version; None counts as absent."""
+    if not cookie or not username:
+        return None
+    try:
+        body, sig = cookie.split(".")
+    except ValueError:
+        return None
+    expected = _b64(_sign(secret, body.encode("utf-8", "surrogateescape")))
+    if not safe_compare(sig, expected):
+        return None
+    try:
+        payload = json.loads(_b64d(body))
+        device_id = payload.get("d")
+        if (not isinstance(device_id, str) or not device_id
+                or payload.get("u") != username
+                or payload.get("v") != pwd_ver
+                or float(payload.get("exp", 0)) < time.time()):
+            return None
+    except Exception:
+        return None
+    return device_id
 
 
 def _verify_session_cookie(secret: bytes, cookie: str,
@@ -1246,47 +1297,64 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
         return web.Response(text=body, content_type="text/html", status=429,
                             headers={"Retry-After": str(int(locked))})
 
-    # Per-IP aggregate gate FIRST, before any password hashing: a
-    # username-rotating flood would otherwise dodge the per-(ip,username)
-    # lockout and drive unbounded PBKDF2 work on the event loop. A login for
-    # the configured admin username skips it and goes to the per-(ip,
-    # username) lockout below, so clients that share a peer IP (a reverse
-    # proxy without TRUSTED_PROXIES, CGNAT) cannot lock the Admin out with
-    # failures under other usernames. Every other username still hits this
-    # gate, so rotating usernames still gets 429 before any hashing.
     admin = store.settings.admin
-    username_ok = admin.is_set() and username == admin.username
-    if not username_ok:
+    secret = request.app["session_secret"]
+    # A valid known-device cookie (set on an earlier successful login for
+    # this admin username and password_version) moves the attempt from the
+    # address-keyed limits to a per-device lockout, so a flood from other
+    # clients sharing the peer address (a reverse proxy without
+    # TRUSTED_PROXIES, CGNAT) cannot lock that browser out. An invalid,
+    # expired or mismatched cookie counts as absent.
+    device_id = (_verify_device_cookie(
+        secret, request.cookies.get(DEVICE_COOKIE),
+        admin.username, admin.password_version) if admin.is_set() else None)
+
+    throttle_key = None
+    if device_id is not None:
+        dev_locked = _device_throttle.is_locked(device_id)
+        if dev_locked is not None:
+            audit("login_throttled_device", ip=ip, seconds_left=int(dev_locked))
+            return _locked_response(dev_locked)
+    else:
+        # Per-IP aggregate gate FIRST, before any password hashing: a
+        # username-rotating flood would otherwise dodge the per-(ip,username)
+        # lockout and drive unbounded PBKDF2 work on the event loop. Every
+        # username goes through it, so there is no username oracle.
         ip_locked = _ip_throttle.is_locked(ip)
         if ip_locked is not None:
             audit("login_throttled_ip", ip=ip, seconds_left=int(ip_locked))
             return _locked_response(ip_locked)
 
-    # The tighter per-(ip, username) lockout, which applies to every login
-    # including the admin's (an ip-only key would let anyone sharing the
-    # peer IP lock the admin out of the login page entirely).
-    throttle_key = f"{ip}|{username.lower()}"
-    locked = _throttle.is_locked(throttle_key)
-    if locked is not None:
-        audit("login_throttled", user=username or "-", ip=ip,
-              seconds_left=int(locked))
-        return _locked_response(locked)
+        # Then the tighter per-(ip, username) lockout.
+        throttle_key = f"{ip}|{username.lower()}"
+        locked = _throttle.is_locked(throttle_key)
+        if locked is not None:
+            audit("login_throttled", user=username or "-", ip=ip,
+                  seconds_left=int(locked))
+            return _locked_response(locked)
 
+    username_ok = admin.is_set() and username == admin.username
     # Constant-work verification: run PBKDF2 even on a wrong username so
     # response timing can't enumerate the admin username. Off the event loop
     # (600k iterations) so it can't stall the webhook receiver / bot HTTP.
     stored = admin.password_hash if username_ok else _TIMING_EQUALIZER_HASH
     password_ok = await asyncio.to_thread(verify_password, password, stored)
     if not (username_ok and password_ok):
-        _throttle.record_failure(throttle_key)
-        _ip_throttle.record_failure(ip)
+        if device_id is not None:
+            _device_throttle.record_failure(device_id)
+        else:
+            _throttle.record_failure(throttle_key)
+            _ip_throttle.record_failure(ip)
         audit("login_fail", user=username or "-", ip=ip)
         body = _page("Login", _flash(error="Invalid credentials.") +
                      '<p><a href="/admin/login">Try again</a></p>')
         return web.Response(text=body, content_type="text/html", status=401)
 
-    _throttle.record_success(throttle_key)
-    _ip_throttle.record_success(ip)
+    if device_id is not None:
+        _device_throttle.record_success(device_id)
+    else:
+        _throttle.record_success(throttle_key)
+        _ip_throttle.record_success(ip)
     audit("login_success", user=username, ip=ip)
 
     # PBKDF2 auto-upgrade: if the stored hash uses a stale
@@ -1308,6 +1376,11 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
                                   store.settings.admin.password_version)
     resp = web.HTTPFound("/admin")
     _set_session_cookie(resp, cookie, secure=secure)
+    # Known-device marker: kept across logout (it marks the browser, not the
+    # session) and refreshed on every successful login.
+    _set_device_cookie(resp, _make_device_cookie(
+        request.app["session_secret"], username,
+        store.settings.admin.password_version, device_id), secure=secure)
     # Rotate CSRF cookie after privilege change, bound to the NEW session
     # cookie's signature so it validates on the first authenticated POST.
     new_binding = cookie.rsplit(".", 1)[-1]
