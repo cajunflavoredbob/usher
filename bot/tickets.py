@@ -43,6 +43,7 @@ from sonarr import SonarrClient
 from store import UserStore
 
 from bot.ask_admin import mark_failed_button
+from bot.playback import playback_lines
 from bot.callback_prefixes import (
     TICKETS_LIST,
     TK_BACK,
@@ -355,9 +356,12 @@ async def _build_ticket_detail(
     age = ""
     description = ""
     comments: list = []
+    playback: list = []
     resolved = False
     try:
         ticket = await seerr.get_issue(ticket_id, as_plex_token=None if is_admin else token)
+        if is_admin:  # a Reporter never sees their own playback details
+            playback = await playback_lines(ctx.bot_data, ticket)
         resolved = ticket.status == ISSUE_STATUS_RESOLVED
         type_emoji, type_name = ISSUE_TYPES.get(ticket.issue_type, ("❓", "Other"))
         reporter = ticket.created_by or ""
@@ -395,6 +399,7 @@ async def _build_ticket_detail(
         lines.append(f"<b>Reported by:</b> {html.escape(reporter)}")
     if age:
         lines.append(f"<b>Age:</b> {age}")
+    lines.extend(playback)
     if description:
         lines.append("")
         lines.append("<b>Description:</b>")

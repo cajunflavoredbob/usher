@@ -103,6 +103,19 @@ class TautulliClient:
         data = await self.call("get_metadata", rating_key=rating_key)
         return data if isinstance(data, dict) else {}
 
+    async def get_history(self, **params) -> list:
+        """History rows (newest first by default), unwrapped from the
+        `{"data": [...]}` block Tautulli wraps them in."""
+        data = await self.call("get_history", **params)
+        rows = data.get("data") if isinstance(data, dict) else None
+        return [r for r in (rows or []) if isinstance(r, dict)]
+
+    async def get_stream_data(self, row_id) -> dict:
+        """How one history row was streamed (player, platform,
+        transcode_decision, codecs)."""
+        data = await self.call("get_stream_data", row_id=row_id)
+        return data if isinstance(data, dict) else {}
+
 
 _TMDB_GUID = re.compile(
     r"^(?:tmdb://|com\.plexapp\.agents\.themoviedb://)(\d+)")

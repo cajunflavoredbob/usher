@@ -261,6 +261,11 @@ class IssueListItem:
     last_comment_user_id: Optional[int] = None  # Seerr user id behind the newest
                                # comment (the original report counts when there
                                # are no replies). Populated by get_issue only.
+    rating_key: Optional[str] = None   # Plex ratingKey of the title (media.ratingKey);
+                               # populated by get_issue only.
+    created_by_email: Optional[str] = None   # Reporter's Seerr email; get_issue only.
+    created_by_plex_username: Optional[str] = None   # Reporter's Plex username;
+                               # get_issue only.
 
 
 class SeerrClient:
@@ -663,6 +668,10 @@ class SeerrClient:
             created_by_id=(created_by.get("id")
                            if isinstance(created_by.get("id"), int) else None),
             last_comment_user_id=last_comment_user_id,
+            rating_key=(str(media["ratingKey"])
+                        if media.get("ratingKey") not in (None, "") else None),
+            created_by_email=created_by.get("email") or None,
+            created_by_plex_username=created_by.get("plexUsername") or None,
         )
 
     async def get_media_title(self, media_type: str, tmdb_id: int) -> tuple[str, str]:

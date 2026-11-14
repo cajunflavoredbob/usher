@@ -149,3 +149,17 @@ async def test_failed_post_is_not_retried():
         await c.call("terminate_session", post=True, session_id="abc")
     assert len(calls) == 1
     await c.close()
+
+
+async def test_get_history_returns_the_rows_and_get_stream_data_the_dict():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.params["cmd"] == "get_history":
+            return httpx.Response(200, json=_ok(
+                {"recordsTotal": 1, "data": [{"row_id": 4}, "junk"]}))
+        assert request.url.params["row_id"] == "4"
+        return httpx.Response(200, json=_ok({"transcode_decision": "copy"}))
+
+    c = _client(handler)
+    assert await c.get_history(user_id=1) == [{"row_id": 4}]
+    assert await c.get_stream_data(4) == {"transcode_decision": "copy"}
+    await c.close()

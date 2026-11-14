@@ -13,6 +13,7 @@ from seerr import SeerrClient
 from store import UserStore
 
 from bot.callback_prefixes import TK_OPEN, TK_REPLY
+from bot.playback import playback_lines
 from bot.request_admin import admin_request_kb, seerr_link
 from bot.shared import (
     ISSUE_TYPE_LABELS,
@@ -346,6 +347,17 @@ async def handle_seerr_reported(app: Application, payload: dict) -> None:
         f"<b>Issue type:</b> {type_emoji} {type_label}",
         f"<b>Reported by:</b> {safe_reporter}",
         "<b>Status:</b> Open",
+    ]
+    # Admin-only: how the Reporter last played this title (Tautulli).
+    if app.bot_data.get("tautulli") is not None and seerr is not None:
+        try:
+            issue = await seerr.get_issue(ticket_id)
+        except Exception:
+            logger.debug("Ticket #%d playback lookup: get_issue failed",
+                         ticket_id, exc_info=True)
+        else:
+            lines += await playback_lines(app.bot_data, issue)
+    lines += [
         "",
         "<b>Description:</b>",
         f"<i>\"{safe_desc}\"</i>",
