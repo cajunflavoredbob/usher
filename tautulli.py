@@ -85,6 +85,18 @@ class TautulliClient:
         self._users_cache = (now, users)
         return users
 
+    async def get_user_watch_time_stats(self, user_id, days=(7, 30)) -> list:
+        """A user's plays and watch time per window: a list of rows with
+        `query_days`, `total_plays` and `total_time` (seconds)."""
+        data = await self.call("get_user_watch_time_stats", user_id=user_id,
+                               query_days=",".join(str(d) for d in days))
+        return [r for r in (data or []) if isinstance(r, dict)]
+
+    async def get_home_stats(self, **params) -> list:
+        """Tautulli's home stats: a list of `{stat_id, rows}` blocks."""
+        data = await self.call("get_home_stats", **params)
+        return [b for b in (data or []) if isinstance(b, dict)]
+
 
 def _same(a, b) -> bool:
     a = (a or "").strip().lower()

@@ -23,6 +23,7 @@ from bot.callback_prefixes import (
     DV_CATEGORY,
     DV_INFO,
     DV_PAGE,
+    MYSTATS,
     REQUESTS_TRENDING,
     RQ_FROM_TICKET,
 )
@@ -127,6 +128,9 @@ def _render(ctx: ContextTypes.DEFAULT_TYPE,
     rows.append(cat_row[:3])
     if cat_row[3:]:
         rows.append(cat_row[3:])
+    if ctx.bot_data.get("tautulli"):
+        rows.append([InlineKeyboardButton("📊 My stats",
+                                          callback_data=MYSTATS)])
     if hub:
         rows.append([back_button(hub)])
     return "\n".join(lines), InlineKeyboardMarkup(rows)

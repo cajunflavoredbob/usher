@@ -68,6 +68,7 @@ RQ_ADMIN_RETRY: Final = "rqrt"        # rqrt:<request_id> Retry (failed DM)
 DV_CATEGORY: Final = "dvc"            # dvc:<category> switch browse list
 DV_PAGE: Final = "dvp"                # dvp:<version>:<screen> browse paging
 DV_INFO: Final = "dvi"                # dvi:<version>:<media_type>:<tmdb_id>
+MYSTATS: Final = "mys"                # "📊 My stats" in the Trending list
 
 # Availability subscriptions
 SUBSCRIPTION_ADD: Final = "subadd"    # subadd:<media_type>:<tmdb_id>

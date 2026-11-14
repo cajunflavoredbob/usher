@@ -45,6 +45,7 @@ from bot.callback_prefixes import (
     HUB_OPEN,
     REQUESTS_MINE,
     REQUESTS_SUBSCRIPTIONS,
+    MYSTATS,
     REQUESTS_TRENDING,
     TICKETS_LIST,
     DV_CATEGORY,
@@ -79,6 +80,7 @@ from bot.admin_hub import ADMIN_HUB, cmd_admin, refuse_outside_admin_dm
 from bot.hub import end_markup, hub_open_callback
 from bot.link_flow import (_link_conversation, account_unlink, cmd_account,
                            cmd_link_didnt_work, cmd_unlink)
+from bot.mystats_cmd import cmd_mystats, mystats_button
 from bot.discover_cmd import (cmd_trending, dv_category, dv_info, dv_page,
                               trending_hub)
 from bot.invite_flow import (_INV_KEYS, _invite_conversation, admin_shares,
@@ -469,6 +471,9 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CommandHandler("tickets", cmd_tickets))
     app.add_handler(CommandHandler("requests", cmd_requests))
     app.add_handler(CommandHandler("trending", cmd_trending))
+    app.add_handler(CommandHandler("mystats", cmd_mystats))
+    app.add_handler(CallbackQueryHandler(mystats_button,
+                                         pattern=fr"^{MYSTATS}$"))
     app.add_handler(CommandHandler("subscriptions", cmd_subscriptions))
     app.add_handler(new_ticket_conv)
     app.add_handler(request_conv)
