@@ -38,6 +38,10 @@ class SonarrEpisode:
     episode_file_id: Optional[int]
 
 
+def episode_code(e: "SonarrEpisode") -> str:
+    return f"S{e.season:02d}E{e.episode:02d}"
+
+
 class SonarrClient:
     def __init__(self, base_url: str, api_key: str, timeout: float = 10.0):
         self.base_url = base_url.rstrip("/")
@@ -155,6 +159,7 @@ class SonarrClient:
 
     async def _run_episode_workflow(
         self, *, series: SonarrSeries, match: SonarrEpisode, blocklist: bool,
+        siblings: "Optional[list[SonarrEpisode]]" = None,
     ) -> FixResult:
         """Optional blocklist + delete + search workflow for a single episode.
         auto_fix_episode calls with blocklist=False; mark_failed_episode with
@@ -163,7 +168,13 @@ class SonarrClient:
         failed if nothing happened.
         """
         steps: list[str] = []
-        poll_info = {"series_id": series.id, "episode_id": match.id}
+        # One file can hold several episodes; deleting it removes it for all,
+        # so every one of them is searched and polled, not just the reported one.
+        siblings = list(siblings or []) if (
+            match.has_file and match.episode_file_id) else []
+        episode_ids = [match.id] + [e.id for e in siblings]
+        poll_info = {"series_id": series.id, "episode_id": match.id,
+                     "episode_ids": episode_ids}
 
         # One history read serves both the before-fingerprint and the
         # blocklist. A failed read only fails a Mark Failed (below); an
@@ -217,7 +228,7 @@ class SonarrClient:
                     )
 
         try:
-            await self.trigger_episode_search([match.id])
+            await self.trigger_episode_search(episode_ids)
             steps.append("search")
         except APIError as exc:
             return FixResult.partial(
@@ -225,37 +236,42 @@ class SonarrClient:
                 steps_done=steps, poll_info=poll_info, before=before,
             )
 
+        also = (f" It also held {', '.join(episode_code(e) for e in siblings)},"
+                " searched again too." if siblings else "")
+        title = ""
         if blocklist:
             prefix = ("Blocklisted current release, " if blocklisted
                       else "Couldn't identify the release, so it wasn't blocklisted; ")
             message = (
-                f"{prefix}deleted '{series.title}' S{match.season:02d}E{match.episode:02d} "
-                "file, and triggered re-search."
+                f"{prefix}deleted '{series.title}' S{match.season:02d}E{match.episode:02d}{title} "
+                f"file, and triggered re-search.{also}"
             )
         else:
             message = (
-                f"Deleted '{series.title}' S{match.season:02d}E{match.episode:02d} file "
-                "(if any) and triggered re-search."
+                f"Deleted '{series.title}' S{match.season:02d}E{match.episode:02d}{title} file "
+                f"(if any) and triggered re-search.{also}"
             )
         return FixResult.success(message, steps_done=steps, poll_info=poll_info,
                                  before=before)
 
     async def _resolve_episode(
         self, tvdb_id: int, season: int, episode: int
-    ) -> tuple[Optional[SonarrSeries], Optional[SonarrEpisode], Optional[FixResult]]:
+    ) -> tuple[Optional[SonarrSeries], Optional[SonarrEpisode],
+               list[SonarrEpisode], Optional[FixResult]]:
         """Common prelude for episode-level workflows: locate series + match.
-        Returns (series, match, error_result). Caller bails when error_result
-        is not None."""
+        Returns (series, match, siblings, error_result): siblings are the
+        other episodes of the season list that share match's file. Caller
+        bails when error_result is not None."""
         try:
             series = await self.get_series_by_tvdb(tvdb_id)
         except APIError as exc:
-            return None, None, FixResult.failed(f"Sonarr lookup failed {user_friendly_message(exc)}")
+            return None, None, [], FixResult.failed(f"Sonarr lookup failed {user_friendly_message(exc)}")
         if series is None:
-            return None, None, FixResult.failed("Series isn't in Sonarr.")
+            return None, None, [], FixResult.failed("Series isn't in Sonarr.")
         try:
             episodes = await self.get_episodes(series.id, season)
         except APIError as exc:
-            return series, None, FixResult.failed(
+            return series, None, [], FixResult.failed(
                 f"Sonarr episode lookup failed {user_friendly_message(exc)}"
             )
         # Match on BOTH season and episode: if Sonarr ever ignores the
@@ -267,19 +283,25 @@ class SonarrClient:
             None,
         )
         if match is None:
-            return series, None, FixResult.failed(
+            return series, None, [], FixResult.failed(
                 f"S{season:02d}E{episode:02d} not found in Sonarr."
             )
-        return series, match, None
+        siblings: list[SonarrEpisode] = []
+        if match.has_file and match.episode_file_id:
+            siblings = [e for e in episodes
+                        if e.id != match.id and e.has_file
+                        and e.episode_file_id == match.episode_file_id]
+        return series, match, siblings, None
 
     async def auto_fix_episode(
         self, tvdb_id: int, season: int, episode: int
     ) -> FixResult:
         """Delete current file (if any) and trigger a new search."""
-        series, match, err = await self._resolve_episode(tvdb_id, season, episode)
+        series, match, siblings, err = await self._resolve_episode(tvdb_id, season, episode)
         if err is not None:
             return err
-        return await self._run_episode_workflow(series=series, match=match, blocklist=False)
+        return await self._run_episode_workflow(
+            series=series, match=match, blocklist=False, siblings=siblings)
 
     # NOTE: the whole-season workflow (auto_fix_season / SeasonSearch /
     # season_files_present) was removed in 0.12.0 as dead code -- no caller
@@ -294,10 +316,11 @@ class SonarrClient:
         record sharing the newest import's downloadId), delete the file, and
         trigger a new search. Skips the blocklist if that grab can't be found.
         """
-        series, match, err = await self._resolve_episode(tvdb_id, season, episode)
+        series, match, siblings, err = await self._resolve_episode(tvdb_id, season, episode)
         if err is not None:
             return err
-        return await self._run_episode_workflow(series=series, match=match, blocklist=True)
+        return await self._run_episode_workflow(
+            series=series, match=match, blocklist=True, siblings=siblings)
 
     async def refresh_monitored_downloads(self) -> None:
         """Ask the arr to sync with its download clients NOW. The arrs only

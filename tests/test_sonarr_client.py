@@ -312,3 +312,79 @@ async def test_auto_fix_episode_stays_partial_when_file_still_there(monkeypatch)
     assert result.status == "partial"
     assert "couldn't delete file" in result.message
     assert not any(r.url.path == "/api/v3/command" for r in requests)
+
+
+def _two_episodes_one_file_client():
+    """Sonarr with episodes 501 (S01E01) and 502 (S01E02) sharing file 9."""
+    import json as _json
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        path = request.url.path
+        if path == "/api/v3/series":
+            return httpx.Response(200, json=[{"id": 8, "tvdbId": 42, "title": "Show"}])
+        if path == "/api/v3/episode":
+            return httpx.Response(200, json=[
+                {"id": 501, "seasonNumber": 1, "episodeNumber": 1,
+                 "title": "One", "hasFile": True, "episodeFileId": 9},
+                {"id": 502, "seasonNumber": 1, "episodeNumber": 2,
+                 "title": "Two", "hasFile": True, "episodeFileId": 9},
+                {"id": 503, "seasonNumber": 1, "episodeNumber": 3,
+                 "title": "Three", "hasFile": True, "episodeFileId": 10},
+            ])
+        if path == "/api/v3/history":
+            return httpx.Response(200, json={"records": []})
+        if path.startswith("/api/v3/episodefile/") and request.method == "DELETE":
+            return httpx.Response(200, json={})
+        if path.startswith("/api/v3/episodefile/"):
+            return httpx.Response(200, json={})
+        if path == "/api/v3/command" and request.method == "POST":
+            return httpx.Response(201, json={})
+        return httpx.Response(404, json={"message": f"unexpected {request.method} {path}"})
+
+    client = SonarrClient("http://sonarr.test", "key")
+    client._client = httpx.AsyncClient(
+        base_url="http://sonarr.test/api/v3",
+        transport=httpx.MockTransport(handler),
+    )
+    return client, requests, _json
+
+
+async def test_fix_of_multi_episode_file_searches_every_episode_it_held():
+    client, requests, _json = _two_episodes_one_file_client()
+    result = await client.auto_fix_episode(tvdb_id=42, season=1, episode=1)
+    await client.close()
+
+    assert result.status == "ok"
+    deletes = [r for r in requests if r.method == "DELETE"]
+    assert len(deletes) == 1
+    searches = [_json.loads(r.content) for r in requests
+                if r.url.path == "/api/v3/command"]
+    assert searches == [{"name": "EpisodeSearch", "episodeIds": [501, 502]}]
+    assert result.poll_info["episode_ids"] == [501, 502]
+    assert result.poll_info["episode_id"] == 501
+    assert "S01E02" in result.message
+
+
+async def test_mark_failed_of_multi_episode_file_searches_every_episode_it_held():
+    client, requests, _json = _two_episodes_one_file_client()
+    result = await client.mark_failed_episode(tvdb_id=42, season=1, episode=2)
+    await client.close()
+
+    assert result.status == "ok"
+    searches = [_json.loads(r.content) for r in requests
+                if r.url.path == "/api/v3/command"]
+    assert searches == [{"name": "EpisodeSearch", "episodeIds": [502, 501]}]
+    assert "S01E01" in result.message
+
+
+async def test_fix_of_single_episode_file_searches_only_that_episode():
+    client, requests, _json = _two_episodes_one_file_client()
+    result = await client.auto_fix_episode(tvdb_id=42, season=1, episode=3)
+    await client.close()
+
+    searches = [_json.loads(r.content) for r in requests
+                if r.url.path == "/api/v3/command"]
+    assert searches == [{"name": "EpisodeSearch", "episodeIds": [503]}]
+    assert result.poll_info["episode_ids"] == [503]

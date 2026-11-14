@@ -208,8 +208,23 @@ class PendingAutofix:
         if self.media_type == "movie" and radarr and self.radarr_movie_id:
             return await radarr.movie_has_file(self.radarr_movie_id), ""
         if self.media_type == "tv" and sonarr and self.sonarr_episode_id:
-            return await sonarr.episode_has_file(self.sonarr_episode_id), ""
+            # Every episode the deleted file held must have a file again.
+            # Rows from before sibling tracking have an empty list.
+            for episode_id in self.tracked_episode_ids():
+                if not await sonarr.episode_has_file(episode_id):
+                    return False, ""
+            return True, ""
         return False, ""
+
+    def tracked_episode_ids(self) -> list[int]:
+        """The reported episode first, then the siblings that shared its
+        file (kept in expected_episode_ids; empty on older rows)."""
+        if not self.sonarr_episode_id:
+            return []
+        ids = [self.sonarr_episode_id]
+        ids += [i for i in self.expected_episode_ids
+                if isinstance(i, int) and i not in ids]
+        return ids
 
 
 class UserStore:

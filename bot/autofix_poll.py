@@ -327,7 +327,7 @@ async def _paint_progress(ctx: ContextTypes.DEFAULT_TYPE, store: UserStore,
                 if sonarr:
                     progress = await sonarr.get_queue_progress(
                         fix.sonarr_series_id,
-                        [fix.sonarr_episode_id] if fix.sonarr_episode_id else None)
+                        fix.tracked_episode_ids() or None)
             if progress is None:
                 line = "🔎 Searching for a replacement…"
             else:

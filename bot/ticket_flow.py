@@ -1074,11 +1074,12 @@ async def _submit_ticket_inner(
                             if media["type"] == "movie":
                                 kwargs["radarr_movie_id"] = poll_info.get("movie_id")
                             else:
-                                # poll_info only ever carries series_id/episode_id (the
-                                # whole-season workflow died in 0.12.0); the season /
-                                # expected-episodes kwargs were always None and are gone.
+                                # poll_info carries series_id/episode_id plus episode_ids
+                                # (every episode the deleted file held), kept in
+                                # expected_episode_ids.
                                 kwargs["sonarr_series_id"] = poll_info.get("series_id")
                                 kwargs["sonarr_episode_id"] = poll_info.get("episode_id")
+                                kwargs["expected_episode_ids"] = poll_info.get("episode_ids")
                             ctx.user_data["_pending_autofix_id"] = (
                                 await store.add_pending_autofix(**kwargs))
                             prefix = "🔧" if result.ok else "⚠️"

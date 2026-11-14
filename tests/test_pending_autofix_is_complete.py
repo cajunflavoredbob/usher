@@ -95,3 +95,25 @@ async def test_movie_error_propagates():
     radarr = SimpleNamespace(movie_has_file=AsyncMock(side_effect=RuntimeError("boom")))
     with pytest.raises(RuntimeError):
         await fix.is_complete(radarr, None)
+
+
+# --- multi-episode file: every episode the file held ---
+
+
+async def test_episode_incomplete_until_every_sibling_has_a_file():
+    fix = _make_fix(media_type="tv", sonarr_episode_id=1,
+                    expected_episode_ids=[2])
+    has_file = {1: True, 2: False}
+    sonarr = SimpleNamespace(
+        episode_has_file=AsyncMock(side_effect=lambda i: has_file[i]))
+    assert (await fix.is_complete(None, sonarr))[0] is False
+    has_file[2] = True
+    assert (await fix.is_complete(None, sonarr))[0] is True
+
+
+async def test_old_row_without_sibling_ids_still_completes():
+    fix = _make_fix(media_type="tv", sonarr_episode_id=999,
+                    expected_episode_ids=[])
+    sonarr = SimpleNamespace(episode_has_file=AsyncMock(return_value=True))
+    assert (await fix.is_complete(None, sonarr))[0] is True
+    sonarr.episode_has_file.assert_awaited_once_with(999)
