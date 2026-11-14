@@ -116,3 +116,7 @@ ADMIN_INVITE: Final = "admi"          # Admin Hub "Invite" (invite conversation
 ADMIN_SHARES: Final = "adms"          # adms:<page> Admin Hub "Shares" (page 0),
                                       # Prev/Next and "⬅️ Shares"
 ADMIN_STATUS: Final = "admt"          # Admin Hub "Status" (global handler)
+STOP_ASK: Final = "stk"               # stk:<token> a Now playing Stop button
+                                      # -> confirm card (Admin, DM only)
+STOP_GO: Final = "stg"                # stg:<token> confirmed Stop, no message
+STOP_MSG: Final = "stm"               # stm:<token> Stop with the default message

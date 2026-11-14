@@ -116,6 +116,19 @@ class TautulliClient:
         data = await self.call("get_stream_data", row_id=row_id)
         return data if isinstance(data, dict) else {}
 
+    async def get_activity(self) -> dict:
+        """What is playing now: a dict whose `sessions` list holds one row
+        per stream (`session_id`, `friendly_name`, `full_title`, `player`,
+        `transcode_decision`)."""
+        data = await self.call("get_activity")
+        return data if isinstance(data, dict) else {}
+
+    async def terminate_session(self, session_id, message=None) -> None:
+        """Stop one stream, optionally showing the viewer `message`. Tautulli
+        accepts this command by POST only, and it is sent once."""
+        await self.call("terminate_session", post=True,
+                        session_id=session_id, message=message)
+
 
 _TMDB_GUID = re.compile(
     r"^(?:tmdb://|com\.plexapp\.agents\.themoviedb://)(\d+)")

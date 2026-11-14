@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from aiohttp import web
 import telegram
-from telegram import Update
+from telegram import InlineKeyboardMarkup, Update
 from telegram.error import InvalidToken
 from telegram.ext import (
     Application,
@@ -42,6 +42,9 @@ from bot.callback_prefixes import (
     ACCOUNT_UNLINK,
     ADMIN_SHARES,
     ADMIN_STATUS,
+    STOP_ASK,
+    STOP_GO,
+    STOP_MSG,
     HUB_OPEN,
     REQUESTS_MINE,
     REQUESTS_SUBSCRIPTIONS,
@@ -77,6 +80,7 @@ from bot.callback_prefixes import (
 )
 from bot.ticket_flow import _new_ticket_conversation
 from bot.admin_hub import ADMIN_HUB, cmd_admin, refuse_outside_admin_dm
+from bot.nowplaying import now_playing_section, stop_ask, stop_confirmed
 from bot.hub import end_markup, hub_open_callback
 from bot.link_flow import (_link_conversation, account_unlink, cmd_account,
                            cmd_link_didnt_work, cmd_unlink)
@@ -379,10 +383,14 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if await refuse_outside_admin_dm(update, ctx):
         return
     summary = await _check_connections(ctx.application)
-    await update.effective_message.reply_text(
-        f"<b>Connection status:</b>\n{format_status(summary)}",
+    playing, stop_rows = await now_playing_section(ctx)
+    sent = await update.effective_message.reply_text(
+        f"<b>Connection status:</b>\n{format_status(summary)}{playing}",
         parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(stop_rows) if stop_rows else None,
     )
+    if stop_rows:
+        record_btn(ctx.application, update.effective_user.id, sent)
 
 
 async def admin_hub_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -396,9 +404,12 @@ async def admin_hub_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
     force_end_flow_conversations(ctx, update)
     await edit_or_send(q, "📶 Checking connections…")
     summary = await _check_connections(ctx.application)
+    playing, stop_rows = await now_playing_section(ctx)
     sent = await edit_or_send(
-        q, f"<b>Connection status:</b>\n{format_status(summary)}",
-        parse_mode="HTML", reply_markup=end_markup(ADMIN_HUB))
+        q, f"<b>Connection status:</b>\n{format_status(summary)}{playing}",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(
+            stop_rows + list(end_markup(ADMIN_HUB).inline_keyboard)))
     record_btn(ctx.application, update.effective_user.id, sent)
 
 
@@ -544,6 +555,10 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
                                          pattern=fr"^{SHARE_MATCHES}:\d+$"))
     app.add_handler(CallbackQueryHandler(admin_hub_status,
                                          pattern=fr"^{ADMIN_STATUS}$"))
+    app.add_handler(CallbackQueryHandler(stop_ask,
+                                         pattern=fr"^{STOP_ASK}:\w+$"))
+    app.add_handler(CallbackQueryHandler(
+        stop_confirmed, pattern=fr"^({STOP_GO}|{STOP_MSG}):\w+$"))
     # MUST stay the last callback handler in the default group:
     # catches taps on keyboards whose conversation has timed out or ended.
     app.add_handler(CallbackQueryHandler(unmatched_callback))
