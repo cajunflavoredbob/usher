@@ -22,3 +22,9 @@ data/
 # Build artifacts
 dist/
 build/
+
+# Local tooling notes (never shipped)
+CLAUDE.md
+.claude/
+docs/agents/
+docs/prior-art/
