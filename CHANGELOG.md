@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **TV Fixes show which Sonarr episode they hit**: the Auto-fix confirm and the Admin's Fix menu now show the Sonarr episode the number resolves to (for example `Sonarr: S01E03 "Title"`), or say that Sonarr could not be checked or does not have it, before anything is deleted. The result text carries the same title. The episode picker also refuses a number past the season's episode count.
 - **Fixing one episode of a multi-episode file**: when one file holds two or more episodes (for example S01E01-E02), Redownload, Mark failed and Auto-fix delete the file for all of them, so Usher now searches every episode the file held, not just the one reported, and its "new file is ready" message waits until all of them have a file again. The result line names the other episodes.
 
 ## [0.20.2] - 2026-11-14

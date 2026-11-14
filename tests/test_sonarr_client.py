@@ -388,3 +388,10 @@ async def test_fix_of_single_episode_file_searches_only_that_episode():
                 if r.url.path == "/api/v3/command"]
     assert searches == [{"name": "EpisodeSearch", "episodeIds": [503]}]
     assert result.poll_info["episode_ids"] == [503]
+
+
+async def test_fix_result_names_the_sonarr_episode_title():
+    client, _requests, _json = _two_episodes_one_file_client()
+    result = await client.auto_fix_episode(tvdb_id=42, season=1, episode=3)
+    await client.close()
+    assert 'S01E03 "Three"' in result.message

@@ -42,6 +42,14 @@ def episode_code(e: "SonarrEpisode") -> str:
     return f"S{e.season:02d}E{e.episode:02d}"
 
 
+def _sibling_note(siblings: "list[SonarrEpisode]") -> str:
+    """User text for the episodes a deleted file also held, or ''."""
+    if not siblings:
+        return ""
+    codes = ", ".join(episode_code(e) for e in siblings)
+    return f"This file also holds {codes}; all of them will be searched again."
+
+
 class SonarrClient:
     def __init__(self, base_url: str, api_key: str, timeout: float = 10.0):
         self.base_url = base_url.rstrip("/")
@@ -238,7 +246,7 @@ class SonarrClient:
 
         also = (f" It also held {', '.join(episode_code(e) for e in siblings)},"
                 " searched again too." if siblings else "")
-        title = ""
+        title = f' "{match.title}"' if match.title and match.title != "?" else ""
         if blocklist:
             prefix = ("Blocklisted current release, " if blocklisted
                       else "Couldn't identify the release, so it wasn't blocklisted; ")
@@ -292,6 +300,24 @@ class SonarrClient:
                         if e.id != match.id and e.has_file
                         and e.episode_file_id == match.episode_file_id]
         return series, match, siblings, None
+
+    async def describe_episode(self, tvdb_id: int, season: int,
+                               episode: int) -> str:
+        """Read-only: one line (plus a note when the file holds more
+        episodes) saying which Sonarr episode a Fix on this number would
+        hit, or why Sonarr can't say. Never raises."""
+        try:
+            _series, match, siblings, err = await self._resolve_episode(
+                tvdb_id, season, episode)
+        except Exception:
+            logger.warning("%s: couldn't preview the episode", _SERVICE,
+                           exc_info=True)
+            return "Sonarr: couldn't check which episode this is."
+        if err is not None:
+            return f"Sonarr: {err.message}"
+        line = f'Sonarr: {episode_code(match)} "{match.title}"'
+        note = _sibling_note(siblings)
+        return f"{line}\n{note}" if note else line
 
     async def auto_fix_episode(
         self, tvdb_id: int, season: int, episode: int

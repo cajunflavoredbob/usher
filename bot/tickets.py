@@ -516,9 +516,23 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         ],
         [InlineKeyboardButton("⬅️ Back", callback_data=f"{_back_prefix(q)}:{ticket_id}")],
     ])
+    target = ""
+    seerr = ctx.bot_data.get("seerr")
+    sonarr = ctx.bot_data.get("sonarr")
+    if seerr is not None and sonarr is not None:
+        try:
+            fix_ctx, _err = await resolve_fix_context(
+                seerr, ticket_id, action_name="Fix")
+            if fix_ctx is not None:
+                target = await describe_fix_target(
+                    fix_ctx.media, fix_ctx.season, fix_ctx.episode, sonarr)
+        except Exception:
+            logger.warning("couldn't preview the Fix target for #%d",
+                           ticket_id, exc_info=True)
     await q.edit_message_text(
         f"🔧 Fix #{ticket_id} - how?\n"
-        "⚠️ Both options delete the current file from disk before searching "
+        + (f"{target}\n" if target else "")
+        + "⚠️ Both options delete the current file from disk before searching "
         "for a replacement.",
         reply_markup=kb,
     )
@@ -1195,5 +1209,23 @@ async def run_arr_action(
         logger.exception("%s failed", op_label)
         return FixResult.failed(user_friendly_message(exc))
     return FixResult.failed("Unknown media type.")
+
+
+async def describe_fix_target(
+    media: dict, season: Optional[int], episode: Optional[int],
+    sonarr: Optional[SonarrClient],
+) -> str:
+    """For a TV episode Fix: the Sonarr episode (and any other episodes its
+    file holds) the typed number resolves to, shown before the file is
+    deleted so a wrong tap is visible. '' for movies, whole seasons, or when
+    Sonarr or the TVDb id is missing. Never raises."""
+    if (media.get("type") != "tv" or sonarr is None or not episode
+            or season is None or not media.get("tvdb_id")):
+        return ""
+    try:
+        return await sonarr.describe_episode(media["tvdb_id"], season, episode)
+    except Exception:
+        logger.warning("couldn't preview the Sonarr episode", exc_info=True)
+        return "Sonarr: couldn't check which episode this is."
 
 

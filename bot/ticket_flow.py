@@ -76,7 +76,8 @@ from bot.shared import (
     try_begin_action,
     user_in_conversation,
 )
-from bot.tickets import run_arr_action
+from bot.tickets import describe_fix_target, run_arr_action
+from telegram.helpers import escape_markdown
 from const import (
     AUTOFIX_TIMEOUT_HOURS,
     EPISODE_BUTTONS_PER_ROW,
@@ -683,6 +684,14 @@ async def ticket_pick_episode(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         await end_flow(update, ctx, "Couldn't parse episode.", _tickets_origin(ctx), TICKETS_REPORT,
                        typed_text="Couldn't parse episode. /issue to start over.")
         return ConversationHandler.END
+    # A stale or forged callback can carry a number the season doesn't have;
+    # ep=0 is the whole-season button.
+    season_obj = (ctx.user_data.get("seasons") or {}).get(ctx.user_data.get("season"))
+    ep_count = season_obj.episode_count if season_obj else 0
+    if ep < 0 or (ep_count > 0 and ep > ep_count):
+        await end_flow(update, ctx, "That episode isn't in this season.", _tickets_origin(ctx), TICKETS_REPORT,
+                       typed_text="That episode isn't in this season. /issue to start over.")
+        return ConversationHandler.END
     # ep=0 means whole season
     ctx.user_data["episode"] = ep if ep > 0 else None
     return await _show_type_picker(update, ctx)
@@ -884,8 +893,12 @@ async def ticket_offer_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
         InlineKeyboardButton("⚠️ Yes, delete & re-search", callback_data=f"{TICKET_AUTOFIX_CONFIRM}:{version}:yes"),
         InlineKeyboardButton("No, report to Admin", callback_data=f"{TICKET_AUTOFIX_CONFIRM}:{version}:no"),
     ]]
+    target = await describe_fix_target(
+        ctx.user_data.get("media") or {}, ctx.user_data.get("season"),
+        ctx.user_data.get("episode"), ctx.bot_data.get("sonarr"))
+    target_text = f"{escape_markdown(target)}\n\n" if target else ""
     sent = await q.edit_message_text(
-        "⚠️ This will *delete the current file* from disk and trigger a new download. Confirm?",
+        f"{target_text}⚠️ This will *delete the current file* from disk and trigger a new download. Confirm?",
         reply_markup=InlineKeyboardMarkup(rows),
         parse_mode="Markdown",
     )

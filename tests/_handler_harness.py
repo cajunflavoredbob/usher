@@ -184,6 +184,7 @@ def make_ctx(*, admin_id: int = 999, user_data: Optional[dict] = None,
         episode_has_file=AsyncMock(return_value=False),
         get_series_by_tvdb=AsyncMock(return_value=None),
         get_queue_progress=AsyncMock(return_value=None),
+        describe_episode=AsyncMock(return_value=""),
     )
     store = SimpleNamespace(
         get=AsyncMock(return_value=link),
