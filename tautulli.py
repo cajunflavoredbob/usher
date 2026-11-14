@@ -126,6 +126,16 @@ class TautulliClient:
         rows = data.get("recently_added") if isinstance(data, dict) else None
         return [r for r in (rows or []) if isinstance(r, dict)]
 
+    async def get_children_metadata(self, rating_key, media_type: str) -> list:
+        """The children of a show (its seasons) or a season (its episodes):
+        the `children_list` of Tautulli's `{children_count, children_type,
+        children_list}` block. Each child has `rating_key`, `media_index`
+        and `parent_media_index`."""
+        data = await self.call("get_children_metadata",
+                               rating_key=rating_key, media_type=media_type)
+        rows = data.get("children_list") if isinstance(data, dict) else None
+        return [r for r in (rows or []) if isinstance(r, dict)]
+
     async def get_stream_data(self, row_id) -> dict:
         """How one history row was streamed (player, platform,
         transcode_decision, codecs)."""

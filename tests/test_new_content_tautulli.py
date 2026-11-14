@@ -80,11 +80,11 @@ async def test_items_without_a_tmdb_id_are_skipped(fresh_store):
     assert await _rows(fresh_store) == []
 
 
-async def test_first_run_sets_the_mark_and_records_nothing(fresh_store):
+async def test_first_run_with_no_arr_mark_starts_from_now(fresh_store):
     tau = _tautulli([_movie(1, 1700000500, ["tmdb://550"])])
     await poll_new_content(_ctx(fresh_store, tautulli=tau))
     assert await fresh_store.get_poller_mark("tautulli_added")
-    tau.get_recently_added.assert_not_awaited()
+    assert await _rows(fresh_store) == []
 
 
 async def test_a_failing_read_keeps_the_mark(fresh_store):
@@ -128,3 +128,127 @@ async def test_without_tautulli_the_arr_history_is_read_as_before(fresh_store):
                        "movie": {"tmdbId": 550, "title": "Fight Club"}}]))
     await poll_new_content(_ctx(fresh_store, radarr=radarr))
     assert [r[1] for r in await _rows(fresh_store)] == [550]
+
+
+def _paged(rows):
+    async def fake(count=50, start=0):
+        return rows[start:start + count]
+    return AsyncMock(side_effect=fake)
+
+
+async def test_a_season_row_yields_one_row_per_episode_once(fresh_store):
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    season = _item(20, 1700000500, media_type="season", parent_rating_key=7,
+                   parent_title="Breaking Bad")
+    kids = [{"media_type": "episode", "rating_key": 100 + n,
+             "parent_media_index": "2", "media_index": str(n),
+             "grandparent_rating_key": "7"} for n in (1, 2, 3)]
+    tau = _tautulli([season])
+    tau.get_children_metadata = AsyncMock(return_value=kids)
+    ctx = _ctx(fresh_store, tautulli=tau)
+    await poll_new_content(ctx)
+    await poll_new_content(ctx)
+    assert sorted(await _rows(fresh_store)) == [
+        ("episode", 1396, "Breaking Bad", 2, n) for n in (1, 2, 3)]
+    tau.get_children_metadata.assert_awaited_with(20, "season")
+
+
+async def test_a_show_row_expands_its_seasons(fresh_store):
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    show = _item(7, 1700000500, media_type="show", title="Breaking Bad")
+    seasons = [{"media_type": "season", "rating_key": 30 + n}
+               for n in (1, 2)]
+
+    async def children(key, media_type):
+        if media_type == "show":
+            return seasons
+        n = key - 30
+        return [{"media_type": "episode", "rating_key": key * 10,
+                 "parent_media_index": str(n), "media_index": "1"}]
+    tau = _tautulli([show])
+    tau.get_children_metadata = AsyncMock(side_effect=children)
+    await poll_new_content(_ctx(fresh_store, tautulli=tau))
+    assert sorted(await _rows(fresh_store)) == [
+        ("episode", 1396, "Breaking Bad", n, 1) for n in (1, 2)]
+
+
+async def test_more_than_250_items_are_all_recorded_over_polls(fresh_store):
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    rows = [_movie(1000 + i, 1700000001 + i, [f"tmdb://{5000 + i}"],
+                   f"M{i}") for i in range(300)]
+    tau = _tautulli([])
+    tau.get_recently_added = _paged(list(reversed(rows)))  # newest first
+    ctx = _ctx(fresh_store, tautulli=tau)
+    await poll_new_content(ctx)
+    assert len(await _rows(fresh_store)) == 250
+    await poll_new_content(ctx)
+    assert len(await _rows(fresh_store)) == 300
+
+
+async def test_an_unmatched_item_is_recorded_once_plex_has_a_guid(
+        fresh_store, monkeypatch):
+    import time
+    monkeypatch.setattr(time, "time", lambda: 1700001000)
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    late = _movie(1, 1700000500, [])
+    newer = _movie(2, 1700000600, ["tmdb://680"], "Pulp Fiction")
+    tau = _tautulli([late, newer])
+    tau.get_metadata = AsyncMock(return_value={"guids": []})
+    ctx = _ctx(fresh_store, tautulli=tau)
+    await poll_new_content(ctx)
+    assert await fresh_store.get_poller_mark("tautulli_added") == "1700000499"
+    assert await _rows(fresh_store) == [
+        ("movie", 680, "Pulp Fiction", None, None)]
+    tau.get_metadata = AsyncMock(return_value={"guids": ["tmdb://550"]})
+    await poll_new_content(ctx)
+    assert sorted(await _rows(fresh_store)) == [
+        ("movie", 550, "Fight Club", None, None),
+        ("movie", 680, "Pulp Fiction", None, None)]
+    assert await fresh_store.get_poller_mark("tautulli_added") == "1700000600"
+
+
+async def test_an_unmatched_item_is_given_up_after_the_retry_window(
+        fresh_store, monkeypatch):
+    import time
+    monkeypatch.setattr(time, "time", lambda: 1700000500 + 7 * 3600)
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    tau = _tautulli([_movie(1, 1700000500, ["imdb://tt1"])])
+    await poll_new_content(_ctx(fresh_store, tautulli=tau))
+    assert await fresh_store.get_poller_mark("tautulli_added") == "1700000500"
+
+
+async def test_a_failed_tautulli_poll_leaves_the_arr_marks(fresh_store):
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    await fresh_store.set_poller_mark("radarr_history", "2026-11-14T09:00:00Z")
+    await fresh_store.set_poller_mark("sonarr_history", "2026-11-14T09:00:00Z")
+    tau = _tautulli([])
+    tau.get_recently_added.side_effect = RuntimeError("down")
+    await poll_new_content(_ctx(fresh_store, tautulli=tau))
+    assert await fresh_store.get_poller_mark(
+        "radarr_history") == "2026-11-14T09:00:00Z"
+    assert await fresh_store.get_poller_mark(
+        "sonarr_history") == "2026-11-14T09:00:00Z"
+
+
+async def test_a_failed_arr_poll_leaves_the_tautulli_mark(fresh_store):
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    await fresh_store.set_poller_mark("radarr_history", "2026-11-14T09:00:00Z")
+    radarr = SimpleNamespace(
+        get_history_imports_since=AsyncMock(side_effect=RuntimeError("down")))
+    await poll_new_content(_ctx(fresh_store, radarr=radarr))
+    assert await fresh_store.get_poller_mark("tautulli_added") == MARK
+
+
+async def test_first_link_starts_from_the_arr_mark_without_repeats(
+        fresh_store):
+    # 2023-11-14T22:13:20Z is 1700000000.
+    await fresh_store.set_poller_mark("radarr_history", "2023-11-14T22:13:20Z")
+    await fresh_store.set_poller_mark("sonarr_history", "2023-11-14T23:00:00Z")
+    await fresh_store.add_new_content("radarr:1", "movie", 550, "Fight Club")
+    tau = _tautulli([_movie(1, 1700000500, ["tmdb://550"]),
+                     _movie(2, 1700000600, ["tmdb://680"], "Pulp Fiction"),
+                     _movie(3, 1699990000, ["tmdb://13"], "Old")])
+    await poll_new_content(_ctx(fresh_store, tautulli=tau))
+    assert sorted(await _rows(fresh_store)) == [
+        ("movie", 550, "Fight Club", None, None),
+        ("movie", 680, "Pulp Fiction", None, None)]

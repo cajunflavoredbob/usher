@@ -14,6 +14,7 @@ import html
 import logging
 import time
 from datetime import datetime, timezone
+from typing import Optional
 
 from telegram import InlineKeyboardMarkup
 
@@ -29,7 +30,9 @@ RADARR_MARK = "radarr_history"
 SONARR_MARK = "sonarr_history"
 TAUTULLI_MARK = "tautulli_added"
 TAUTULLI_PAGE = 50
-TAUTULLI_MAX_PAGES = 5
+TAUTULLI_READ_PAGES = 40
+TAUTULLI_MAX_ITEMS = 250
+TAUTULLI_RETRY_S = 6 * 3600
 
 
 def _now_iso() -> str:
@@ -102,56 +105,148 @@ def _added_at(row: dict) -> int:
     return _int(row.get("added_at")) or 0
 
 
-async def _poll_tautulli(store, tautulli) -> None:
-    """Record what Tautulli lists as recently added since its mark (epoch
-    seconds). Items without a TMDb id are skipped; an episode takes its
-    show's ids from the show's metadata. The mark moves only after the
-    items were stored, so a failure reads them again next time."""
-    raw = await store.get_poller_mark(TAUTULLI_MARK)
-    if raw is None:
-        await store.set_poller_mark(TAUTULLI_MARK, str(int(time.time())))
-        return
-    since = int(raw)
+def _iso_to_epoch(value) -> Optional[int]:
+    try:
+        return int(datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+                   .replace(tzinfo=timezone.utc).timestamp())
+    except (TypeError, ValueError):
+        return None
+
+
+async def _first_tautulli_mark(store) -> int:
+    """Where a first Tautulli poll starts: the older of the Radarr and Sonarr
+    marks (what they last read), so nothing that arrived since is lost; the
+    store's de-duplication keeps an item from being recorded twice. With no
+    arr mark yet, now."""
+    stamps = [_iso_to_epoch(await store.get_poller_mark(k))
+              for k in (RADARR_MARK, SONARR_MARK)]
+    stamps = [t for t in stamps if t]
+    return min(stamps) if stamps else int(time.time())
+
+
+async def _read_fresh(tautulli, since: int) -> list[dict]:
+    """Recently added rows newer than `since`, newest first, paged until a
+    page runs out of fresh rows (at most TAUTULLI_READ_PAGES pages)."""
     items: list[dict] = []
-    for page in range(TAUTULLI_MAX_PAGES):
+    for page in range(TAUTULLI_READ_PAGES):
         rows = await tautulli.get_recently_added(
             count=TAUTULLI_PAGE, start=page * TAUTULLI_PAGE)
         fresh = [r for r in rows if _added_at(r) > since]
         items.extend(fresh)
         if len(fresh) < TAUTULLI_PAGE:
             break
+    return items
+
+
+async def _expand_episodes(tautulli, item: dict) -> list[tuple[dict, object]]:
+    """The episodes under a season or show row as (child, show key) pairs.
+    Tautulli's get_children_metadata lists a season's episodes, or a show's
+    seasons (each then expanded in turn)."""
+    kind, key = item.get("media_type"), item["rating_key"]
+    if kind == "season":
+        show_key = item.get("parent_rating_key")
+        return [(c, c.get("grandparent_rating_key") or show_key)
+                for c in await tautulli.get_children_metadata(key, "season")
+                if c.get("media_type", "episode") == "episode"]
+    out = []
+    for season in await tautulli.get_children_metadata(key, "show"):
+        if season.get("media_type", "season") != "season":
+            continue
+        kids = await tautulli.get_children_metadata(
+            season["rating_key"], "season")
+        for c in kids:
+            if c.get("media_type", "episode") == "episode":
+                out.append((c, c.get("grandparent_rating_key") or key))
+    return out
+
+
+async def _poll_tautulli(store, tautulli) -> None:
+    """Record what Tautulli lists as recently added since its mark (epoch
+    seconds). A season or show row is expanded to its episodes. An item with
+    no TMDb id yet (Plex not matched) holds the mark back so it is read again
+    next poll, for TAUTULLI_RETRY_S after it was added. At most
+    TAUTULLI_MAX_ITEMS are handled per poll, oldest first; the mark never
+    passes an item that was not handled. The mark moves only after the items
+    were stored, so a failure reads them again next time."""
+    raw = await store.get_poller_mark(TAUTULLI_MARK)
+    if raw is None:
+        since = await _first_tautulli_mark(store)
+        await store.set_poller_mark(TAUTULLI_MARK, str(since))
+    else:
+        since = int(raw)
+    items = sorted(await _read_fresh(tautulli, since), key=_added_at)
+    truncated = len(items) > TAUTULLI_MAX_ITEMS
+    items = items[:TAUTULLI_MAX_ITEMS]
+    now = int(time.time())
     show_ids: dict = {}
-    for item in sorted(items, key=_added_at):
-        kind = item.get("media_type")
-        key = item.get("rating_key")
-        if kind not in ("movie", "episode") or key is None:
-            continue
-        if kind == "movie":
-            tmdb, _tvdb = ids_from_guids(item)
-            if tmdb is None and not item.get("guids"):
-                tmdb, _tvdb = ids_from_guids(await tautulli.get_metadata(key))
-            if not tmdb:
-                continue
-            await store.add_new_content(
-                f"tautulli:{key}", "movie", tmdb, item.get("title") or "?")
-            continue
-        show_key = item.get("grandparent_rating_key")
-        season = _int(item.get("parent_media_index"))
-        number = _int(item.get("media_index"))
-        if show_key is None or season is None or number is None:
-            continue
+    pending: list[int] = []  # added_at of items to read again
+
+    async def show_tmdb(show_key):
         if show_key not in show_ids:
             show_ids[show_key] = ids_from_guids(
                 await tautulli.get_metadata(show_key))
-        tmdb, tvdb = show_ids[show_key]
-        if not tmdb:
+        return show_ids[show_key]
+
+    for item in items:
+        kind = item.get("media_type")
+        key = item.get("rating_key")
+        if key is None or kind not in ("movie", "episode", "season", "show"):
             continue
-        await store.add_new_content(
-            f"tautulli:{key}", "episode", tmdb,
-            item.get("grandparent_title") or "?", season, number,
-            tvdb_id=tvdb or 0)
-    await store.set_poller_mark(
-        TAUTULLI_MARK, str(max([since, *(_added_at(r) for r in items)])))
+        added = _added_at(item)
+        retry = now - added < TAUTULLI_RETRY_S
+        try:
+            if kind == "movie":
+                tmdb, _tvdb = ids_from_guids(item)
+                if tmdb is None and not item.get("guids"):
+                    tmdb, _tvdb = ids_from_guids(
+                        await tautulli.get_metadata(key))
+                if tmdb:
+                    await store.add_new_content(
+                        f"tautulli:{key}", "movie", tmdb,
+                        item.get("title") or "?")
+                elif retry:
+                    pending.append(added)
+                continue
+            if kind == "episode":
+                episodes = [(item, item.get("grandparent_rating_key"))]
+            else:
+                episodes = await _expand_episodes(tautulli, item)
+            for ep, show_key in episodes:
+                season = _int(ep.get("parent_media_index"))
+                number = _int(ep.get("media_index"))
+                ep_key = ep.get("rating_key")
+                if (show_key is None or season is None or number is None
+                        or ep_key is None):
+                    continue
+                tmdb, tvdb = await show_tmdb(show_key)
+                if not tmdb:
+                    if retry:
+                        pending.append(added)
+                    break
+                title = (ep.get("grandparent_title")
+                         or item.get("grandparent_title")
+                         or item.get("parent_title")
+                         or (item.get("title") if kind == "show" else None)
+                         or "?")
+                await store.add_new_content(
+                    f"tautulli:{ep_key}", "episode", tmdb, title, season,
+                    number, tvdb_id=tvdb or 0)
+        except Exception:
+            if not retry:
+                logger.warning("Tautulli item %s skipped", key, exc_info=True)
+                continue
+            logger.warning("Tautulli item %s will be read again", key,
+                           exc_info=True)
+            pending.append(added)
+    mark = since
+    if items:
+        newest = _added_at(items[-1])
+        # Rows sharing the last second may be unhandled when truncated; read
+        # that second again (the store de-duplicates).
+        mark = max(since, newest - 1 if truncated else newest)
+    if pending:
+        mark = max(since, min(mark, min(pending) - 1))
+    await store.set_poller_mark(TAUTULLI_MARK, str(mark))
 
 
 def _episode_list(episodes: list[tuple[int, int]]) -> str:
@@ -207,30 +302,37 @@ async def poll_new_content(ctx) -> None:
     store = app.bot_data["store"]
     tautulli = app.bot_data.get("tautulli")
     if tautulli is not None:
-        # Tautulli replaces the arr history; keep the arr marks at now so
-        # unlinking it later does not replay what Tautulli already recorded.
         sources = (("tautulli", tautulli, _poll_tautulli),)
-        try:
-            for mark in (RADARR_MARK, SONARR_MARK):
-                await store.set_poller_mark(mark, _now_iso())
-        except Exception:
-            logger.warning("Could not move the arr marks", exc_info=True)
+        inactive = (RADARR_MARK, SONARR_MARK)
     else:
         sources = (("radarr", app.bot_data.get("radarr"), _poll_radarr),
                    ("sonarr", app.bot_data.get("sonarr"), _poll_sonarr))
-        try:
-            if await store.get_poller_mark(TAUTULLI_MARK) is not None:
-                await store.set_poller_mark(TAUTULLI_MARK,
-                                            str(int(time.time())))
-        except Exception:
-            logger.warning("Could not move the Tautulli mark", exc_info=True)
+        inactive = (TAUTULLI_MARK,)
+    ok = True
     for key, client, poll in sources:
         if client is None:
             continue
         try:
             await poll(store, client)
         except Exception:
+            ok = False
             logger.warning("New-content poll of %s failed", key, exc_info=True)
+    if ok:
+        # The unused source's mark follows along so switching back later
+        # does not replay what the active one already recorded. It moves only
+        # after the active poll succeeded.
+        try:
+            for mark in inactive:
+                if mark == TAUTULLI_MARK:
+                    if await store.get_poller_mark(mark) is None:
+                        continue
+                    value = str(int(time.time()))
+                else:
+                    value = _now_iso()
+                await store.set_poller_mark(mark, value)
+        except Exception:
+            logger.warning("Could not move the idle source's mark",
+                           exc_info=True)
     try:
         await send_follow_pings(app)
     except Exception:

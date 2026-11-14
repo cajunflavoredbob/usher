@@ -179,6 +179,20 @@ async def test_get_recently_added_sends_count_and_start_and_unwraps_rows():
     await c.close()
 
 
+async def test_get_children_metadata_unwraps_children_list():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["cmd"] == "get_children_metadata"
+        assert request.url.params["rating_key"] == "20"
+        assert request.url.params["media_type"] == "season"
+        return httpx.Response(200, json=_ok(
+            {"children_count": 1, "children_type": "episode",
+             "children_list": [{"rating_key": "5"}, "junk"]}))
+
+    c = _client(handler)
+    assert await c.get_children_metadata(20, "season") == [{"rating_key": "5"}]
+    await c.close()
+
+
 def test_ids_from_guids_reads_tmdb_and_tvdb_in_either_form():
     from tautulli import ids_from_guids
     assert ids_from_guids({"guids": ["imdb://tt1", "tmdb://550", "tvdb://9"]}) == (550, 9)
