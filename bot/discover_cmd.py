@@ -30,6 +30,7 @@ from bot.callback_prefixes import (
     REQUESTS_TRENDING,
     RQ_FROM_TICKET,
 )
+from bot.digest import is_linked
 from bot.hub import back_button, came_from_hub, end_markup, reply_end
 from bot.media_card import STATUS_NOTES, send_detail_card
 from bot.requests_hub import REQUESTS_HUB
@@ -64,9 +65,27 @@ POPULAR_PER_STAT = 10
 _STALE_BROWSE_TOAST = "That browse list is stale: run /trending again."
 
 
+NOT_LINKED_MSG = "DM me /link first so I know which Plex account is yours."
+
+
+async def _may_browse(ctx: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
+    """Trending is for the Admin and Linked users only."""
+    return (user_id == ctx.bot_data.get("admin_id")
+            or await is_linked(ctx, user_id))
+
+
+async def _popular_allowed(ctx: ContextTypes.DEFAULT_TYPE,
+                           user_id: int) -> bool:
+    """Popular shows the server's watch activity: the Admin and Linked users
+    only, and only with Tautulli linked."""
+    return bool(ctx.bot_data.get("tautulli")
+                and await _may_browse(ctx, user_id))
+
+
 def _labels(ctx: ContextTypes.DEFAULT_TYPE) -> dict:
-    """The categories on offer: Popular here this week only with Tautulli."""
-    if ctx.bot_data.get("tautulli"):
+    """The categories on offer: Popular here this week only for a viewer
+    `_popular_allowed` cleared (kept in user_data by the caller)."""
+    if ctx.user_data.get("dv_popular_ok"):
         return {**CATEGORY_LABELS, POPULAR_CATEGORY: POPULAR_LABEL}
     return CATEGORY_LABELS
 
@@ -182,7 +201,7 @@ def _render(ctx: ContextTypes.DEFAULT_TYPE,
     rows.append(cat_row[:3])
     if cat_row[3:]:
         rows.append(cat_row[3:])
-    if ctx.bot_data.get("tautulli"):
+    if ctx.user_data.get("dv_stats_ok"):
         rows.append([InlineKeyboardButton("📊 My stats",
                                           callback_data=MYSTATS)])
     if hub:
@@ -194,6 +213,12 @@ async def _load_and_render(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                            reply_method, category: str, *,
                            user_id: int, hub=None) -> None:
     seerr: SeerrClient = ctx.bot_data["seerr"]
+    ctx.user_data["dv_popular_ok"] = await _popular_allowed(ctx, user_id)
+    # /mystats needs the user's own Link, so the Admin without one gets no button.
+    ctx.user_data["dv_stats_ok"] = bool(
+        ctx.bot_data.get("tautulli") and await is_linked(ctx, user_id))
+    if category == POPULAR_CATEGORY and not ctx.user_data["dv_popular_ok"]:
+        category = "trending"
     try:
         if category == POPULAR_CATEGORY:
             results = await _popular_results(ctx.bot_data["tautulli"])
@@ -225,6 +250,11 @@ async def trending_hub(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
     await q.answer()
     force_end_flow_conversations(ctx, update)
+    if not await _may_browse(ctx, update.effective_user.id):
+        sent = await edit_or_send(q, NOT_LINKED_MSG,
+                                  reply_markup=end_markup(REQUESTS_HUB))
+        record_btn(ctx.application, update.effective_user.id, sent)
+        return
     if await require_seerr(update, ctx,
                            reply_markup=end_markup(REQUESTS_HUB)) is None:
         return
@@ -239,6 +269,9 @@ async def trending_hub(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_trending(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """/trending [movies|tv|upcoming] — defaults to the mixed trending list."""
+    if not await _may_browse(ctx, update.effective_user.id):
+        await update.effective_message.reply_text(NOT_LINKED_MSG)
+        return
     if await require_seerr(update, ctx) is None:
         return
     await send_typing(update, ctx)
@@ -251,11 +284,16 @@ async def cmd_trending(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def dv_category(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
+    if not await _may_browse(ctx, update.effective_user.id):
+        await q.answer(NOT_LINKED_MSG, show_alert=True)
+        return
     try:
         category = q.data.split(":")[1]
     except IndexError:
         await q.answer()
         return
+    ctx.user_data["dv_popular_ok"] = await _popular_allowed(
+        ctx, update.effective_user.id)
     if category not in _labels(ctx):
         await q.answer()
         return
@@ -268,6 +306,9 @@ async def dv_category(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def dv_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
+    if not await _may_browse(ctx, update.effective_user.id):
+        await q.answer(NOT_LINKED_MSG, show_alert=True)
+        return
     try:
         _, version_s, screen_s = q.data.split(":")
         version = int(version_s)
@@ -288,6 +329,9 @@ async def dv_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def dv_info(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
+    if not await _may_browse(ctx, update.effective_user.id):
+        await q.answer(NOT_LINKED_MSG, show_alert=True)
+        return
     try:
         _, version_s, media_type, tmdb_id_s = q.data.split(":")
         version = int(version_s)

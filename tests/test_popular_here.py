@@ -125,3 +125,74 @@ async def test_tautulli_failure_reports_cant_fetch():
     tau.get_home_stats = AsyncMock(side_effect=RuntimeError("down"))
     edit = await _open_popular(_ctx(tau))
     assert "Couldn't fetch the list" in edit["text"]
+
+
+def _unlinked_ctx(tau, admin_id=999):
+    ctx = make_ctx(admin_id=admin_id, bot_data_overrides={"tautulli": tau})
+    ctx.bot_data["seerr"].discover.return_value = _tv_results()
+    return ctx
+
+
+def _tv_results():
+    from seerr import MediaResult
+    return [MediaResult("movie", 100, "T", "2026", None)]
+
+
+async def test_unlinked_user_gets_link_first_from_trending_command():
+    from bot.discover_cmd import cmd_trending
+    ctx = _unlinked_ctx(_tautulli())
+    ctx.args = []
+    upd = make_update(text="/trending", user_id=USER_ID)
+    await cmd_trending(upd, ctx)
+    assert "/link first" in upd.effective_message.reply_calls[-1]["text"]
+    ctx.bot_data["seerr"].discover.assert_not_called()
+
+
+async def test_unlinked_user_refused_on_category_page_and_info_taps():
+    from bot.discover_cmd import dv_page
+    ctx = _unlinked_ctx(_tautulli())
+    for fn, data in ((dv_category, "dvc:movies"), (dv_page, "dvp:1:1"),
+                     (dv_info, "dvi:1:movie:100")):
+        upd = make_update(callback_data=data, user_id=USER_ID)
+        await fn(upd, ctx)
+        assert upd.callback_query.edits == []
+    ctx.bot_data["seerr"].discover.assert_not_called()
+    ctx.bot.send_message.assert_not_called()
+
+
+async def test_unlinked_user_hub_trending_button_says_link_first():
+    from bot.discover_cmd import trending_hub
+    ctx = _unlinked_ctx(_tautulli())
+    upd = make_update(callback_data="rqht", user_id=USER_ID)
+    await trending_hub(upd, ctx)
+    assert "/link first" in upd.callback_query.edits[-1]["text"]
+    ctx.bot_data["seerr"].discover.assert_not_called()
+
+
+async def test_forged_popular_tap_from_unlinked_user_is_refused():
+    tau = _tautulli()
+    ctx = _unlinked_ctx(tau)
+    upd = make_update(callback_data="dvc:popular", user_id=USER_ID)
+    await dv_category(upd, ctx)
+    assert upd.callback_query.edits == []
+    tau.get_home_stats.assert_not_called()
+
+
+async def test_linked_user_sees_popular_and_my_stats_buttons():
+    from bot.discover_cmd import cmd_trending
+    from bot.callback_prefixes import MYSTATS
+    ctx = _ctx(_tautulli())
+    ctx.bot_data["seerr"].discover.return_value = _tv_results()
+    ctx.args = []
+    upd = make_update(text="/trending", user_id=USER_ID)
+    await cmd_trending(upd, ctx)
+    cbs = _cbs(upd.effective_message.reply_calls[-1]["reply_markup"])
+    assert "dvc:popular" in cbs and MYSTATS in cbs
+
+
+async def test_admin_without_link_still_gets_popular():
+    tau = _tautulli()
+    ctx = _unlinked_ctx(tau, admin_id=USER_ID)
+    upd = make_update(callback_data="dvc:popular", user_id=USER_ID)
+    await dv_category(upd, ctx)
+    assert "Alpha Film" in upd.callback_query.edits[-1]["text"]

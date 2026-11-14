@@ -177,7 +177,7 @@ async def _notices_card(store, telegram_id: int):
     return text, markup
 
 
-async def _linked(ctx, telegram_id: int) -> bool:
+async def is_linked(ctx, telegram_id: int) -> bool:
     link = await ctx.bot_data["store"].get(telegram_id)
     return link is not None and bool(link.plex_token)
 
@@ -185,7 +185,7 @@ async def _linked(ctx, telegram_id: int) -> bool:
 async def _show_card(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
     uid = update.effective_user.id
-    if not await _linked(ctx, uid):
+    if not await is_linked(ctx, uid):
         sent = await edit_or_send(
             q, "Link your Plex account first.",
             reply_markup=InlineKeyboardMarkup([[back_button("account")]]))
@@ -209,7 +209,7 @@ async def notice_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     name = {"digest": "digest", "auto": "auto_follow"}.get(
         q.data.split(":", 1)[1])
     uid = update.effective_user.id
-    if name is not None and await _linked(ctx, uid):
+    if name is not None and await is_linked(ctx, uid):
         store = ctx.bot_data["store"]
         prefs = await store.get_prefs(uid)
         await store.set_pref(uid, name, not prefs[name])

@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Broadcast**: the Admin Hub gains 📣 Broadcast. The Admin types a message, sees a preview with Send and Cancel, and it goes out as plain text under a "📣 From the Admin" header to every Linked user except the Admin, at about 25 messages a second. The preview is edited into a report of how many got it and how many couldn't be reached (for example, they blocked the bot). A restart mid-send carries on without messaging anyone twice, and finished broadcasts older than 30 days are deleted.
 
 ### Fixed
+- Trending (the /trending command, its Requests Hub button, category, page and detail buttons) is now for Linked users and the Admin only; anyone else is told to /link first. Popular here this week and the My stats button follow the same rule, and a forged tap on Popular is refused.
 - The admin login lockout now holds against a burst of parallel attempts, and the login and first-run setup pages refuse oversized or compressed form bodies.
 - Restore runs one at a time, so a double-clicked Restore can no longer overwrite the pre-restore snapshot.
 - The Webhook tab's Test works when `WEBHOOK_BIND` is set to one specific address.
