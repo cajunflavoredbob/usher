@@ -984,6 +984,18 @@ _ISSUE_KEYS_KEPT_ON_FORCE_END: Final = ("hub_origin", "submitting_ticket",
                                         "_pending_autofix_id")
 
 
+# Keys the /request flow owns (cleared on timeout/cancel/finish and when its
+# conversation is force-ended). rq_search_version is deliberately NOT here: it
+# must survive across flows so a superseded message's version-stamped buttons
+# can never collide with a fresh flow's counter restarting at 1.
+RQ_KEYS: Final = ("rq_media", "rq_search_results",
+                  "rq_results", "rq_screen", "rq_perms", "rq_is4k",
+                  "rq_seasons", "rq_selected", "rq_submitting", "rq_for")
+# The one a force-end leaves alone: it belongs to the in-flight submit, which
+# pops it itself.
+_RQ_KEYS_KEPT_ON_FORCE_END: Final = ("rq_submitting",)
+
+
 def force_end_flow_conversations(ctx: ContextTypes.DEFAULT_TYPE,
                                  update: Update) -> list:
     """End every registered flow conversation for this update's (chat, user)
@@ -1020,6 +1032,12 @@ def force_end_flow_conversations(ctx: ContextTypes.DEFAULT_TYPE,
                 # The abandoned report's draft must not seed the next one.
                 for draft_key in ISSUE_KEYS:
                     if draft_key not in _ISSUE_KEYS_KEPT_ON_FORCE_END:
+                        ctx.user_data.pop(draft_key, None)
+            if getattr(conv, "name", None) == "request":
+                # The abandoned draft must not be read by anything later
+                # (a re-link resume, the next flow).
+                for draft_key in RQ_KEYS:
+                    if draft_key not in _RQ_KEYS_KEPT_ON_FORCE_END:
                         ctx.user_data.pop(draft_key, None)
             job = conv.timeout_jobs.pop(key, None)
             if job is not None:

@@ -111,6 +111,7 @@ from bot.shared import (
     RQ_PICK_SEASONS,
     RQ_TITLE,
     RELINK_RESUME_EXECUTORS,
+    RQ_KEYS,
     edit_or_send,
     force_end_flow_conversations,
     prompt_plex_relink,
@@ -136,9 +137,7 @@ logger = logging.getLogger("usher")
 # rq_search_version is deliberately NOT here: it must survive across flows
 # so a superseded message's version-stamped buttons can never collide with a
 # fresh flow's counter restarting at 1.
-_RQ_KEYS = ("rq_media", "rq_search_results",
-            "rq_results", "rq_screen", "rq_perms", "rq_is4k",
-            "rq_seasons", "rq_selected", "rq_submitting", "rq_for")
+_RQ_KEYS = RQ_KEYS
 
 # Availability annotations for the search list. UNKNOWN/DELETED get none:
 # they're plainly requestable.
@@ -1200,9 +1199,13 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             user_id=target["seerr_id"] if target else None,
         )
     except PlexTokenInvalidError:
-        # The draft stays in user_data for the post-relink resume.
+        # The resume carries this request itself, never the draft in
+        # user_data: a /request started meanwhile and ended by a command
+        # must not be filed in its place.
         await prompt_plex_relink(update, ctx, resume_kind="submit_request",
-                                 resume_payload={},
+                                 resume_payload={"media": dict(media),
+                                                 "seasons": seasons,
+                                                 "is4k": is4k},
                                  back=back_button(hub) if hub else None)
         return ConversationHandler.END
     except NothingToRequestError:
@@ -1513,15 +1516,17 @@ def _clear_rq_state(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _resume_submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                                  payload: dict) -> None:
-    """Relink-resume executor. The draft is still in user_data unless the
-    user started a new /request meanwhile."""
+    """Relink-resume executor. Submits exactly the request the payload holds,
+    never the draft in user_data (a newer /request may have replaced it). A
+    marker with no payload request (written before the payload carried one)
+    is treated as a lost draft."""
     if user_in_conversation(ctx, update, "request"):
         await update.effective_message.reply_text(
             "You've started a new /request since then, so I didn't auto-submit "
             "the interrupted one. Finish the current one instead."
         )
         return
-    media = ctx.user_data.get("rq_media")
+    media = payload.get("media")
     if not media:
         await update.effective_message.reply_text(
             "The interrupted request's draft is gone. /request to start over.")
@@ -1535,13 +1540,13 @@ async def _resume_submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         return
     seasons = None
     if media["type"] == "tv":
-        seasons = sorted(ctx.user_data.get("rq_selected") or ()) or None
+        seasons = sorted(payload.get("seasons") or ()) or None
         if not seasons:
             await update.effective_message.reply_text(
                 "The interrupted request lost its season selection. "
                 "/request to start over.")
             return
-    is4k = bool(ctx.user_data.get("rq_is4k"))
+    is4k = bool(payload.get("is4k"))
     seerr: SeerrClient = ctx.bot_data["seerr"]
     label = _media_label(media)
     if is4k:

@@ -637,16 +637,15 @@ async def test_page_tap_on_superseded_search_toasts():
 
 async def test_resume_submit_request_resubmits_at_chosen_tier():
     from bot.request_flow import _resume_submit_request
-    ctx = _linked_ctx(user_data={
-        "rq_media": {"type": "movie", "tmdb_id": 550, "title": "Movie",
-                     "year": "2020"},
-        "rq_is4k": True,
-    })
+    ctx = _linked_ctx()
     ctx.bot_data["conversations"] = {}
     ctx.bot_data["seerr"].create_request.return_value = CreatedRequest(
         id=9, status=REQUEST_STATUS_APPROVED)
     upd = make_update(text="resumed", user_id=USER_ID)
-    await _resume_submit_request(upd, ctx, {})
+    await _resume_submit_request(upd, ctx, {
+        "media": {"type": "movie", "tmdb_id": 550, "title": "Movie",
+                  "year": "2020"},
+        "seasons": None, "is4k": True})
     kwargs = ctx.bot_data["seerr"].create_request.call_args.kwargs
     assert kwargs["is4k"] is True
     assert kwargs["as_plex_token"] == "plex-abc"
@@ -655,15 +654,15 @@ async def test_resume_submit_request_resubmits_at_chosen_tier():
 
 async def test_resume_submit_request_sends_a_progress_card():
     from bot.request_flow import _resume_submit_request
-    ctx = _linked_ctx(user_data={
-        "rq_media": {"type": "movie", "tmdb_id": 550, "title": "Movie",
-                     "year": "2020"},
-    })
+    ctx = _linked_ctx()
     ctx.bot_data["conversations"] = {}
     ctx.bot_data["seerr"].create_request.return_value = CreatedRequest(
         id=9, status=REQUEST_STATUS_APPROVED)
     upd = make_update(text="resumed", user_id=USER_ID)
-    await _resume_submit_request(upd, ctx, {})
+    await _resume_submit_request(upd, ctx, {
+        "media": {"type": "movie", "tmdb_id": 550, "title": "Movie",
+                  "year": "2020"},
+        "seasons": None, "is4k": False})
     ctx.bot.send_message.assert_awaited_once()
     kwargs = ctx.bot_data["store"].add_progress_card.call_args.kwargs
     assert kwargs["user_id"] == USER_ID
@@ -1121,16 +1120,15 @@ async def test_old_list_tap_does_not_replace_an_open_request_draft():
 
 async def test_resume_submit_request_tv_stores_and_names_the_seasons():
     from bot.request_flow import _resume_submit_request
-    ctx = _linked_ctx(user_data={
-        "rq_media": {"type": "tv", "tmdb_id": 1399, "title": "Show",
-                     "year": "2020"},
-        "rq_selected": {3, 1, 2},
-    })
+    ctx = _linked_ctx()
     ctx.bot_data["conversations"] = {}
     ctx.bot_data["seerr"].create_request.return_value = CreatedRequest(
         id=9, status=REQUEST_STATUS_APPROVED)  # Seerr lists no seasons
     upd = make_update(text="resumed", user_id=USER_ID)
-    await _resume_submit_request(upd, ctx, {})
+    await _resume_submit_request(upd, ctx, {
+        "media": {"type": "tv", "tmdb_id": 1399, "title": "Show",
+                  "year": "2020"},
+        "seasons": [3, 1, 2], "is4k": False})
     assert ctx.bot_data["seerr"].create_request.call_args.kwargs["seasons"] == [1, 2, 3]
     assert "S1-S3" in upd.effective_message.reply_calls[0]["text"]
     kwargs = ctx.bot_data["store"].add_progress_card.call_args.kwargs
