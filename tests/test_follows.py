@@ -118,6 +118,24 @@ async def test_detail_card_offers_follow_to_linked_user_only():
     assert not any(c.startswith("fol") for c in _cbs(kb))
 
 
+async def test_group_detail_card_offers_follow_and_remaining_to_the_owner():
+    """In a group the chat id is not the user id: the Link is looked up by
+    the card's owner, so a Linked owner still gets both buttons."""
+    from seerr import SeasonAvailability
+    show = MediaResult("tv", SHOW, "T", "2008", None)
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    link = make_link(telegram_id=USER_ID)
+    ctx.bot_data["store"].get = AsyncMock(
+        side_effect=lambda tid: link if tid == USER_ID else None)
+    ctx.bot_data["seerr"].get_tv_season_availability.return_value = [
+        SeasonAvailability(1, True)]
+    group_id = -1001234567890
+    await send_detail_card(ctx, group_id, show, owner_id=USER_ID)
+    kb = ctx.bot.send_message.call_args.kwargs["reply_markup"]
+    assert f"folad:{SHOW}" in _cbs(kb)
+    assert f"rqrem:{SHOW}" in _cbs(kb)
+
+
 async def test_show_availability_notice_has_watch_now_and_follow():
     app = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID)).application
     app.bot_data["seerr"].get_media_url.return_value = "https://plex.example/x"

@@ -100,14 +100,14 @@ async def send_detail_card(ctx, chat_id: int, r: MediaResult,
     caption = build_card_caption(r)
     following = None
     remaining = False
+    viewer_id = owner_id if owner_id is not None else chat_id
     if r.media_type == "tv":
-        following = await follow_state(ctx.bot_data, chat_id, r.tmdb_id)
+        following = await follow_state(ctx.bot_data, viewer_id, r.tmdb_id)
         # Only a Linked user (or the Admin) may request, so only they get it.
         if following is not None:
             left = await requestable_seasons(ctx.bot_data["seerr"], r.tmdb_id)
             remaining = bool(left)
-    watchlist = await watchlist_allowed(
-        ctx.bot_data, owner_id if owner_id is not None else chat_id)
+    watchlist = await watchlist_allowed(ctx.bot_data, viewer_id)
     kb = card_keyboard(r, following, remaining, watchlist)
     if r.poster_path:
         try:
