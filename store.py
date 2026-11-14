@@ -247,6 +247,10 @@ class UserStore:
         # Serializes DB access against maintenance (webui restore swaps the
         # DB file under us); see _run.
         self.maintenance_lock = asyncio.Lock()
+        # The Admin's Telegram id, set by the bot at startup: a removal by
+        # Plex username never unlinks this Link (the Admin's stored username
+        # can collide with a Share holder's).
+        self.admin_telegram_id: Optional[int] = None
         self._init_schema()
         self._migrate_schema()
 
@@ -1434,8 +1438,8 @@ class UserStore:
         return await self._run(_do)
 
     async def unlink_plex_username(self, plex_username: str) -> list[int]:
-        """Unlink every Link whose Plex username matches (case-insensitive);
-        returns the telegram ids unlinked."""
+        """Unlink every Link whose Plex username matches (case-insensitive),
+        except the Admin's; returns the telegram ids unlinked."""
         if not plex_username:
             return []
 
@@ -1444,7 +1448,8 @@ class UserStore:
                 ids = [r[0] for r in c.execute(
                     "SELECT telegram_id FROM user_mapping "
                     "WHERE LOWER(plex_username) = LOWER(?)",
-                    (plex_username,)).fetchall()]
+                    (plex_username,)).fetchall()
+                    if r[0] != self.admin_telegram_id]
                 c.executemany("DELETE FROM user_mapping WHERE telegram_id = ?",
                               [(i,) for i in ids])
                 return ids

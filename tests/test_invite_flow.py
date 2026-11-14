@@ -815,3 +815,24 @@ async def test_a_share_plex_404s_on_is_forgotten_and_its_holder_unlinked(
     assert await remove_share_and_forget(fresh_store, plex, "tok", 71) is True
     assert await fresh_store.get(5) is None
     assert await fresh_store.get_share_expiry(71) is None
+
+
+async def test_unlink_by_username_never_unlinks_the_admin(fresh_store):
+    fresh_store.admin_telegram_id = 5
+    await _linked(fresh_store, 5, "friend")
+    await _linked(fresh_store, 6, "Friend")
+    assert await fresh_store.unlink_plex_username("friend") == [6]
+    assert await fresh_store.get(5) is not None
+    assert await fresh_store.get(6) is None
+
+
+async def test_removing_a_share_keeps_an_admin_link_with_the_same_username(
+        fresh_store):
+    from bot.invite_flow import remove_share_and_forget
+    fresh_store.admin_telegram_id = 5
+    await _linked(fresh_store, 5, "friend")
+    share = PlexShare(id=71, email="friend@example.com", username="friend",
+                      accepted=True, all_libraries=True)
+    await remove_share_and_forget(fresh_store, _plex_with_share(share),
+                                  "tok", 71)
+    assert await fresh_store.get(5) is not None

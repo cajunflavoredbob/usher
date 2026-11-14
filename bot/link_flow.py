@@ -318,13 +318,18 @@ async def _finalize_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         logger.exception("plex get_user failed")
         plex_user = None
 
+    if plex_user is None:
+        # The Seerr display name is not a Plex username; storing it would let
+        # a Share removal by username unlink the wrong person. Store none.
+        logger.warning("Linking %s without a Plex username: plex.tv user "
+                       "lookup failed", tg_id)
     await store.link_with_plex(
         telegram_id=tg_id,
         seerr_id=seerr_id,
         seerr_display=display,
         plex_token=auth_token,
         plex_uuid=plex_user.uuid if plex_user else "",
-        plex_username=plex_user.username if plex_user else display,
+        plex_username=plex_user.username if plex_user else "",
     )
 
     # HTML + escape: a Plex display name containing `_` or `*` makes

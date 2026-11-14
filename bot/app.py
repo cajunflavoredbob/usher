@@ -521,6 +521,7 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.bot_data["settings_path"] = settings_path
     app.bot_data["db_path"] = db_path
     app.bot_data["store"] = user_store
+    user_store.admin_telegram_id = admin_id
     app.bot_data["plex"] = plex
     app.bot_data["admin_id"] = admin_id
     app.bot_data["http_port"] = http_port

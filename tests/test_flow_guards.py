@@ -185,6 +185,37 @@ async def test_finalize_link_uses_html_and_escapes_display_name():
     assert "we_ird*&lt;name&gt;" in kwargs["text"]
 
 
+async def test_finalize_link_stores_no_username_when_plex_lookup_fails(caplog):
+    upd = make_update(text="", user_id=42)
+    ctx = make_ctx()
+    ctx.bot_data["plex"] = SimpleNamespace(
+        get_user=AsyncMock(side_effect=RuntimeError("plex.tv down")))
+    ctx.bot_data["seerr"].login_with_plex = AsyncMock(
+        return_value=(7, "Seerr Display"))
+    ctx.bot_data["store"].link_with_plex = AsyncMock()
+    with caplog.at_level("WARNING", logger="usher"):
+        await _finalize_link(upd, ctx, "tok")
+    kwargs = ctx.bot_data["store"].link_with_plex.call_args.kwargs
+    assert kwargs["plex_username"] == ""
+    assert kwargs["seerr_display"] == "Seerr Display"
+    assert any("without a Plex username" in r.getMessage()
+               for r in caplog.records)
+
+
+async def test_finalize_link_stores_the_plex_tv_username_when_found():
+    upd = make_update(text="", user_id=42)
+    ctx = make_ctx()
+    ctx.bot_data["plex"] = SimpleNamespace(get_user=AsyncMock(
+        return_value=SimpleNamespace(uuid="u1", username="plexname")))
+    ctx.bot_data["seerr"].login_with_plex = AsyncMock(
+        return_value=(7, "Seerr Display"))
+    ctx.bot_data["store"].link_with_plex = AsyncMock()
+    await _finalize_link(upd, ctx, "tok")
+    kwargs = ctx.bot_data["store"].link_with_plex.call_args.kwargs
+    assert kwargs["plex_username"] == "plexname"
+    assert kwargs["plex_uuid"] == "u1"
+
+
 import pytest as _pytest
 
 

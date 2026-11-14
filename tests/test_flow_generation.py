@@ -427,3 +427,19 @@ def test_every_step_of_every_registered_conversation_is_guarded(monkeypatch):
         assert handlers
         for h in handlers:
             assert getattr(h.callback, "_flow_guarded", False), (conv.name, h)
+
+
+def test_build_app_tells_the_store_who_the_admin_is(monkeypatch):
+    from pathlib import Path
+    from unittest.mock import MagicMock
+    import bot.app as app_mod
+
+    monkeypatch.setattr(app_mod, "_build_clients_from_settings", lambda app: None)
+    settings = MagicMock()
+    settings.settings.telegram_bot_token = "123:abc"
+    settings.settings.admin_telegram_id = 77
+    store = MagicMock()
+    app_mod._build_app(settings, b"secret", store, MagicMock(),
+                       Path("."), Path("settings.json"), ":memory:",
+                       8080, "127.0.0.1")
+    assert store.admin_telegram_id == 77
