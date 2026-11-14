@@ -45,6 +45,26 @@ def _latest(records: list[dict], current: str) -> str:
     return max([current, *dates])
 
 
+def _has_earlier(records: list[dict], rec_id) -> bool:
+    """True when an import record older than `rec_id` (history ids only
+    grow) exists: this import is an upgrade or a re-import, not new."""
+    return any(isinstance(r, dict) and isinstance(r.get("id"), int)
+               and r["id"] < rec_id for r in records)
+
+
+def _mark_before_failed(records: list[dict], since: str,
+                        failed: list[str]) -> str:
+    """The mark when some imports could not be checked: it stops short of the
+    earliest of them, so the next poll reads those again (the store
+    de-duplicates the rest)."""
+    if not failed:
+        return _latest(records, since)
+    cap = min(failed)
+    return _latest([r for r in records if isinstance(r, dict)
+                    and isinstance(r.get("date"), str)
+                    and r["date"] < cap], since)
+
+
 async def _poll_radarr(store, radarr) -> None:
     since = await store.get_poller_mark(RADARR_MARK)
     if since is None:
@@ -52,15 +72,33 @@ async def _poll_radarr(store, radarr) -> None:
         await store.set_poller_mark(RADARR_MARK, _now_iso())
         return
     records = await radarr.get_history_imports_since(since)
+    failed: list[str] = []
     for rec in records:
         movie = rec.get("movie") or {}
         tmdb_id = movie.get("tmdbId") or 0
         if not tmdb_id or rec.get("id") is None:
             continue
+        movie_id = rec.get("movieId") or movie.get("id")
+        if movie_id is not None:
+            # An import with an earlier import on record is an upgrade or a
+            # Fix, not new content. On a lookup error, skip it this pass and
+            # read it again next poll rather than ping falsely.
+            try:
+                prior = _has_earlier(
+                    await radarr.get_import_records(movie_id), rec["id"])
+            except Exception:
+                logger.warning("Radarr import history of movie %s failed",
+                               movie_id, exc_info=True)
+                if isinstance(rec.get("date"), str):
+                    failed.append(rec["date"])
+                continue
+            if prior:
+                continue
         await store.add_new_content(
             f"radarr:{rec['id']}", "movie", tmdb_id,
             movie.get("title") or "?")
-    await store.set_poller_mark(RADARR_MARK, _latest(records, since))
+    await store.set_poller_mark(
+        RADARR_MARK, _mark_before_failed(records, since, failed))
 
 
 async def _poll_sonarr(store, sonarr) -> None:
@@ -70,6 +108,7 @@ async def _poll_sonarr(store, sonarr) -> None:
         return
     records = await sonarr.get_history_imports_since(since)
     series_cache: dict[int, object] = {}
+    failed: list[str] = []
     for rec in records:
         series_id = rec.get("seriesId")
         if series_id is None or rec.get("id") is None:
@@ -88,10 +127,25 @@ async def _poll_sonarr(store, sonarr) -> None:
             if nums is None:
                 continue
             season, number = nums
+        if rec.get("episodeId") is not None:
+            # See _poll_radarr: an earlier import means an upgrade or a Fix.
+            try:
+                prior = _has_earlier(
+                    await sonarr.get_import_records(rec["episodeId"]),
+                    rec["id"])
+            except Exception:
+                logger.warning("Sonarr import history of episode %s failed",
+                               rec["episodeId"], exc_info=True)
+                if isinstance(rec.get("date"), str):
+                    failed.append(rec["date"])
+                continue
+            if prior:
+                continue
         await store.add_new_content(
             f"sonarr:{rec['id']}", "episode", series["tmdb_id"],
             series["title"], season, number, tvdb_id=series["tvdb_id"])
-    await store.set_poller_mark(SONARR_MARK, _latest(records, since))
+    await store.set_poller_mark(
+        SONARR_MARK, _mark_before_failed(records, since, failed))
 
 
 def _int(value):
@@ -169,7 +223,21 @@ async def _expand_episodes(tautulli, item: dict) -> list[tuple[dict, object]]:
     return out
 
 
-async def _poll_tautulli(store, tautulli) -> None:
+async def _was_imported_before(arr, find_id) -> bool:
+    """With a configured Radarr or Sonarr that knows the item: True when it
+    has two or more import records, the newest being the one Tautulli just
+    listed, so this add is an upgrade or a re-import. False when there is no
+    such client, or it does not know the item (today's behavior). A lookup
+    error propagates so the caller reads the item again."""
+    if arr is None:
+        return False
+    item_id = await find_id()
+    if item_id is None:
+        return False
+    return len(await arr.get_import_records(item_id)) >= 2
+
+
+async def _poll_tautulli(store, tautulli, radarr=None, sonarr=None) -> None:
     """Record what Tautulli lists as recently added since its mark (epoch
     seconds). A season or show row is expanded to its episodes. An item with
     no TMDb id yet (Plex not matched) holds the mark back so it is read again
@@ -196,6 +264,25 @@ async def _poll_tautulli(store, tautulli) -> None:
                 await tautulli.get_metadata(show_key))
         return show_ids[show_key]
 
+    sonarr_episodes: dict = {}
+
+    async def sonarr_episode_id(tvdb, season, number):
+        if not tvdb:
+            return None
+        if tvdb not in sonarr_episodes:
+            sonarr_episodes[tvdb] = (await sonarr.get_series_by_tvdb(tvdb), {})
+        series, seasons = sonarr_episodes[tvdb]
+        if series is None:
+            return None
+        if season not in seasons:
+            seasons[season] = {e.episode: e.id for e in
+                               await sonarr.get_episodes(series.id, season)}
+        return seasons[season].get(number)
+
+    async def radarr_movie_id(tmdb):
+        movie = await radarr.get_movie_by_tmdb(tmdb)
+        return movie.id if movie is not None else None
+
     for item in items:
         kind = item.get("media_type")
         key = item.get("rating_key")
@@ -210,6 +297,9 @@ async def _poll_tautulli(store, tautulli) -> None:
                     tmdb, _tvdb = ids_from_guids(
                         await tautulli.get_metadata(key))
                 if tmdb:
+                    if await _was_imported_before(
+                            radarr, lambda: radarr_movie_id(tmdb)):
+                        continue
                     await store.add_new_content(
                         f"tautulli:{key}", "movie", tmdb,
                         item.get("title") or "?")
@@ -237,6 +327,9 @@ async def _poll_tautulli(store, tautulli) -> None:
                          or item.get("parent_title")
                          or (item.get("title") if kind == "show" else None)
                          or "?")
+                if await _was_imported_before(
+                        sonarr, lambda: sonarr_episode_id(tvdb, season, number)):
+                    continue
                 await store.add_new_content(
                     f"tautulli:{ep_key}", "episode", tmdb, title, season,
                     number, tvdb_id=tvdb or 0)
@@ -322,7 +415,11 @@ async def poll_new_content(ctx) -> None:
         if client is None:
             continue
         try:
-            await poll(store, client)
+            if key == "tautulli":
+                await poll(store, client, radarr=app.bot_data.get("radarr"),
+                           sonarr=app.bot_data.get("sonarr"))
+            else:
+                await poll(store, client)
         except Exception:
             ok = False
             logger.warning("New-content poll of %s failed", key, exc_info=True)

@@ -401,6 +401,26 @@ class SonarrClient:
         return json_or_raise(r, service=_SERVICE, what="history since",
                              expect=list)
 
+    async def get_import_records(self, episode_id: int) -> list[dict]:
+        """GET /history for one episode: its `downloadFolderImported`
+        records (each with id and date), newest first. Pages up to
+        _HISTORY_MAX_PAGES x _HISTORY_PAGE_SIZE records deep; the poller only
+        asks whether an import earlier than a known one exists."""
+        out: list[dict] = []
+        for page in range(1, _HISTORY_MAX_PAGES + 1):
+            r = await execute(
+                self._client, "GET", "/history", service=_SERVICE,
+                params={"episodeId": episode_id, "page": page,
+                        "pageSize": _HISTORY_PAGE_SIZE,
+                        "sortKey": "date", "sortDirection": "descending"})
+            records = json_or_raise(
+                r, service=_SERVICE, what="episode history").get("records") or []
+            out.extend(x for x in records if isinstance(x, dict)
+                       and x.get("eventType") == "downloadFolderImported")
+            if len(records) < _HISTORY_PAGE_SIZE:
+                break
+        return out
+
     async def get_series_ids(self, series_id: int) -> Optional[dict]:
         """GET /series/{id}: {tmdb_id, tvdb_id, title} for a series id, or
         None when Sonarr has no such series."""

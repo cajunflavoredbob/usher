@@ -37,7 +37,8 @@ def _arr():
     return SimpleNamespace(
         get_history_imports_since=AsyncMock(return_value=[]),
         get_series_ids=AsyncMock(return_value=None),
-        get_episode_numbers=AsyncMock(return_value=None))
+        get_episode_numbers=AsyncMock(return_value=None),
+        get_import_records=AsyncMock(return_value=[]))
 
 
 def _ctx(store, *, tautulli=None, radarr=None, sonarr=None):
@@ -112,9 +113,12 @@ async def test_unlinking_switches_to_arr_without_rerecording(fresh_store):
     await poll_new_content(_ctx(fresh_store, tautulli=tau))
     # Radarr's history holds the same movie from before; its mark moved on
     # while Tautulli was linked, so it asks only for what is newer.
-    radarr = SimpleNamespace(get_history_imports_since=AsyncMock(
-        return_value=[{"id": 9, "date": "2026-11-14T10:00:00Z",
-                       "movie": {"tmdbId": 550, "title": "Fight Club"}}]))
+    radarr = SimpleNamespace(
+        get_import_records=AsyncMock(return_value=[]),
+        get_history_imports_since=AsyncMock(
+            return_value=[{"id": 9, "date": "2026-11-14T10:00:00Z",
+                           "movie": {"tmdbId": 550,
+                                     "title": "Fight Club"}}]))
     await poll_new_content(_ctx(fresh_store, radarr=radarr))
     since = radarr.get_history_imports_since.call_args.args[0]
     assert since > "2026-11-14T09:00:00Z"
@@ -123,11 +127,55 @@ async def test_unlinking_switches_to_arr_without_rerecording(fresh_store):
 
 async def test_without_tautulli_the_arr_history_is_read_as_before(fresh_store):
     await fresh_store.set_poller_mark("radarr_history", "2026-11-14T09:00:00Z")
-    radarr = SimpleNamespace(get_history_imports_since=AsyncMock(
-        return_value=[{"id": 9, "date": "2026-11-14T10:00:00Z",
-                       "movie": {"tmdbId": 550, "title": "Fight Club"}}]))
+    radarr = SimpleNamespace(
+        get_import_records=AsyncMock(return_value=[]),
+        get_history_imports_since=AsyncMock(
+            return_value=[{"id": 9, "date": "2026-11-14T10:00:00Z",
+                           "movie": {"tmdbId": 550,
+                                     "title": "Fight Club"}}]))
     await poll_new_content(_ctx(fresh_store, radarr=radarr))
     assert [r[1] for r in await _rows(fresh_store)] == [550]
+
+
+async def test_a_reimported_episode_is_skipped_with_sonarr_configured(
+        fresh_store):
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    tau = _tautulli([_episode(2, 1700000600, 1, 1),
+                     _episode(3, 1700000700, 1, 2)])
+    sonarr = SimpleNamespace(
+        get_series_by_tvdb=AsyncMock(return_value=SimpleNamespace(id=5)),
+        get_episodes=AsyncMock(return_value=[
+            SimpleNamespace(id=11, episode=1), SimpleNamespace(id=12, episode=2)]),
+        get_import_records=AsyncMock(
+            side_effect=lambda eid: [{"id": 1}, {"id": 2}] if eid == 11
+            else [{"id": 3}]))
+    await poll_new_content(_ctx(fresh_store, tautulli=tau, sonarr=sonarr))
+    assert await _rows(fresh_store) == [
+        ("episode", 1396, "Breaking Bad", 1, 2)]
+    sonarr.get_series_by_tvdb.assert_awaited_once_with(81189)
+
+
+async def test_a_reimported_movie_is_skipped_with_radarr_configured(
+        fresh_store):
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    tau = _tautulli([_movie(1, 1700000500, ["tmdb://550"])])
+    radarr = SimpleNamespace(
+        get_movie_by_tmdb=AsyncMock(return_value=SimpleNamespace(id=4)),
+        get_import_records=AsyncMock(return_value=[{"id": 1}, {"id": 2}]))
+    await poll_new_content(_ctx(fresh_store, tautulli=tau, radarr=radarr))
+    assert await _rows(fresh_store) == []
+
+
+async def test_an_arr_lookup_error_leaves_the_tautulli_item_for_next_poll(
+        fresh_store):
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    added = int(__import__("time").time()) - 60
+    tau = _tautulli([_movie(1, added, ["tmdb://550"])])
+    radarr = SimpleNamespace(
+        get_movie_by_tmdb=AsyncMock(side_effect=RuntimeError("down")))
+    await poll_new_content(_ctx(fresh_store, tautulli=tau, radarr=radarr))
+    assert await _rows(fresh_store) == []
+    assert int(await fresh_store.get_poller_mark("tautulli_added")) < added
 
 
 def _paged(rows):

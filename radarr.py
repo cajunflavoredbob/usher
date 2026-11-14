@@ -256,6 +256,13 @@ class RadarrClient:
         return json_or_raise(r, service=_SERVICE, what="history since",
                              expect=list)
 
+    async def get_import_records(self, movie_id: int) -> list[dict]:
+        """GET /history/movie: the movie's `downloadFolderImported` records
+        (each with id and date), newest first."""
+        return [x for x in await self._movie_history(movie_id)
+                if isinstance(x, dict)
+                and x.get("eventType") == "downloadFolderImported"]
+
     async def get_calendar(self, start: str, end: str) -> list[dict]:
         """GET /calendar: movies with an `inCinemas`, `digitalRelease` or
         `physicalRelease` date from `start` to `end` (YYYY-MM-DD)."""

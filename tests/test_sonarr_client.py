@@ -395,3 +395,31 @@ async def test_fix_result_names_the_sonarr_episode_title():
     result = await client.auto_fix_episode(tvdb_id=42, season=1, episode=3)
     await client.close()
     assert 'S01E03 "Three"' in result.message
+
+
+async def test_get_import_records_keeps_only_imports_and_pages():
+    from sonarr import _HISTORY_PAGE_SIZE
+
+    pages = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v3/history"
+        assert request.url.params["episodeId"] == "501"
+        page = int(request.url.params["page"])
+        pages.append(page)
+        if page == 1:
+            return httpx.Response(200, json={"records": [
+                {"id": i, "eventType": "grabbed"}
+                for i in range(_HISTORY_PAGE_SIZE)]})
+        return httpx.Response(200, json={"records": [
+            {"id": 9, "eventType": "downloadFolderImported"},
+            {"id": 8, "eventType": "grabbed"}]})
+
+    client = SonarrClient("http://sonarr.test", "key")
+    client._client = httpx.AsyncClient(
+        base_url="http://sonarr.test/api/v3",
+        transport=httpx.MockTransport(handler))
+    records = await client.get_import_records(501)
+    await client.close()
+    assert [r["id"] for r in records] == [9]
+    assert pages == [1, 2]

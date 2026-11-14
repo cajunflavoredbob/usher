@@ -150,7 +150,8 @@ def _sonarr(records):
         get_history_imports_since=AsyncMock(return_value=records),
         get_series_ids=AsyncMock(return_value={
             "tmdb_id": SHOW, "tvdb_id": 81189, "title": "Breaking Bad"}),
-        get_episode_numbers=AsyncMock(return_value=None))
+        get_episode_numbers=AsyncMock(return_value=None),
+        get_import_records=AsyncMock(return_value=[]))
 
 
 def _rec(rec_id, season, ep, date="2026-11-14T10:00:00Z"):
@@ -198,7 +199,8 @@ async def test_poller_records_radarr_movies(fresh_store):
     await fresh_store.set_poller_mark("radarr_history", "2026-11-14T09:00:00Z")
     radarr = SimpleNamespace(get_history_imports_since=AsyncMock(return_value=[
         {"id": 9, "date": "2026-11-14T10:00:00Z",
-         "movie": {"tmdbId": 550, "title": "Fight Club"}}]))
+         "movie": {"tmdbId": 550, "title": "Fight Club"}}]),
+        get_import_records=AsyncMock(return_value=[]))
     ctx = _app(fresh_store, radarr=radarr)
     await poll_new_content(ctx)
     await poll_new_content(ctx)
@@ -214,6 +216,63 @@ async def test_a_failing_source_keeps_its_mark(fresh_store):
     await poll_new_content(_app(fresh_store, sonarr=sonarr))
     assert await fresh_store.get_poller_mark("sonarr_history") == (
         "2026-11-14T09:00:00Z")
+
+
+async def _poll_once(store, *, sonarr):
+    await store.set_poller_mark("sonarr_history", "2026-11-14T09:00:00Z")
+    await store.add_follow(USER_ID, SHOW, 0, "Breaking Bad")
+    ctx = _app(store, sonarr=sonarr)
+    await poll_new_content(ctx)
+    return ctx
+
+
+async def test_an_upgrade_import_is_not_recorded_or_pinged(fresh_store):
+    sonarr = _sonarr([_rec(50, 1, 1)])
+    sonarr.get_import_records.return_value = [
+        {"id": 50, "date": "2026-11-14T10:00:00Z"},
+        {"id": 7, "date": "2026-01-02T10:00:00Z"}]
+    ctx = await _poll_once(fresh_store, sonarr=sonarr)
+    assert ctx.application.bot.send_message.await_count == 0
+    assert await fresh_store.list_new_content_between(
+        "2000-01-01 00:00:00", "2100-01-01 00:00:00") == []
+    assert await fresh_store.get_poller_mark("sonarr_history") == (
+        "2026-11-14T10:00:00Z")
+
+
+async def test_a_first_ever_import_is_recorded_and_pinged(fresh_store):
+    sonarr = _sonarr([_rec(50, 1, 1)])
+    sonarr.get_import_records.return_value = [
+        {"id": 50, "date": "2026-11-14T10:00:00Z"}]
+    ctx = await _poll_once(fresh_store, sonarr=sonarr)
+    sonarr.get_import_records.assert_awaited_once_with(50)
+    assert ctx.application.bot.send_message.await_count == 1
+    assert len(await fresh_store.list_new_content_between(
+        "2000-01-01 00:00:00", "2100-01-01 00:00:00")) == 1
+
+
+async def test_a_history_lookup_error_pings_nothing_and_is_read_again(
+        fresh_store):
+    sonarr = _sonarr([_rec(50, 1, 1, "2026-11-14T10:00:00Z"),
+                      _rec(51, 1, 2, "2026-11-14T10:05:00Z")])
+    sonarr.get_import_records.side_effect = [
+        RuntimeError("down"), [{"id": 51, "date": "2026-11-14T10:05:00Z"}]]
+    ctx = await _poll_once(fresh_store, sonarr=sonarr)
+    assert ctx.application.bot.send_message.await_count == 1  # E02 only
+    # The mark stops before the failed import so it is read again.
+    assert await fresh_store.get_poller_mark("sonarr_history") == (
+        "2026-11-14T09:00:00Z")
+
+
+async def test_a_radarr_upgrade_is_not_recorded(fresh_store):
+    await fresh_store.set_poller_mark("radarr_history", "2026-11-14T09:00:00Z")
+    radarr = SimpleNamespace(
+        get_history_imports_since=AsyncMock(return_value=[
+            {"id": 9, "date": "2026-11-14T10:00:00Z", "movieId": 4,
+             "movie": {"tmdbId": 550, "title": "Fight Club"}}]),
+        get_import_records=AsyncMock(return_value=[{"id": 9}, {"id": 2}]))
+    await poll_new_content(_app(fresh_store, radarr=radarr))
+    radarr.get_import_records.assert_awaited_once_with(4)
+    assert await fresh_store.add_new_content("radarr:9", "movie", 550, "x")
 
 
 # --- Follow pings -------------------------------------------------------------
