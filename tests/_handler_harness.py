@@ -143,6 +143,7 @@ def make_ctx(*, admin_id: int = 999, user_data: Optional[dict] = None,
     seerr = SimpleNamespace(
         get_issue=AsyncMock(),
         get_media_title=AsyncMock(return_value=("Movie Title", "2026")),
+        get_media_url=AsyncMock(return_value=None),
         get_tv_seasons=AsyncMock(return_value=([], 12345)),
         list_issues=AsyncMock(return_value=([], 0)),
         add_issue_comment=AsyncMock(),

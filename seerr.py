@@ -684,6 +684,16 @@ class SeerrClient:
         year = release[:4] if release else ""
         return title, year
 
+    async def get_media_url(self, media_type: str, tmdb_id: int) -> Optional[str]:
+        """Seerr's `mediaInfo.mediaUrl` (the Plex web link) for a title, or
+        None until the title is in Plex. Admin key; the availability webhook
+        carries no URL, so notices look it up by TMDb id."""
+        endpoint = "movie" if media_type == "movie" else "tv"
+        r = await execute(self._client, "GET", f"/{endpoint}/{tmdb_id}", service=_SERVICE)
+        d = _json_or_raise(r, what="media url")
+        url = (d.get("mediaInfo") or {}).get("mediaUrl")
+        return url if isinstance(url, str) and url.startswith(("http://", "https://")) else None
+
     async def add_issue_comment(
         self,
         issue_id: int,

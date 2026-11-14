@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Watch now**: the "available" DM to the Requester and the Subscription notice gain a ▶️ Watch now button that opens the title in Plex. It appears once Seerr has a Plex link for the title; without one the notice is sent as before.
 - **Tautulli**: link Tautulli in the web admin panel (URL, API key, Test, Save, Remove the saved key) and see its version or error in /status. Nothing else changes until later releases use the link.
 - **Playback details on Tickets**: with Tautulli linked, the Admin's new-Ticket DM and Ticket card show how the Reporter last played that title (player, platform, direct play or transcode, video and audio codecs, date). Left out when there is no matching play; never shown to the Reporter.
 - **Popular here this week**: with Tautulli linked, the Trending list gains a category of the server's most watched movies and shows over 7 days, as titles only (no names, no play counts). Titles Tautulli can match to TMDb open detail cards and Requests as usual.

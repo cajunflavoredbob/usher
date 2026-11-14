@@ -28,6 +28,7 @@ from bot.shared import (
     record_btn,
     require_seerr,
     token_for,
+    watch_now_markup,
 )
 
 logger = logging.getLogger("usher")
@@ -182,13 +183,17 @@ async def fan_out_availability(app, media_type: str, tmdb_id: int,
     body = "🔔 Now available in Plex!"
     if title_line:
         body += f"\n{html.escape(title_line)}"
+    markup = None
+    if any(c not in already_notified for c in subscribers):
+        markup = await watch_now_markup(app.bot_data.get("seerr"),
+                                        media_type, tmdb_id)
     for chat_id in subscribers:
         if chat_id in already_notified:
             continue
         try:
             await app.bot.send_message(
                 chat_id=chat_id, text=body, parse_mode="HTML",
-                disable_web_page_preview=True)
+                disable_web_page_preview=True, reply_markup=markup)
             logger.info("Notified subscriber telegram_id=%d of availability",
                         chat_id)
         except Exception as exc:

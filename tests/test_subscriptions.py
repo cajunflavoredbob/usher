@@ -177,3 +177,103 @@ async def test_long_subscription_list_stays_under_telegram_limits():
     assert len(buttons) == SUBSCRIPTIONS_SHOWN_MAX < 100
     assert len(sent["text"]) <= 4096
     assert "Showing the first" in sent["text"]
+
+
+# --- Watch now button ---------------------------------------------------------
+
+PLEX_URL = "https://app.plex.tv/desktop/#!/server/abc/details?key=%2Flibrary%2Fmetadata%2F9"
+
+
+def _buttons(call):
+    markup = call.kwargs.get("reply_markup")
+    if markup is None:
+        return []
+    return [(b.text, b.url) for row in markup.inline_keyboard for b in row]
+
+
+async def test_fan_out_carries_watch_now_when_media_url_found():
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    app = ctx.application
+    app.bot_data["seerr"].get_media_url = AsyncMock(return_value=PLEX_URL)
+    app.bot_data["store"].pop_subscribers = AsyncMock(return_value=[88])
+    await fan_out_availability(app, "movie", 550, "T", already_notified=set())
+    app.bot_data["seerr"].get_media_url.assert_awaited_once_with("movie", 550)
+    assert _buttons(app.bot.send_message.call_args) == [("▶️ Watch now", PLEX_URL)]
+
+
+async def test_fan_out_has_no_button_without_media_url():
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    app = ctx.application
+    app.bot_data["store"].pop_subscribers = AsyncMock(return_value=[88])
+    await fan_out_availability(app, "movie", 550, "T", already_notified=set())
+    assert _buttons(app.bot.send_message.call_args) == []
+    assert app.bot.send_message.await_count == 1
+
+
+async def test_fan_out_sends_without_button_when_lookup_errors():
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    app = ctx.application
+    app.bot_data["seerr"].get_media_url = AsyncMock(side_effect=RuntimeError("down"))
+    app.bot_data["store"].pop_subscribers = AsyncMock(return_value=[88])
+    await fan_out_availability(app, "movie", 550, "T", already_notified=set())
+    assert _buttons(app.bot.send_message.call_args) == []
+    assert "Now available" in app.bot.send_message.call_args.kwargs["text"]
+
+
+async def test_requester_available_dm_carries_watch_now():
+    from bot.webhook_handlers import handle_seerr_media
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    app = ctx.application
+    app.bot_data["seerr"].get_media_url = AsyncMock(return_value=PLEX_URL)
+    app.bot_data["store"].find_by_plex_username = AsyncMock(
+        return_value=make_link(telegram_id=USER_ID))
+    app.bot_data["store"].pop_subscribers = AsyncMock(return_value=[])
+    payload = {
+        "notification_type": "MEDIA_AVAILABLE",
+        "subject": "Some Movie (2026)",
+        "media": {"media_type": "movie", "tmdbId": 550, "status": "AVAILABLE"},
+        "request": {"request_id": "12", "requestedBy_username": "user1plex"},
+    }
+    await handle_seerr_media(app, payload)
+    assert _buttons(app.bot.send_message.call_args) == [("▶️ Watch now", PLEX_URL)]
+
+
+async def test_requester_available_dm_has_no_button_without_media_url():
+    from bot.webhook_handlers import handle_seerr_media
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    app = ctx.application
+    app.bot_data["seerr"].get_media_url = AsyncMock(side_effect=RuntimeError("x"))
+    app.bot_data["store"].find_by_plex_username = AsyncMock(
+        return_value=make_link(telegram_id=USER_ID))
+    app.bot_data["store"].pop_subscribers = AsyncMock(return_value=[])
+    payload = {
+        "notification_type": "MEDIA_AVAILABLE",
+        "subject": "Some Movie (2026)",
+        "media": {"media_type": "movie", "tmdbId": 550, "status": "AVAILABLE"},
+        "request": {"request_id": "12", "requestedBy_username": "user1plex"},
+    }
+    await handle_seerr_media(app, payload)
+    assert _buttons(app.bot.send_message.call_args) == []
+    assert "available in Plex" in app.bot.send_message.call_args.kwargs["text"]
+
+
+async def test_client_get_media_url_reads_media_info(monkeypatch):
+    import httpx
+    import seerr as seerr_mod
+
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path.endswith("/movie/550"):
+            return httpx.Response(200, json={"mediaInfo": {"mediaUrl": PLEX_URL}})
+        return httpx.Response(200, json={"mediaInfo": {}})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(seerr_mod.httpx, "AsyncClient", lambda *a, **k: real(
+        *a, **{**k, "transport": httpx.MockTransport(handler)}))
+    client = seerr_mod.SeerrClient("http://seerr.test", "key")
+    assert await client.get_media_url("movie", 550) == PLEX_URL
+    assert await client.get_media_url("tv", 1399) is None
+    assert seen[0].endswith("/movie/550") and seen[1].endswith("/tv/1399")
+    await client.close()

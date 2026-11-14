@@ -302,6 +302,28 @@ async def followup_scope_label(seerr, payload: dict, ticket_id, media_type) -> s
     return format_scope_label(media_type, season, episode)
 
 
+async def watch_now_button(seerr, media_type: str,
+                           tmdb_id: int) -> Optional[InlineKeyboardButton]:
+    """The "Watch now" URL button for a title in Plex, or None when Seerr
+    has no link yet or the lookup fails. Shared by every availability
+    notice."""
+    if seerr is None or media_type not in ("movie", "tv") or not tmdb_id:
+        return None
+    try:
+        url = await seerr.get_media_url(media_type, tmdb_id)
+    except Exception:
+        logger.warning("Watch now lookup failed (type=%s tmdb=%s)",
+                       media_type, tmdb_id, exc_info=True)
+        return None
+    return InlineKeyboardButton("▶️ Watch now", url=url) if url else None
+
+
+async def watch_now_markup(seerr, media_type: str,
+                           tmdb_id: int) -> Optional[InlineKeyboardMarkup]:
+    button = await watch_now_button(seerr, media_type, tmdb_id)
+    return InlineKeyboardMarkup([[button]]) if button else None
+
+
 async def format_media_title_line(
     seerr: Optional[SeerrClient],
     media: dict,

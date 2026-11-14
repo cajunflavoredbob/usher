@@ -25,6 +25,7 @@ from bot.shared import (
     new_ticket_dm_kb,
     record_btn,
     truncate_message,
+    watch_now_markup,
 )
 
 logger = logging.getLogger("usher")
@@ -570,8 +571,13 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
         if requester_is_admin and nt == "MEDIA_FAILED":
             own_failed_kb = admin_request_kb(
                 nt, request_id, seerr_link(cfg.seerr_public_url, media))
+        available_kb = None
+        if nt == "MEDIA_AVAILABLE":
+            available_kb = await watch_now_markup(
+                seerr, media.get("media_type"),
+                coerce_tmdb_id(media.get("tmdbId")) or 0)
         await _dm(requester_chat_id, requester_line, with_requester=False,
-                  reply_markup=own_failed_kb)
+                  reply_markup=own_failed_kb or available_kb)
         requester_dmed = True
 
     # The admin line is skipped when the admin is the requester: their own
