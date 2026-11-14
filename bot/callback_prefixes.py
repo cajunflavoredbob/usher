@@ -105,7 +105,10 @@ SHARE_REMOVE_NOW: Final = "shnow"     # shnow:<share_id> Remove now (expiry remi
 SHARE_REMOVE_YES: Final = "shnoy"     # shnoy:<share_id> the confirm's Remove
 SHARE_KEEP: Final = "shnok"           # shnok:<share_id> the confirm's Keep (puts
                                       # the reminder back)
-SHARE_RETRY: Final = "shrty"          # shrty:<share_id> Retry a failed expiry removal
+SHARE_RETRY: Final = "shrty"          # shrty:<share_id> Retry on the job's failure alert
+                                      # (removes only while the date is still due)
+SHARE_REMOVE_RETRY: Final = "shnor"   # shnor:<share_id> Retry after a failed Remove now
+                                      # (removes unconditionally)
 SHARE_MATCHES: Final = "shq"          # shq:<page> Prev/Next of typed /uninvite
                                       # matches (search text in user_data)
 

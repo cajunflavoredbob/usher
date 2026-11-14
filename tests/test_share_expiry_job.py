@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from bot.callback_prefixes import (SHARE_EXTEND, SHARE_KEEP, SHARE_LET_END,
-                                   SHARE_REMOVE_NOW, SHARE_REMOVE_YES,
-                                   SHARE_RETRY)
+                                   SHARE_REMOVE_NOW, SHARE_REMOVE_RETRY,
+                                   SHARE_REMOVE_YES, SHARE_RETRY)
 from bot.share_expiry_job import run_share_expiries, share_expiry_action
 from bot.shared import BTN_HISTORY_MAX, global_btn_gate, record_btn
 from http_util import NotFoundAPIError, TransientAPIError
@@ -325,7 +325,7 @@ async def test_retry_failure_keeps_row_and_offers_retry_again(fresh_store):
     row = await fresh_store.get_share_expiry(1)
     assert row is not None and row.last_error
     assert _buttons(upd.callback_query.edits[-1]["reply_markup"]) == [
-        f"{SHARE_RETRY}:1"]
+        f"{SHARE_REMOVE_RETRY}:1"]
 
 
 async def test_retry_when_plex_says_gone_drops_the_row(fresh_store):
@@ -345,7 +345,7 @@ async def test_buttons_are_admin_only(fresh_store):
                                        "2031-01-01 00:00:00")
     for prefix in (SHARE_EXTEND, SHARE_LET_END, SHARE_REMOVE_NOW,
                    SHARE_REMOVE_YES, SHARE_KEEP,
-                   SHARE_RETRY):
+                   SHARE_RETRY, SHARE_REMOVE_RETRY):
         ctx, upd = _tap(app, f"{prefix}:1", user_id=12345)
         await share_expiry_action(upd, ctx)
     plex.remove_share.assert_not_awaited()
@@ -425,7 +425,7 @@ async def test_confirm_and_keep_taps_reach_the_share_expiry_handler():
     app = app_mod._build_app(settings, b"secret", MagicMock(), MagicMock(),
                              Path("."), Path("settings.json"), ":memory:",
                              8080, "127.0.0.1")
-    for prefix in (SHARE_REMOVE_YES, SHARE_KEEP):
+    for prefix in (SHARE_REMOVE_YES, SHARE_KEEP, SHARE_REMOVE_RETRY):
         from telegram import CallbackQuery, Update, User
         upd = Update(update_id=1, callback_query=CallbackQuery(
             id="1", from_user=User(ADMIN_ID, "a", False),
@@ -440,3 +440,60 @@ async def test_confirm_and_keep_taps_reach_the_share_expiry_handler():
             if hit is not None:
                 taken.append(hit.callback)
         assert taken == [share_expiry_action], prefix
+
+
+async def test_remove_retry_gets_through_the_button_gate(fresh_store):
+    app, plex = await _setup(fresh_store, [_share(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2031-01-01 00:00:00")
+    upd = await _gated_tap(app, f"{SHARE_REMOVE_RETRY}:1")
+    assert upd.callback_query.markup_edits == []
+    plex.remove_share.assert_awaited_once_with("admin-tok", 1)
+
+
+async def test_failed_remove_now_retry_removes_a_share_that_is_not_due(
+        fresh_store):
+    """Remove now fails on a Share whose date is 3 days off; the Retry on
+    that failure DM must remove it, not answer "left as it is"."""
+    app, plex = await _setup(fresh_store, [_share(1)])
+    plex.remove_share.side_effect = TransientAPIError("down", service="Plex")
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2031-01-01 00:00:00")
+    upd = await _gated_tap(app, f"{SHARE_REMOVE_YES}:1")
+    failed = upd.callback_query.edits[-1]
+    assert _buttons(failed["reply_markup"]) == [f"{SHARE_REMOVE_RETRY}:1"]
+    plex.remove_share.side_effect = None
+    upd = await _gated_tap(app, f"{SHARE_REMOVE_RETRY}:1")
+    plex.remove_share.assert_awaited_with("admin-tok", 1)
+    assert await fresh_store.get_share_expiry(1) is None
+    assert "Removed" in upd.callback_query.edits[-1]["text"]
+
+
+async def test_job_alert_retry_still_leaves_a_share_that_is_not_due(
+        fresh_store):
+    app, plex = await _setup(fresh_store, [_share(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2031-01-01 00:00:00")
+    upd = await _gated_tap(app, f"{SHARE_RETRY}:1")
+    plex.remove_share.assert_not_awaited()
+    assert "left as it is" in upd.callback_query.edits[-1]["text"]
+
+
+async def test_remove_now_without_a_link_keeps_the_reminder_buttons(
+        fresh_store):
+    app, plex = await _setup(fresh_store, [_share(1)])
+    await fresh_store.unlink(ADMIN_ID)
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2031-01-01 00:00:00")
+    upd = await _gated_tap(app, f"{SHARE_REMOVE_NOW}:1")
+    edit = upd.callback_query.edits[-1]
+    assert "/link first" in edit["text"]
+    assert _buttons(edit["reply_markup"]) == [
+        f"{SHARE_EXTEND}:1", f"{SHARE_LET_END}:1", f"{SHARE_REMOVE_NOW}:1"]
+
+
+async def test_tap_on_an_old_reminder_after_the_job_removed_the_share(
+        fresh_store):
+    app, plex = await _setup(fresh_store, [])
+    upd = await _gated_tap(app, f"{SHARE_EXTEND}:1")
+    assert "already removed" in upd.callback_query.edits[-1]["text"]

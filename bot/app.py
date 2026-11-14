@@ -96,6 +96,7 @@ from bot.callback_prefixes import (
     SHARE_REMOVE_YES,
     SHARE_KEEP,
     SHARE_RETRY,
+    SHARE_REMOVE_RETRY,
     SHARE_REMOVE,
     SHARE_MATCHES,
     SHARE_VIEW,
@@ -676,7 +677,8 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CallbackQueryHandler(
         share_expiry_action,
         pattern=(fr"^({SHARE_EXTEND}|{SHARE_LET_END}|{SHARE_REMOVE_NOW}"
-                 fr"|{SHARE_REMOVE_YES}|{SHARE_KEEP}|{SHARE_RETRY}):\d+$")))
+                 fr"|{SHARE_REMOVE_YES}|{SHARE_KEEP}|{SHARE_RETRY}"
+                 fr"|{SHARE_REMOVE_RETRY}):\d+$")))
     app.add_handler(CallbackQueryHandler(share_remove,
                                          pattern=fr"^{SHARE_REMOVE}:\d+$"))
     app.add_handler(CallbackQueryHandler(share_matches,
