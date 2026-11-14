@@ -44,6 +44,7 @@ from bot.callback_prefixes import (
     TICKET_RESEARCH_PARENT,
     TICKET_SEASON,
     ISSUE_TYPE,
+    RQ_FROM_ISSUE_MARK,
     RQ_FROM_TICKET,
     TICKETS_REPORT,
 )
@@ -507,7 +508,8 @@ async def ticket_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
         if selected is not None:
             rows.append([InlineKeyboardButton(
                 "📥 Request it instead",
-                callback_data=f"{RQ_FROM_TICKET}:{media_type}:{tmdb_id}",
+                callback_data=(f"{RQ_FROM_TICKET}:{media_type}:{tmdb_id}"
+                               f":{RQ_FROM_ISSUE_MARK}"),
             )])
         hub = _tickets_origin(ctx)
         if hub is None:

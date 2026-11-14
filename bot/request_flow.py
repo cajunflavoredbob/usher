@@ -72,6 +72,7 @@ from bot.callback_prefixes import (
     RQ_BEHALF_PAGE,
     RQ_BEHALF_PICK,
     RQ_CANCEL,
+    RQ_FROM_ISSUE_MARK,
     RQ_FROM_TICKET,
     RQ_GO,
     RQ_GO_4K,
@@ -457,13 +458,26 @@ def _coverage_verdict(ctx: ContextTypes.DEFAULT_TYPE, media_type: str,
     return None, False
 
 
+def _split_jump(data: Optional[str]) -> tuple[str, int, bool]:
+    """(media_type, tmdb_id, from_issue) of an rqfi tap. The /issue dead-end
+    button carries a trailing ":i"; /trending's buttons, and /issue buttons
+    sent before the marker existed, do not. Raises ValueError on a bad tap."""
+    parts = (data or "").split(":")
+    if len(parts) == 4 and parts[3] == RQ_FROM_ISSUE_MARK:
+        parts = parts[:3]
+        from_issue = True
+    else:
+        from_issue = False
+    _, media_type, tmdb_id_s = parts
+    return media_type, int(tmdb_id_s), from_issue
+
+
 def _trending_result(ctx: ContextTypes.DEFAULT_TYPE, data: Optional[str],
                      stash: dict) -> Optional[MediaResult]:
     """The /trending list entry a rqfi tap points at, or None (no list, a
     different entry, or the /issue jump, whose `stash` holds its own title)."""
     try:
-        _, media_type, tmdb_id_s = (data or "").split(":")
-        tmdb_id = int(tmdb_id_s)
+        media_type, tmdb_id, _ = _split_jump(data)
     except ValueError:
         return None
     if stash.get("tmdb_id") == tmdb_id:
@@ -477,8 +491,7 @@ def _in_latest_browse(ctx: ContextTypes.DEFAULT_TYPE,
     """True if the tapped title is in the latest /trending list (an
     unparseable tap counts as in: the parse error path owns it)."""
     try:
-        _, media_type, tmdb_id_s = (data or "").split(":")
-        tmdb_id = int(tmdb_id_s)
+        media_type, tmdb_id, _ = _split_jump(data)
     except ValueError:
         return True
     return any(r.media_type == media_type and r.tmdb_id == tmdb_id
@@ -498,6 +511,10 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     # title skip the availability check. (The force-end below then has no
     # stash to keep.)
     stash = ctx.user_data.pop("rq_jump_media", None) or {}
+    try:
+        from_issue = _split_jump(q.data)[2]
+    except ValueError:
+        from_issue = False
     # A /trending number tap carries no title, but the latest browse list is
     # still in user_data with each title's status. The /issue jump stashes
     # its own title and has no status to check.
@@ -510,11 +527,16 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         # its draft.
         # With no /trending list on hand the tap is a "Request it instead"
         # from /issue, which a /trending message would misdescribe.
-        await update.effective_message.reply_text(
-            "That list is out of date. Run /trending again to pick from "
-            "the new one."
-            if ctx.user_data.get("dv_results") else
-            "Finish or /cancel the open request first.")
+        # The text follows where the tapped button came from: the /issue
+        # dead-end button names the open request, never a /trending list. A
+        # button sent before the marker existed falls back to whether a
+        # /trending list is on hand.
+        if from_issue or not ctx.user_data.get("dv_results"):
+            refusal_text = "Finish or /cancel the open request first."
+        else:
+            refusal_text = ("That list is out of date. Run /trending again "
+                            "to pick from the new one.")
+        await update.effective_message.reply_text(refusal_text)
         return None
     # A pick from a Hub's list (the tapped message carries the back button)
     # ends back at that Hub; any other pick behaves like a typed /request.
@@ -553,8 +575,7 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     if perms is not None:
         ctx.user_data["rq_perms"] = perms
     try:
-        _, media_type, tmdb_id_s = q.data.split(":")
-        tmdb_id = int(tmdb_id_s)
+        media_type, tmdb_id, _ = _split_jump(q.data)
     except (ValueError, AttributeError):
         await end_flow(update, ctx, "Couldn't parse selection.", hub, REQUESTS_NEW,
                        typed_text="Couldn't parse selection. /request to start over.")

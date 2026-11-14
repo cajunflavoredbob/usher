@@ -1152,3 +1152,30 @@ async def test_request_it_instead_refused_by_an_open_request_says_so():
     assert await request_from_ticket(upd, ctx) is None
     text = upd.effective_message.reply_calls[0]["text"]
     assert "/cancel the open request" in text and "/trending" not in text
+
+
+async def test_issue_dead_end_refusal_names_the_open_request_even_with_a_stale_trending_list():
+    """The /issue dead-end button's refusal keys on the button, not on a
+    /trending list that may still be stored from earlier."""
+    from bot.request_flow import request_from_ticket
+    ctx = _trending_ctx(MediaResult("movie", 550, "Fight Club", "1999", 5,
+                                    status=None))  # dv_results is set
+
+    class _Conv:
+        _conversations = {(100, USER_ID): RQ_CONFIRM}
+
+    ctx.bot_data["conversations"] = {"request": _Conv()}
+    upd = make_update(callback_data="rqfi:movie:999:i", user_id=USER_ID)
+    assert await request_from_ticket(upd, ctx) is None
+    text = upd.effective_message.reply_calls[0]["text"]
+    assert "/cancel the open request" in text and "/trending" not in text
+
+
+async def test_issue_dead_end_button_with_its_marker_still_starts_the_jump():
+    from bot.request_flow import request_from_ticket
+    ctx = _trending_ctx(MediaResult("movie", 550, "Fight Club", "1999", 5,
+                                    status=None))
+    ctx.bot_data["conversations"] = {}
+    upd = make_update(callback_data="rqfi:movie:550:i", user_id=USER_ID)
+    assert await request_from_ticket(upd, ctx) == RQ_CONFIRM
+    assert ctx.user_data["rq_media"]["tmdb_id"] == 550

@@ -121,7 +121,7 @@ async def test_not_in_library_offers_request_jump_and_ends():
     edit = upd.callback_query.edits[0]
     callbacks = [b.callback_data for row in edit["reply_markup"].inline_keyboard
                  for b in row]
-    assert "rqfi:movie:77" in callbacks
+    assert "rqfi:movie:77:i" in callbacks
     # Ended with no parent offered: no stash left to bypass a later check.
     assert "rq_jump_media" not in ctx.user_data
 
