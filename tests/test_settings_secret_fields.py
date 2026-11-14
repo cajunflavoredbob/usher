@@ -379,14 +379,14 @@ async def test_telegram_save_refuses_bad_disk_thresholds(client, field, bad):
                     {"admin_telegram_id": "4242", field: bad})
     assert r.status == 400
     assert client.store.settings.low_disk_percent == 10
-    assert client.store.settings.low_disk_gb == 50
+    assert client.store.settings.low_disk_gb == 0
 
 
-def test_alarm_settings_default_on_with_10_percent_and_50_gb():
+def test_alarm_settings_default_on_with_10_percent_and_gb_limit_off():
     from settings import Settings
     s = Settings.from_dict({})
     assert (s.alarm_health, s.alarm_disk, s.low_disk_percent, s.low_disk_gb) \
-        == (True, True, 10, 50)
+        == (True, True, 10, 0)
 
 
 async def test_telegram_save_stores_the_plex_alarm_switch(client):

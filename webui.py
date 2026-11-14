@@ -781,7 +781,7 @@ def _settings_page(
   <label class="inline-check"><input type="checkbox" name="alarm_plex"{alarm_plex_chk}> Plex server offline (after two failed checks in a row)</label>
   <label>Alarm when a disk has less free space than <span class="note">percent, whichever is hit first</span></label>
   <input type="text" name="low_disk_percent" value="{int(s.low_disk_percent)}" inputmode="numeric" pattern="[0-9]+" required>
-  <label>or less than <span class="note">GB</span></label>
+  <label>or less than <span class="note">GB, 0 turns the GB limit off</span></label>
   <input type="text" name="low_disk_gb" value="{int(s.low_disk_gb)}" inputmode="numeric" pattern="[0-9]+" required>
 
   <div class="btn-row divided">

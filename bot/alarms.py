@@ -164,7 +164,7 @@ class Disk:
     def is_low(self, pct: int, gb: int) -> bool:
         if self.total <= 0:
             return False
-        return self.percent < pct or self.free / GB < gb
+        return self.percent < pct or (gb > 0 and self.free / GB < gb)
 
     def describe(self) -> str:
         name = html.escape(self.path)

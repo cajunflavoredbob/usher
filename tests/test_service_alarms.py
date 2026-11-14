@@ -68,7 +68,7 @@ def _ctx(fresh_store, radarr=None, sonarr=None, **settings):
     cfg.alarm_health = settings.get("alarm_health", True)
     cfg.alarm_disk = settings.get("alarm_disk", True)
     cfg.low_disk_percent = settings.get("low_disk_percent", 10)
-    cfg.low_disk_gb = settings.get("low_disk_gb", 50)
+    cfg.low_disk_gb = settings.get("low_disk_gb", 0)
     return ctx
 
 
@@ -153,7 +153,8 @@ async def test_disk_at_8_percent_alarms_once_for_both_apps_and_recovers_once(fre
 
 
 async def test_disk_below_gb_threshold_alarms_even_when_percent_is_fine(fresh_store):
-    ctx = _ctx(fresh_store, radarr=_arr(disks=[_disk(free_gb=30, total_gb=100)]))
+    ctx = _ctx(fresh_store, radarr=_arr(disks=[_disk(free_gb=30, total_gb=100)]),
+                low_disk_gb=50)
     await check_alarms(ctx)
     assert len(_sent(ctx)) == 1
 
@@ -236,3 +237,20 @@ async def test_problem_that_clears_before_its_dm_got_through_clears_silently(fre
     await check_alarms(ctx)
     assert ctx.bot.send_message.await_count == 1
     assert await fresh_store.list_alarms() == []
+
+
+def test_small_disk_with_25_percent_free_is_not_low_by_default():
+    from bot.alarms import Disk, GB
+    from settings import DEFAULT_LOW_DISK_GB, DEFAULT_LOW_DISK_PERCENT
+    small = Disk(path="/docker", label="docker", free=5 * GB, total=20 * GB)
+    assert not small.is_low(DEFAULT_LOW_DISK_PERCENT, DEFAULT_LOW_DISK_GB)
+    full = Disk(path="/docker", label="docker", free=int(1.6 * GB), total=20 * GB)
+    assert full.is_low(DEFAULT_LOW_DISK_PERCENT, DEFAULT_LOW_DISK_GB)
+
+
+def test_gb_limit_still_counts_when_set():
+    from bot.alarms import Disk, GB
+    small = Disk(path="/docker", label="docker", free=5 * GB, total=20 * GB)
+    assert small.is_low(10, 50)
+    big = Disk(path="/data", label="data", free=60 * GB, total=500 * GB)
+    assert not big.is_low(10, 50)
