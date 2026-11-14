@@ -48,6 +48,7 @@ from auth_util import (
     attach_csrf_cookie,
     audit,
     client_ip,
+    safe_compare,
     clear_setup_token,
     csrf_for_request,
     generate_csrf_token,
@@ -95,6 +96,34 @@ _ip_throttle = LoginThrottle(max_failures=THROTTLE_IP_MAX_FAILURES)
 # so wrong-username and wrong-password attempts cost the same PBKDF2 work
 # (no timing oracle on the admin username). Computed once at import.
 _TIMING_EQUALIZER_HASH = hash_password("timing-equalizer-not-a-real-password")
+
+# Serializes the lockout check and the password hash across login attempts.
+# Without it a burst of parallel POSTs all pass the lockout check before the
+# first hash finishes, so every guess in the burst is evaluated. Logins are
+# rare, so one at a time costs nothing a real Admin notices.
+_login_lock = asyncio.Lock()
+
+# One restore at a time: a double-submitted Restore would otherwise copy the
+# already-restored files over the first run's pre-restore snapshot.
+_restore_lock = asyncio.Lock()
+
+# Unauthenticated form posts (login, first-run setup) are tiny. The app's
+# client_max_size is raised to 32MB for backup restores, so these routes cap
+# the body themselves before aiohttp buffers it.
+UNAUTH_FORM_MAX_BYTES = 64 * 1024
+
+
+def _unauth_form_rejection(request: web.Request) -> Optional[web.Response]:
+    """Refuse an unauthenticated form body that is large, has no declared
+    length, or is compressed (a small gzip body can expand to the full
+    32MB limit). Browsers send none of these for a login form."""
+    length = request.content_length
+    if length is None or length > UNAUTH_FORM_MAX_BYTES:
+        return web.Response(text="Form too large.", status=413)
+    if request.headers.get("Content-Encoding", "identity").lower() != "identity":
+        return web.Response(text="Compressed form bodies are not accepted.",
+                            status=415)
+    return None
 
 
 def _set_session_cookie(resp, cookie_value: str, *, secure: bool) -> None:
@@ -144,7 +173,7 @@ def _verify_session_cookie(secret: bytes, cookie: str,
     except ValueError:
         return None
     expected_sig = _b64(_sign(secret, body.encode()))
-    if not hmac.compare_digest(sig, expected_sig):
+    if not safe_compare(sig, expected_sig):
         return None
     try:
         payload = json.loads(_b64d(body))
@@ -1027,6 +1056,9 @@ async def setup_post(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
     if store.settings.admin.is_set():
         raise web.HTTPFound("/admin/login")
+    rejection = _unauth_form_rejection(request)
+    if rejection is not None:
+        return rejection
     form = await request.post()
     if not validate_csrf(request, form.get(CSRF_FORM_FIELD)):
         audit("setup_csrf_fail", ip=client_ip(request))
@@ -1039,7 +1071,7 @@ async def setup_post(request: web.Request) -> web.Response:
             status=503)
     if setup_token:
         submitted = (form.get("setup_token") or "").strip()
-        if not submitted or not hmac.compare_digest(submitted, setup_token):
+        if not submitted or not safe_compare(submitted, setup_token):
             audit("setup_token_fail", ip=client_ip(request))
             body = _page("Setup", _flash(error="Invalid setup token.") +
                          '<p><a href="/admin/setup">Try again</a></p>')
@@ -1137,6 +1169,14 @@ async def login_get(request: web.Request) -> web.Response:
 
 
 async def login_post(request: web.Request) -> web.Response:
+    rejection = _unauth_form_rejection(request)
+    if rejection is not None:
+        return rejection
+    async with _login_lock:
+        return await _login_post_serialized(request)
+
+
+async def _login_post_serialized(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
     form = await request.post()
     if not validate_csrf(request, form.get(CSRF_FORM_FIELD)):
@@ -1534,7 +1574,9 @@ async def change_password(request: web.Request) -> web.Response:
     new = form.get("new") or ""
     confirm = form.get("confirm") or ""
     admin = store.settings.admin
-    if not verify_password(current, admin.password_hash):
+    # PBKDF2 off the event loop, as login does: two 600k-iteration runs on
+    # the loop would stall the bot and the webhook receiver.
+    if not await asyncio.to_thread(verify_password, current, admin.password_hash):
         return web.Response(
             text=_settings_page(store.settings, error="Current password is incorrect.",
                                 active_tab="account",
@@ -1551,7 +1593,7 @@ async def change_password(request: web.Request) -> web.Response:
             content_type="text/html", status=400,
         )
     user = _current_user(request) or "-"
-    admin.password_hash = hash_password(new)
+    admin.password_hash = await asyncio.to_thread(hash_password, new)
     # Sign out every other session: a stolen cookie must die when the
     # admin rotates the password in response to it. The current session
     # is kept by re-issuing it at the new version below.
@@ -1689,6 +1731,20 @@ def _restore_error(request: web.Request, message: str, status: int = 400) -> web
 
 
 async def restore_upload(request: web.Request) -> web.Response:
+    if _restore_lock.locked():
+        return _restore_error(request, "A restore is already running.", status=409)
+    async with _restore_lock:
+        # Re-checked under the lock: the middleware checked on entry, but a
+        # restore that finished while this request waited has already
+        # scheduled the restart.
+        if restart_pending():
+            return _restore_error(
+                request, "A restore was just applied; Usher is restarting.",
+                status=409)
+        return await _restore_upload_locked(request)
+
+
+async def _restore_upload_locked(request: web.Request) -> web.Response:
     data_dir: Path = request.app["data_dir"]
     settings_path: Path = request.app["settings_path"]
     db_path: Path = Path(request.app["db_path"])
@@ -1796,9 +1852,14 @@ async def restore_upload(request: web.Request) -> web.Response:
     # Snapshot current files before overwriting so a failed restore is recoverable.
     ts = time.strftime("%Y%m%d-%H%M%S")
     backup_dir = data_dir / f"pre-restore-{ts}"
+    n = 1
+    while backup_dir.exists():
+        # Never copy over an earlier snapshot taken in the same second.
+        n += 1
+        backup_dir = data_dir / f"pre-restore-{ts}-{n}"
     snapshot_ok = True
     try:
-        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup_dir.mkdir(parents=True, exist_ok=False)
         for src in (settings_path, db_path, enc_key_path):
             if Path(src).exists():
                 shutil.copy2(src, backup_dir / Path(src).name)
@@ -2040,8 +2101,11 @@ async def test_webhook(request: web.Request) -> web.Response:
     # Self-POST to loopback, never a Host-derived URL: the Host
     # header is attacker-influenceable, and this request carries the real
     # webhook secret in Authorization -- a spoofed Host exfiltrated it to an
-    # arbitrary target. The receiver runs in this same process/port.
-    url = f"http://127.0.0.1:{request.app['http_port']}/webhook/seerr"
+    # arbitrary target. The receiver runs in this same process/port. Post to
+    # the local address this request arrived on (never client-supplied), so
+    # a WEBHOOK_BIND set to one specific address still works; loopback is
+    # the fallback when the socket address is unknown.
+    url = f"http://{_self_test_host(request)}:{request.app['http_port']}/webhook/seerr"
     try:
         async with httpx.AsyncClient(timeout=10.0) as c:
             r = await c.post(url, headers={"Authorization": secret},
@@ -2053,6 +2117,17 @@ async def test_webhook(request: web.Request) -> web.Response:
         return _test_json(False, f"Receiver returned HTTP {r.status_code}.")
     except Exception as exc:
         return _test_json(False, user_friendly_message(exc))
+
+
+def _self_test_host(request: web.Request) -> str:
+    """The server-side address of this connection, as a URL host."""
+    sockname = None
+    if request.transport is not None:
+        sockname = request.transport.get_extra_info("sockname")
+    host = sockname[0] if isinstance(sockname, tuple) and sockname else None
+    if not host or host in ("0.0.0.0", "::"):
+        return "127.0.0.1"
+    return f"[{host}]" if ":" in host else host
 
 
 # Seerr New-Plex-Sign-In warning

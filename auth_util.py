@@ -97,6 +97,15 @@ class LoginThrottle:
             self._failures.pop(next(iter(self._failures)))
 
 
+def safe_compare(a: str, b: str) -> bool:
+    """Constant-time string compare that never raises. hmac.compare_digest
+    raises TypeError on non-ASCII str, and aiohttp hands headers and cookies
+    over with undecodable bytes as surrogates, so a crafted value would
+    otherwise turn a rejection into a 500 with a logged traceback."""
+    return hmac.compare_digest(a.encode("utf-8", "surrogateescape"),
+                               b.encode("utf-8", "surrogateescape"))
+
+
 # --- CSRF tokens ---
 
 CSRF_COOKIE = "usher_csrf"
@@ -134,7 +143,7 @@ def _csrf_token_signed(secret: bytes, token: str, binding: str = "") -> bool:
     except (ValueError, AttributeError):
         return False
     expected = hmac.new(secret, f"{rand}.{binding}".encode(), "sha256").hexdigest()[:32]
-    return hmac.compare_digest(sig, expected)
+    return safe_compare(sig, expected)
 
 
 def csrf_for_request(request) -> str:
@@ -157,7 +166,10 @@ def attach_csrf_cookie(resp, token: str, *, secure: bool) -> None:
     resp.set_cookie(
         CSRF_COOKIE, token,
         max_age=24 * 3600,
-        httponly=False,
+        # Nothing reads it from script (the form carries the token in a
+        # hidden field), and a readable cookie hands a live, session-bound
+        # token to script on any other port of the same host.
+        httponly=True,
         samesite="Strict",
         secure=secure,
     )
@@ -170,7 +182,7 @@ def validate_csrf(request, form_value: Optional[str]) -> bool:
     cookie = request.cookies.get(CSRF_COOKIE)
     if not cookie or not form_value:
         return False
-    if not hmac.compare_digest(cookie, form_value):
+    if not safe_compare(cookie, form_value):
         return False
     return _csrf_token_signed(request.app["session_secret"], cookie,
                               _session_binding(request))

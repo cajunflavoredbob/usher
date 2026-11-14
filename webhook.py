@@ -10,7 +10,6 @@ runtime updates via the webui take effect without a restart.
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import logging
 import time
@@ -19,7 +18,7 @@ from typing import Awaitable, Callable
 
 from aiohttp import web
 
-from auth_util import client_ip
+from auth_util import client_ip, safe_compare
 
 logger = logging.getLogger("usher.webhook")
 
@@ -102,7 +101,7 @@ def attach_webhook(
             return web.Response(status=503, text="webhook secret unset")
 
         auth = request.headers.get("Authorization", "")
-        if not hmac.compare_digest(auth.encode("utf-8"), secret.encode("utf-8")):
+        if not safe_compare(auth, secret):
             # Sample WARN per IP+window; otherwise DEBUG. Botnet probes don't
             # fill the operational log; first probe from a new IP still surfaces.
             # client_ip() keys on the socket peer unless a trusted proxy is
