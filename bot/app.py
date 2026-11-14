@@ -157,6 +157,7 @@ from bot.resolve_flow import _resolve_conversation
 from bot.ask_admin import ask_admin
 from bot.shared import (
     edit_or_send,
+    in_group_chat,
     force_end_flow_conversations,
     guard_flow_steps,
     format_status,
@@ -403,9 +404,8 @@ async def _check_connections(app: Application) -> dict[str, str]:
 
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
-    admin_id = ctx.bot_data.get("admin_id")
-    is_admin = user_id == admin_id
+    is_admin = update.effective_user.id == ctx.bot_data.get("admin_id")
+    admin_in_group = is_admin and in_group_chat(update)
 
     if not is_admin:
         # Non-admins see ONLY greeting + commands. No connection diagnostics,
@@ -426,16 +426,17 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    # Admin path: keeps the connection-status block + the /admin line.
-    summary = await _check_connections(ctx.application)
-    # HTML + escape: format_status interpolates upstream error text (see
-    # the startup DM note in _post_init).
-    lines = [
-        "Hi! I take movie/TV requests and file tickets in Seerr.",
-        "",
-        "<b>Connection status:</b>",
-        format_status(summary),
-        "",
+    # Admin path: keeps the connection-status block + the /admin line. In a
+    # group the block stays out (anyone there could read it), with a pointer.
+    lines = ["Hi! I take movie/TV requests and file tickets in Seerr.", ""]
+    if admin_in_group:
+        lines += ["DM me /status for the connection status.", ""]
+    else:
+        summary = await _check_connections(ctx.application)
+        # HTML + escape: format_status interpolates upstream error text (see
+        # the startup DM note in _post_init).
+        lines += ["<b>Connection status:</b>", format_status(summary), ""]
+    lines += [
         "<b>Commands</b>",
         "  /admin - invite someone, see and remove Shares, connection status",
         "  /request - new request, your requests, trending, subscriptions",

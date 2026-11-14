@@ -29,6 +29,7 @@ from bot.hub import back_button, came_from_hub, end_markup, reply_end
 from bot.requests_hub import REQUESTS_HUB
 from bot.shared import (
     DECRYPT_FAILED_MSG,
+    admin_view,
     edit_or_send,
     force_end_flow_conversations,
     format_age,
@@ -63,8 +64,7 @@ async def _render_requests(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     gets a last row holding the back button, and the error and empty texts
     carry the end keyboard (Try again on the error)."""
     seerr: SeerrClient = ctx.bot_data["seerr"]
-    admin_id = ctx.bot_data.get("admin_id")
-    is_admin = user_id == admin_id
+    is_admin = admin_view(update, ctx)  # a group gets the User view
     store: UserStore = ctx.bot_data["store"]
     link = await store.get(user_id)
 
@@ -155,7 +155,7 @@ async def cmd_requests(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await send_typing(update, ctx)
     user_id = update.effective_user.id
-    is_admin = user_id == ctx.bot_data.get("admin_id")
+    is_admin = admin_view(update, ctx)
     store: UserStore = ctx.bot_data["store"]
     link = await store.get(user_id)
     if not is_admin:
@@ -183,7 +183,7 @@ async def requests_hub_mine(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
         return
     await send_typing(update, ctx)
     user_id = update.effective_user.id
-    is_admin = user_id == ctx.bot_data.get("admin_id")
+    is_admin = admin_view(update, ctx)
     store: UserStore = ctx.bot_data["store"]
     link = await store.get(user_id)
     guard = None
@@ -272,7 +272,7 @@ async def rq_list_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         await q.answer("Couldn't parse that button.", show_alert=True)
         return
     user_id = update.effective_user.id
-    is_admin = user_id == ctx.bot_data.get("admin_id")
+    is_admin = admin_view(update, ctx)
     store: UserStore = ctx.bot_data["store"]
     link = await store.get(user_id)
     token = None if is_admin else (link.plex_token if link else None)

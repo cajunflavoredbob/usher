@@ -67,6 +67,7 @@ from bot.shared import (
     RELINK_RESUME_EXECUTORS,
     ISSUE_TYPES,
     edit_or_send,
+    admin_view,
     format_age,
     format_media_label,
     record_btn,
@@ -142,8 +143,7 @@ async def tickets_hub_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
         return
     await send_typing(update, ctx)  # list + title fetches can take seconds
     user_id = update.effective_user.id
-    admin_id = ctx.bot_data.get("admin_id")
-    is_admin = user_id == admin_id
+    is_admin = admin_view(update, ctx)  # a group gets the User view
     store: UserStore = ctx.bot_data["store"]
     link = await store.get(user_id)
 
@@ -307,7 +307,7 @@ async def tk_open(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         logger.warning("Unparseable callback data: %r", q.data)
         return
     tg_id = update.effective_user.id
-    is_admin, token, decrypt_failed = await token_for(ctx, tg_id)
+    is_admin, token, decrypt_failed = await token_for(ctx, tg_id, admin=admin_view(update, ctx))
     if not is_admin and decrypt_failed:
         await q.message.reply_text(
             DECRYPT_FAILED_MSG
@@ -436,7 +436,7 @@ async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         logger.warning("Unparseable callback data: %r", q.data)
         return
     tg_id = update.effective_user.id
-    is_admin, token, decrypt_failed = await token_for(ctx, tg_id)
+    is_admin, token, decrypt_failed = await token_for(ctx, tg_id, admin=admin_view(update, ctx))
     # Same gate as tk_open: a non-admin without a usable token must not fall
     # through to _build_ticket_detail's admin-key fetch.
     if not is_admin and decrypt_failed:
@@ -908,7 +908,8 @@ async def tk_reply_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if not try_begin_action(ctx, start_key):
         return ConversationHandler.END
     try:
-        is_admin, token, decrypt_failed = await token_for(ctx, update.effective_user.id)
+        is_admin, token, decrypt_failed = await token_for(
+            ctx, update.effective_user.id, admin=admin_view(update, ctx))
         if not is_admin and decrypt_failed:
             await q.message.reply_text(
                 DECRYPT_FAILED_MSG
@@ -1015,7 +1016,8 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if not text:
         await update.effective_message.reply_text("Empty message. Send a few words or /cancel.")
         return AWAIT_TICKET_REPLY
-    is_admin, token, decrypt_failed = await token_for(ctx, update.effective_user.id)
+    is_admin, token, decrypt_failed = await token_for(
+        ctx, update.effective_user.id, admin=admin_view(update, ctx))
     if not is_admin and decrypt_failed:
         await _reply_result(update, ctx, DECRYPT_FAILED_MSG,
                             _result_markup(from_list))
@@ -1087,7 +1089,8 @@ async def _resume_ticket_reply(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     blocked, with the text the user had already typed."""
     ticket_id = payload["ticket_id"]
     text = payload["text"]
-    is_admin, token, _ = await token_for(ctx, update.effective_user.id)
+    is_admin, token, _ = await token_for(
+        ctx, update.effective_user.id, admin=admin_view(update, ctx))
     if not is_admin and token is None:
         return  # can't happen right after a successful link; guard anyway
     seerr: SeerrClient = ctx.bot_data["seerr"]

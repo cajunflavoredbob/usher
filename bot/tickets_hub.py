@@ -12,12 +12,13 @@ from telegram import InlineKeyboardButton
 
 from bot.callback_prefixes import TICKETS_LIST, TICKETS_REPORT
 from bot.hub import HUBS, HubView, register_hub
+from bot.shared import admin_view
 
 TICKETS_HUB = "tickets"
 
 
 async def render_tickets_hub(update, ctx) -> HubView:
-    is_admin = update.effective_user.id == ctx.bot_data.get("admin_id")
+    is_admin = admin_view(update, ctx)
     whose = "open tickets" if is_admin else "your tickets"
     return HubView(
         text=("🎫 <b>Tickets</b>\nReport a problem with a movie or show, or "

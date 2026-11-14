@@ -269,3 +269,21 @@ async def test_stale_pick_does_not_change_remaining_seasons_quota():
     await remaining_seasons_ask(upd, ctx)
     # The quota lookup is for the Admin's own link, never the stale pick.
     assert all(c.args[0] != 21 for c in seerr.get_quota.call_args_list)
+
+
+async def test_hub_hides_request_for_someone_from_admin_in_a_group():
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    upd = make_update(text="/request", user_id=ADMIN_ID)
+    upd.effective_chat.type = "supergroup"
+    view = await render_requests_hub(upd, ctx)
+    assert REQUESTS_BEHALF not in [b.callback_data for b in view.buttons]
+
+
+async def test_admin_tapping_request_for_someone_in_a_group_gets_nothing():
+    ctx = _admin_ctx()
+    upd = make_update(callback_data=REQUESTS_BEHALF, user_id=ADMIN_ID)
+    upd.effective_chat.type = "group"
+    state = await request_hub_behalf(upd, ctx)
+    assert state == ConversationHandler.END
+    assert upd.callback_query.edits == []
+    ctx.bot_data["store"].list_linked_users.assert_not_awaited()

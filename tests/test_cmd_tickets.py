@@ -123,3 +123,30 @@ async def test_seerr_not_configured_short_circuits():
     # The require_seerr helper sends its own message; no list_issues call.
     assert upd.message.reply_calls
     assert "isn't configured" in upd.message.reply_calls[0]["text"]
+
+
+# --- the Admin in a group gets the User view ---
+
+
+async def test_admin_in_group_lists_only_their_own_tickets():
+    upd = make_update(callback_data="tkhl", user_id=999)
+    upd.effective_chat.type = "supergroup"
+    ctx = make_ctx(admin_id=999, link=make_link(telegram_id=999,
+                                                plex_token="admin-token"))
+    ctx.bot_data["seerr"].list_issues.return_value = ([_ticket(id=3)], 1)
+    await tickets_hub_list(upd, ctx)
+    text = upd.callback_query.edits[0]["text"]
+    assert "Your open tickets" in text and "All open tickets" not in text
+    assert "someone" not in text  # no reporter names
+    kwargs = ctx.bot_data["seerr"].list_issues.call_args.kwargs
+    assert kwargs["as_plex_token"] == "admin-token"
+    assert kwargs["created_by"] is not None
+
+
+async def test_unlinked_admin_in_group_is_asked_to_link():
+    upd = make_update(callback_data="tkhl", user_id=999)
+    upd.effective_chat.type = "group"
+    ctx = make_ctx(admin_id=999, link=None)
+    await tickets_hub_list(upd, ctx)
+    assert "link" in upd.callback_query.edits[0]["text"]
+    ctx.bot_data["seerr"].list_issues.assert_not_called()

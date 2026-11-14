@@ -18,6 +18,7 @@ from bot.callback_prefixes import (
     REQUESTS_WEEK,
 )
 from bot.hub import HubView, register_hub
+from bot.shared import admin_view
 
 REQUESTS_HUB = "requests"
 
@@ -38,7 +39,7 @@ async def render_requests_hub(update, ctx) -> HubView:
             "Subscriptions and the shows you follow, or what's coming "
             "this week.")
     user = getattr(update, "effective_user", None)
-    if user is not None and user.id == ctx.bot_data.get("admin_id"):
+    if user is not None and admin_view(update, ctx):
         buttons.append(InlineKeyboardButton("👥 Request for someone",
                                             callback_data=REQUESTS_BEHALF))
         text += " As the Admin you can also request for a Linked user."

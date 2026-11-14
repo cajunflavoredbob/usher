@@ -103,6 +103,7 @@ from bot.requests_hub import REQUESTS_HUB
 from bot.shared import (
     DECRYPT_FAILED_MSG,
     KEYCAP_DIGITS,
+    admin_view,
     day_count,
     RQ_CONFIRM,
     RQ_PICK_MEDIA,
@@ -351,8 +352,9 @@ async def request_hub_behalf(update: Update,
                              ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Requests Hub "Request for someone": the Admin's list of Linked users."""
     q = update.callback_query
-    if update.effective_user.id != ctx.bot_data.get("admin_id"):
-        # The button is only drawn for the Admin; a forged tap gets nothing.
+    if not admin_view(update, ctx):
+        # The button is only drawn for the Admin in a DM; a forged tap, or a
+        # tap in a group, gets nothing.
         await q.answer("Only the Admin can do that.", show_alert=True)
         return ConversationHandler.END
     await q.answer()

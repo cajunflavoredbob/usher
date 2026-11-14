@@ -417,3 +417,17 @@ async def test_admin_cancel_of_a_pending_request_still_deletes():
     upd = make_update(callback_data="rqlc:12", user_id=ADMIN_ID)
     await rq_list_cancel(upd, ctx)
     assert seerr.delete_request.await_args.args[0] == 12
+
+
+async def test_admin_list_in_group_is_their_own_requests_only():
+    ctx = make_ctx(admin_id=ADMIN_ID,
+                   link=make_link(telegram_id=ADMIN_ID, plex_token="admin-tok"))
+    ctx.bot_data["seerr"].list_requests.return_value = (_items(), 2)
+    upd = make_update(text="/requests", user_id=ADMIN_ID)
+    upd.effective_chat.type = "group"
+    await cmd_requests(upd, ctx)
+    call = upd.effective_message.reply_calls[-1]
+    assert "user1" not in call["text"] and "Your requests" in call["text"]
+    kwargs = ctx.bot_data["seerr"].list_requests.call_args.kwargs
+    assert kwargs["as_plex_token"] == "admin-tok"
+    assert kwargs["requested_by"] == 7

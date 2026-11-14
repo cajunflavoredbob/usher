@@ -422,10 +422,29 @@ async def edit_or_send(q, text: str, **kwargs):
 
 # Per-user identity / Plex token resolution
 
+def in_group_chat(update) -> bool:
+    """True when the update comes from a group or supergroup chat."""
+    chat = getattr(update, "effective_chat", None)
+    return getattr(chat, "type", None) in ("group", "supergroup")
+
+
+def admin_view(update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
+    """True when the Admin's own, Admin-wide views may render: the sender is
+    the Admin and the chat is not a group. In a group the Admin gets the view
+    a User gets (own Tickets and Requests, no playback lines), since anyone
+    in the chat can read what is shown."""
+    user = getattr(update, "effective_user", None)
+    return (user is not None and user.id == ctx.bot_data.get("admin_id")
+            and not in_group_chat(update))
+
+
 async def token_for(
-    ctx: ContextTypes.DEFAULT_TYPE, tg_id: int
+    ctx: ContextTypes.DEFAULT_TYPE, tg_id: int, *, admin: bool = True
 ) -> tuple[bool, Optional[str], bool]:
     """Return (is_admin, plex_token_or_None, decrypt_failed).
+
+    `admin=False` (the Admin in a group chat, see `admin_view`) resolves the
+    Admin like a User.
 
     For admin, token is None (we want admin-key attribution via SeerrClient
     bare _client). For non-admin, token is their Plex token; caller must
@@ -434,7 +453,7 @@ async def token_for(
     re-run /link.
     """
     admin_id = ctx.bot_data.get("admin_id")
-    if tg_id == admin_id:
+    if tg_id == admin_id and admin:
         return True, None, False
     store: UserStore = ctx.bot_data["store"]
     link = await store.get(tg_id)

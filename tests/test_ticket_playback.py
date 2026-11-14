@@ -146,3 +146,19 @@ async def test_season_zero_ticket_is_the_whole_show():
     app = _app(_tau(rows=rows), issue)
     await handle_seerr_reported(app, _payload())
     assert "Den" in app.bot.send_message.call_args.kwargs["text"]
+
+
+async def test_admin_card_in_group_has_no_playback_lines():
+    tau = _tau()
+    ctx = make_ctx(admin_id=999, link=make_link(telegram_id=999,
+                                                plex_token="admin-token"),
+                   bot_data_overrides={"tautulli": tau})
+    ctx.bot_data["seerr"].get_issue.return_value = _issue()
+    upd = make_update(callback_data="tkopen:38", user_id=999)
+    upd.effective_chat.type = "supergroup"
+    await tk_open(upd, ctx)
+    text = upd.callback_query.message.reply_calls[0]["text"]
+    assert "Living Room" not in text and "Transcode" not in text
+    tau.get_history.assert_not_called()
+    kwargs = ctx.bot_data["seerr"].get_issue.call_args.kwargs
+    assert kwargs["as_plex_token"] == "admin-token"
