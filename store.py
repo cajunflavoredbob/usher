@@ -462,6 +462,18 @@ class UserStore:
                 )
                 """
             )
+            # Per-user notice preferences: the Digest opt-in (default off)
+            # and the automatic-follow switch (default on). No row = the
+            # defaults.
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_prefs (
+                    telegram_id INTEGER PRIMARY KEY,
+                    digest INTEGER NOT NULL DEFAULT 0,
+                    auto_follow INTEGER NOT NULL DEFAULT 1
+                )
+                """
+            )
             c.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_watch_media
@@ -1048,6 +1060,55 @@ class UserStore:
                     SELECT id, tmdb_id, title, season, episode FROM new_content
                     WHERE media_type = 'episode' AND pinged = 0 ORDER BY id
                     """).fetchall()
+        return await self._run(_do)
+
+    async def list_new_content_between(self, start: str, end: str) -> list[tuple]:
+        """New-content rows added in [start, end) (UTC 'YYYY-MM-DD HH:MM:SS'):
+        [(media_type, tmdb_id, title, season, episode)] oldest first."""
+        def _do() -> list[tuple]:
+            with self._conn() as c:
+                return c.execute(
+                    """
+                    SELECT media_type, tmdb_id, title, season, episode
+                    FROM new_content WHERE added_at >= ? AND added_at < ?
+                    ORDER BY id
+                    """, (start, end)).fetchall()
+        return await self._run(_do)
+
+    async def get_prefs(self, telegram_id: int) -> dict:
+        """{'digest': bool, 'auto_follow': bool}; defaults when no row."""
+        def _do() -> dict:
+            with self._conn() as c:
+                row = c.execute(
+                    "SELECT digest, auto_follow FROM user_prefs "
+                    "WHERE telegram_id = ?", (telegram_id,)).fetchone()
+            if row is None:
+                return {"digest": False, "auto_follow": True}
+            return {"digest": bool(row[0]), "auto_follow": bool(row[1])}
+        return await self._run(_do)
+
+    async def set_pref(self, telegram_id: int, name: str, value: bool) -> None:
+        if name not in ("digest", "auto_follow"):
+            raise ValueError(f"unknown preference: {name}")
+        def _do() -> None:
+            with self._conn() as c:
+                c.execute(
+                    "INSERT OR IGNORE INTO user_prefs (telegram_id) VALUES (?)",
+                    (telegram_id,))
+                c.execute(f"UPDATE user_prefs SET {name} = ? "
+                          "WHERE telegram_id = ?", (int(bool(value)), telegram_id))
+        await self._run(_do)
+
+    async def list_digest_users(self) -> list[int]:
+        """Telegram ids of Linked users who opted in to the Digest."""
+        def _do() -> list[int]:
+            with self._conn() as c:
+                return [r[0] for r in c.execute(
+                    """
+                    SELECT p.telegram_id FROM user_prefs p
+                    JOIN user_mapping m ON m.telegram_id = p.telegram_id
+                    WHERE p.digest = 1 ORDER BY p.telegram_id
+                    """).fetchall()]
         return await self._run(_do)
 
     async def mark_pinged(self, ids: list[int]) -> None:

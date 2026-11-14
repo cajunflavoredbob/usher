@@ -27,6 +27,7 @@ from procutil import schedule_clean_exit  # noqa: F401  (re-export for bot.*)
 from bot.callback_prefixes import (
     ACCESS_APPROVE,
     ACCESS_IGNORE,
+    DIGEST_INFO,
     RELINK,
     RQ_ADMIN_APPROVE,
     RQ_ADMIN_DECLINE,
@@ -660,7 +661,7 @@ async def run_relink_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> b
 
 
 _GATE_EXEMPT_PREFIXES: Final = frozenset({
-    RQ_INFO_DISMISS, SUBSCRIPTION_ADD, FOLLOW_ADD, FOLLOW_DEL,
+    RQ_INFO_DISMISS, SUBSCRIPTION_ADD, FOLLOW_ADD, FOLLOW_DEL, DIGEST_INFO,
     RQ_ADMIN_APPROVE, RQ_ADMIN_DECLINE, RQ_ADMIN_RETRY,
     ACCESS_APPROVE, ACCESS_IGNORE,
 })
@@ -685,6 +686,8 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     #    card; Notify-me only writes a row for the tapper.
     #  - Follow and Unfollow sit on detail cards, availability notices and
     #    Follow pings; they only write the tapper's own Follow row.
+    #  - A Digest entry's detail-card button: read-only, and a Digest DM is
+    #    not recorded (it can be a day old when tapped).
     #  - Approve/Decline/Retry sit on the Admin's Request DMs. They are
     #    Admin-only and re-read the Request's status from Seerr before acting,
     #    and there is no way to bring the DM back in Telegram once it expires.

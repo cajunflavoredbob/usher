@@ -33,6 +33,7 @@ from store import UserStore
 from bot.access_asks import forget_sign_in, offer_markup, remember_sign_in
 from bot.callback_prefixes import (
     ACCOUNT_LINK,
+    ACCOUNT_NOTICES,
     ACCOUNT_UNLINK,
     HUB_RETRY,
     LINK_CONSENT,
@@ -590,7 +591,8 @@ async def render_account(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> HubV
         )
     return HubView(
         f"🔗 Linked as <b>{html.escape(name)}</b>.",
-        [InlineKeyboardButton("🔓 Unlink", callback_data=ACCOUNT_UNLINK)],
+        [InlineKeyboardButton("🔔 Notices", callback_data=ACCOUNT_NOTICES),
+         InlineKeyboardButton("🔓 Unlink", callback_data=ACCOUNT_UNLINK)],
     )
 
 

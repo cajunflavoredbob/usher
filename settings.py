@@ -99,6 +99,11 @@ class Settings:
     tg_notify_issues: bool = True          # Ticket reported/comment/resolved DMs
     tg_notify_subscriptions: bool = True   # Subscription fan-out
     tg_notify_follows: bool = True         # Follow pings (new episodes)
+    tg_notify_digest: bool = True          # the daily Digest DM class
+    # The Digest feature: off until the Admin turns it on. digest_hour is the
+    # hour of the day (0 to 23, the server's local time) it is sent.
+    digest_enabled: bool = False
+    digest_hour: int = 18
     # Service alarms (DMs to the admin): Radarr/Sonarr health, and a disk
     # below either threshold (whichever is hit first).
     alarm_health: bool = True
@@ -187,6 +192,10 @@ class Settings:
             tg_notify_issues=bool(data.get("tg_notify_issues", True)),
             tg_notify_subscriptions=bool(data.get("tg_notify_subscriptions", True)),
             tg_notify_follows=bool(data.get("tg_notify_follows", True)),
+            tg_notify_digest=bool(data.get("tg_notify_digest", True)),
+            digest_enabled=bool(data.get("digest_enabled", False)),
+            digest_hour=(_threshold("digest_hour", 18)
+                         if _threshold("digest_hour", 18) <= 23 else 18),
             radarr_api_key=data.get("radarr_api_key", "") or "",
             sonarr_url=data.get("sonarr_url", "") or "",
             sonarr_api_key=data.get("sonarr_api_key", "") or "",

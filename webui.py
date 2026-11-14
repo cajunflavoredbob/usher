@@ -733,6 +733,8 @@ def _settings_page(
     iss_chk = " checked" if s.tg_notify_issues else ""
     subscriptions_chk = " checked" if s.tg_notify_subscriptions else ""
     follows_chk = " checked" if s.tg_notify_follows else ""
+    digest_dm_chk = " checked" if s.tg_notify_digest else ""
+    digest_on_chk = " checked" if s.digest_enabled else ""
     token_rejected_note = (
         '<div class="error">Telegram rejected the bot token, so the bot is not running. '
         'Enter a valid token below and Save; Usher then restarts.</div>'
@@ -759,6 +761,13 @@ def _settings_page(
   <label class="inline-check"><input type="checkbox" name="tg_notify_issues"{iss_chk}> Ticket DMs</label>
   <label class="inline-check"><input type="checkbox" name="tg_notify_subscriptions"{subscriptions_chk}> Subscription DMs</label>
   <label class="inline-check"><input type="checkbox" name="tg_notify_follows"{follows_chk}> Follow pings (new episodes)</label>
+  <label class="inline-check"><input type="checkbox" name="tg_notify_digest"{digest_dm_chk}> Digest DMs</label>
+
+  <h2>Digest</h2>
+  <div class="note">A daily DM to each user who opted in (Account, Notices) listing what was added to the server the day before. A day with nothing new sends nothing.</div>
+  <label class="inline-check"><input type="checkbox" name="digest_enabled"{digest_on_chk}> Send the daily Digest</label>
+  <label>Digest hour <span class="note">0 to 23, the server's local time</span></label>
+  <input type="text" name="digest_hour" value="{_esc(s.digest_hour)}" inputmode="numeric" pattern="[0-9]+" required>
 
   <h2>Alarms</h2>
   <div class="note">DMs to the admin when something needs attention, checked every 5 minutes, once for each new problem and once when it clears.</div>
@@ -1409,7 +1418,8 @@ async def telegram_post(request: web.Request) -> web.Response:
         )
     thresholds = {}
     for name, label, top in (("low_disk_percent", "Low disk percent", 100),
-                             ("low_disk_gb", "Low disk GB", None)):
+                             ("low_disk_gb", "Low disk GB", None),
+                             ("digest_hour", "Digest hour", 23)):
         if form.get(name) is None:   # field not sent: keep the saved value
             thresholds[name] = getattr(s, name)
             continue
@@ -1434,11 +1444,14 @@ async def telegram_post(request: web.Request) -> web.Response:
     s.usher_public_url = public_url
     s.low_disk_percent = thresholds["low_disk_percent"]
     s.low_disk_gb = thresholds["low_disk_gb"]
+    s.digest_hour = thresholds["digest_hour"]
+    s.digest_enabled = form.get("digest_enabled") is not None
     for flag in ("alarm_health", "alarm_disk", "alarm_plex"):
         setattr(s, flag, form.get(flag) is not None)
     for flag in ("tg_notify_requester", "tg_notify_admin_requests",
                  "tg_notify_admin_failed", "tg_notify_issues",
-                 "tg_notify_subscriptions", "tg_notify_follows"):
+                 "tg_notify_subscriptions", "tg_notify_follows",
+                 "tg_notify_digest"):
         setattr(s, flag, form.get(flag) is not None)
     restart_needed = (token != _orig_token) or (admin_tg != _orig_admin)
     return await _save_and_render(

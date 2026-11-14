@@ -113,14 +113,15 @@ async def test_account_hub_unlinked_offers_link_only():
     assert _flat(reply["reply_markup"]) == [("🔗 Link", ACCOUNT_LINK)]
 
 
-async def test_account_hub_linked_offers_unlink_only():
+async def test_account_hub_linked_offers_notices_and_unlink():
     ctx = make_ctx(link=make_link())
     upd = make_update(text="/account")
     await link_flow.cmd_account(upd, ctx)
     reply = upd.effective_message.reply_calls[0]
     assert reply["text"] == "🔗 Linked as <b>User1</b>."
     assert reply["parse_mode"] == "HTML"
-    assert _flat(reply["reply_markup"]) == [("🔓 Unlink", ACCOUNT_UNLINK)]
+    assert _flat(reply["reply_markup"]) == [
+        ("🔔 Notices", "accnt"), ("🔓 Unlink", ACCOUNT_UNLINK)]
 
 
 async def test_account_hub_escapes_name_and_falls_back_to_plex_username():

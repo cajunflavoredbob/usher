@@ -136,6 +136,12 @@ STOP_ASK: Final = "stk"               # stk:<token> a Now playing Stop button
 STOP_GO: Final = "stg"                # stg:<token> confirmed Stop, no message
 STOP_MSG: Final = "stm"               # stm:<token> Stop with the default message
 
+# New-content notices
+ACCOUNT_NOTICES: Final = "accnt"      # Account Hub "Notices" (global handler)
+NOTICE_TOGGLE: Final = "ntg"          # ntg:<digest|auto> Notices toggle
+DIGEST_INFO: Final = "dgi"            # dgi:<media_type>:<tmdb_id> a Digest
+                                      # entry's detail card (global handler)
+
 # Admin Broadcast (Admin Hub button -> conversation)
 BROADCAST_START: Final = "bcst"       # Admin Hub "Broadcast" (conversation entry)
 BROADCAST_SEND: Final = "bcss"        # preview card's Send

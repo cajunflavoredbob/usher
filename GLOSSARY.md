@@ -102,6 +102,10 @@ _Avoid_: watch, availability watch
 A Linked user's standing ask to be told about each new episode of a show, until they Unfollow (a Subscription is one-shot). New episodes of a show arrive as one ping with a Watch now button.
 _Avoid_: watch, track
 
+**Digest**:
+The daily message listing what was added to the server the day before, grouped as movies then shows with their new episode count, sent at the Admin's chosen hour to Linked users who opted in. An empty day sends nothing.
+_Avoid_: newsletter, summary
+
 ## Chat
 
 **Hub**:

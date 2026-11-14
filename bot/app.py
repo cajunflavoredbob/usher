@@ -43,11 +43,14 @@ from bot.callback_prefixes import (
     ACCESS_CANCEL,
     ACCESS_IGNORE,
     ACCESS_SEND,
+    ACCOUNT_NOTICES,
     ACCOUNT_UNLINK,
     ADMIN_INACTIVE,
     ADMIN_SHARES,
     ADMIN_STATUS,
+    DIGEST_INFO,
     DOWNLOADS_LIMIT,
+    NOTICE_TOGGLE,
     DOWNLOADS_PAUSE,
     DOWNLOADS_PAUSE_30,
     DOWNLOADS_RESUME,
@@ -112,6 +115,9 @@ from bot.invite_flow import (_INV_KEYS, _invite_conversation,
                              admin_inactive, admin_shares, cmd_uninvite,
                              share_matches, share_remove,
                              share_view, uninvite_cancel, uninvite_go)
+from bot.digest import (DIGEST_FIRST_DELAY_S, DIGEST_INTERVAL_S,
+                        account_notices, digest_info, digest_job,
+                        notice_toggle)
 from bot.follows import follow_add, follow_del, follow_remove, follows_hub
 from bot.new_content import (NEW_CONTENT_FIRST_DELAY_S, NEW_CONTENT_INTERVAL_S,
                              poll_new_content)
@@ -569,6 +575,12 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     # Hub back button + Account Hub Unlink (Link is a link-conversation entry).
     app.add_handler(CallbackQueryHandler(hub_open_callback,
                                          pattern=fr"^{HUB_OPEN}:[a-z]+$"))
+    app.add_handler(CallbackQueryHandler(account_notices,
+                                         pattern=fr"^{ACCOUNT_NOTICES}$"))
+    app.add_handler(CallbackQueryHandler(
+        notice_toggle, pattern=fr"^{NOTICE_TOGGLE}:(digest|auto)$"))
+    app.add_handler(CallbackQueryHandler(
+        digest_info, pattern=fr"^{DIGEST_INFO}:(movie|tv):[0-9]+$"))
     app.add_handler(CallbackQueryHandler(account_unlink,
                                          pattern=fr"^{ACCOUNT_UNLINK}$"))
     # Requests Hub list buttons (New request is a request-conversation entry).
@@ -644,6 +656,12 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
         interval=NEW_CONTENT_INTERVAL_S,
         first=NEW_CONTENT_FIRST_DELAY_S,
         name="new_content_poll",
+    )
+    app.job_queue.run_repeating(
+        digest_job,
+        interval=DIGEST_INTERVAL_S,
+        first=DIGEST_FIRST_DELAY_S,
+        name="digest",
     )
     # Keep autofix bookkeeping tables from growing for the life of the
     # install (also pruned once at startup in _post_init).
