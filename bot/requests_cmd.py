@@ -272,7 +272,9 @@ async def rq_list_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         await q.answer("Couldn't parse that button.", show_alert=True)
         return
     user_id = update.effective_user.id
-    is_admin = admin_view(update, ctx)
+    # The Admin acts with the API key in any chat (a group only changes the
+    # view), so the pending re-read below runs for the Admin everywhere.
+    is_admin = user_id == ctx.bot_data.get("admin_id")
     store: UserStore = ctx.bot_data["store"]
     link = await store.get(user_id)
     token = None if is_admin else (link.plex_token if link else None)

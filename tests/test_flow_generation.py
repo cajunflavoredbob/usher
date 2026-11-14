@@ -238,7 +238,7 @@ async def _slow_token(release, started):
 async def test_reply_start_that_was_force_ended_does_not_set_reply_target(monkeypatch):
     release, started = asyncio.Event(), asyncio.Event()
 
-    async def token_for(ctx, uid):
+    async def token_for(ctx, uid, **kw):
         return await _slow_token(release, started)
 
     monkeypatch.setattr(tickets, "token_for", token_for)

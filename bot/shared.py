@@ -430,9 +430,11 @@ def in_group_chat(update) -> bool:
 
 def admin_view(update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
     """True when the Admin's own, Admin-wide views may render: the sender is
-    the Admin and the chat is not a group. In a group the Admin gets the view
+    the Admin and the chat is not a group. In a group the Admin SEES the view
     a User gets (own Tickets and Requests, no playback lines), since anyone
-    in the chat can read what is shown."""
+    in the chat can read what is shown, but still ACTS with the Admin's own
+    powers (the Seerr API key), so no action newly needs a Link. Gate what is
+    drawn on this, never what is permitted."""
     user = getattr(update, "effective_user", None)
     return (user is not None and user.id == ctx.bot_data.get("admin_id")
             and not in_group_chat(update))

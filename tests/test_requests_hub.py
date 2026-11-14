@@ -655,3 +655,20 @@ async def test_hub_my_requests_relink_prompt_has_back():
     ctx.bot_data["seerr"].delete_request.side_effect = PlexTokenInvalidError()
     await rq_list_cancel(upd, ctx)
     assert _flat(upd.callback_query.edits[-1]["reply_markup"]) == [RELINK, BACK]
+
+
+async def test_hub_mine_for_a_group_admin_is_their_own_list_or_a_link_ask():
+    unlinked = make_ctx(admin_id=999, link=None)
+    upd = make_update(callback_data=REQUESTS_MINE, user_id=999)
+    upd.effective_chat.type = "supergroup"
+    await requests_hub_mine(upd, unlinked)
+    assert "link" in upd.callback_query.edits[-1]["text"]
+    unlinked.bot_data["seerr"].list_requests.assert_not_called()
+
+    linked = make_ctx(admin_id=999, link=make_link(telegram_id=999,
+                                                   plex_token="admin-tok"))
+    upd = make_update(callback_data=REQUESTS_MINE, user_id=999)
+    upd.effective_chat.type = "group"
+    await requests_hub_mine(upd, linked)
+    kwargs = linked.bot_data["seerr"].list_requests.call_args.kwargs
+    assert kwargs["as_plex_token"] == "admin-tok"

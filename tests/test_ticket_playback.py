@@ -162,3 +162,53 @@ async def test_admin_card_in_group_has_no_playback_lines():
     tau.get_history.assert_not_called()
     kwargs = ctx.bot_data["seerr"].get_issue.call_args.kwargs
     assert kwargs["as_plex_token"] == "admin-token"
+
+
+async def test_fix_in_a_group_redraws_the_ticket_card_without_playback_lines():
+    from bot.tickets import apply_fix
+    from fix_result import FixResult
+    tau = _tau()
+    ctx = make_ctx(admin_id=999, bot_data_overrides={"tautulli": tau})
+    seerr = ctx.bot_data["seerr"]
+    seerr.get_issue.return_value = _issue()
+    seerr.get_media_title.return_value = ("Inception", "2010")
+    ctx.bot_data["radarr"].auto_fix.return_value = FixResult.success(
+        "Deleted file and triggered re-search.", steps_done=["delete", "search"],
+        poll_info={"movie_id": 555})
+    upd = make_update(callback_data="tkfd:38", user_id=999)
+    upd.effective_chat.type = "supergroup"
+    await apply_fix(upd, ctx, strategy="redownload")
+    restored = [e["text"] for e in upd.callback_query.edits
+                if "Ticket #38" in e["text"] and "Reported by" in e["text"]]
+    assert restored, upd.callback_query.edits
+    assert all("Living Room" not in t and "Transcode" not in t for t in restored)
+    tau.get_history.assert_not_called()
+
+
+async def test_fix_in_a_dm_redraws_the_ticket_card_with_playback_lines():
+    from bot.tickets import apply_fix
+    from fix_result import FixResult
+    ctx = make_ctx(admin_id=999, bot_data_overrides={"tautulli": _tau()})
+    seerr = ctx.bot_data["seerr"]
+    seerr.get_issue.return_value = _issue()
+    seerr.get_media_title.return_value = ("Inception", "2010")
+    ctx.bot_data["radarr"].auto_fix.return_value = FixResult.success(
+        "Deleted file and triggered re-search.", steps_done=["delete", "search"],
+        poll_info={"movie_id": 555})
+    upd = make_update(callback_data="tkfd:38", user_id=999)
+    await apply_fix(upd, ctx, strategy="redownload")
+    assert any("Living Room" in e["text"] for e in upd.callback_query.edits)
+
+
+async def test_back_in_a_group_keeps_the_api_key_but_draws_no_playback_lines():
+    from bot.tickets import tk_back
+    tau = _tau()
+    ctx = make_ctx(admin_id=999, bot_data_overrides={"tautulli": tau})
+    ctx.bot_data["seerr"].get_issue.return_value = _issue()
+    upd = make_update(callback_data="tkback:38", user_id=999)  # Admin, unlinked
+    upd.effective_chat.type = "supergroup"
+    await tk_back(upd, ctx)
+    text = upd.callback_query.edits[-1]["text"]
+    assert "Ticket #38" in text and "Living Room" not in text
+    tau.get_history.assert_not_called()
+    assert ctx.bot_data["seerr"].get_issue.call_args.kwargs["as_plex_token"] is None

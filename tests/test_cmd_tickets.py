@@ -150,3 +150,15 @@ async def test_unlinked_admin_in_group_is_asked_to_link():
     await tickets_hub_list(upd, ctx)
     assert "link" in upd.callback_query.edits[0]["text"]
     ctx.bot_data["seerr"].list_issues.assert_not_called()
+
+
+async def test_tickets_hub_in_a_group_says_your_tickets_for_the_admin():
+    from bot.tickets_hub import render_tickets_hub
+    ctx = make_ctx(admin_id=999)
+    dm = await render_tickets_hub(make_update(text="/tickets", user_id=999), ctx)
+    upd = make_update(text="/tickets", user_id=999)
+    upd.effective_chat.type = "supergroup"
+    grp = await render_tickets_hub(upd, ctx)
+    assert "open tickets" in dm.text and "your tickets" not in dm.text
+    assert "your tickets" in grp.text and "open tickets" not in grp.text
+    assert [b.text for b in grp.buttons][1] == "📋 My tickets"

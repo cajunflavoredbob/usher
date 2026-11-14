@@ -431,3 +431,25 @@ async def test_admin_list_in_group_is_their_own_requests_only():
     kwargs = ctx.bot_data["seerr"].list_requests.call_args.kwargs
     assert kwargs["as_plex_token"] == "admin-tok"
     assert kwargs["requested_by"] == 7
+
+
+async def test_unlinked_admin_in_group_is_asked_to_link_for_requests():
+    ctx = make_ctx(admin_id=ADMIN_ID, link=None)
+    upd = make_update(text="/requests", user_id=ADMIN_ID)
+    upd.effective_chat.type = "group"
+    await cmd_requests(upd, ctx)
+    assert "link" in upd.effective_message.reply_calls[-1]["text"]
+    ctx.bot_data["seerr"].list_requests.assert_not_called()
+
+
+async def test_admin_cancel_in_group_still_rechecks_pending_with_the_api_key():
+    ctx = make_ctx(admin_id=ADMIN_ID, link=None)  # unlinked: needs no Link
+    seerr = ctx.bot_data["seerr"]
+    seerr.get_request.side_effect = None
+    seerr.get_request.return_value = _items()[1]  # not pending
+    seerr.list_requests.return_value = (_items(), 2)
+    upd = make_update(callback_data="rqlc:13", user_id=ADMIN_ID)
+    upd.effective_chat.type = "supergroup"
+    await rq_list_cancel(upd, ctx)
+    seerr.delete_request.assert_not_awaited()
+    assert seerr.get_request.call_args.kwargs["as_plex_token"] is None

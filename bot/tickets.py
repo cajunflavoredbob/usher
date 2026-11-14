@@ -436,7 +436,9 @@ async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         logger.warning("Unparseable callback data: %r", q.data)
         return
     tg_id = update.effective_user.id
-    is_admin, token, decrypt_failed = await token_for(ctx, tg_id, admin=admin_view(update, ctx))
+    # The Admin keeps the API key here, even in a group; only the view differs.
+    is_admin, token, decrypt_failed = await token_for(ctx, tg_id)
+    view_admin = admin_view(update, ctx)
     # Same gate as tk_open: a non-admin without a usable token must not fall
     # through to _build_ticket_detail's admin-key fetch.
     if not is_admin and decrypt_failed:
@@ -448,7 +450,7 @@ async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await q.message.reply_text("DM me /link first so I can act on tickets as you.")
         return
     try:
-        text, kb = await _build_ticket_detail(ctx, ticket_id, is_admin, token)
+        text, kb = await _build_ticket_detail(ctx, ticket_id, view_admin, token)
     except PlexTokenInvalidError:
         await prompt_plex_relink(
             update, ctx, back=list_back_button() if from_list else None)
@@ -456,7 +458,7 @@ async def tk_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if from_list:
         kb = _with_list_back(kb, ticket_id, retry=False)
     elif from_dm:
-        kb = (new_ticket_dm_kb(ticket_id, _kb_is_resolved(kb)) if kb is not None and is_admin
+        kb = (new_ticket_dm_kb(ticket_id, _kb_is_resolved(kb)) if kb is not None and view_admin
               else kb or InlineKeyboardMarkup([[_ticket_back_button(ticket_id, False, True)]]))
     try:
         await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
@@ -690,13 +692,15 @@ def _kb_is_resolved(kb: InlineKeyboardMarkup) -> bool:
                    for row in kb.inline_keyboard for b in row)
 
 
-async def _restore_ticket_card(q, ctx, ticket_id: int, from_list: bool,
+async def _restore_ticket_card(update, q, ctx, ticket_id: int, from_list: bool,
                                from_dm: bool = False) -> None:
     """Edit the Ticket card back into the Ticket with its buttons, the same
     view its Back shows (plus "⬅️ Tickets" when opened from the list, or
-    "📜 History" when it is a new-Ticket DM)."""
+    "📜 History" when it is a new-Ticket DM). The Admin gets their own view
+    for the chat: in a group the User view, with no playback lines."""
     try:
-        text, kb = await _build_ticket_detail(ctx, ticket_id, True, None)
+        text, kb = await _build_ticket_detail(
+            ctx, ticket_id, admin_view(update, ctx), None)
     except Exception:
         logger.exception("couldn't rebuild ticket #%d after a fix started", ticket_id)
         text, kb = f"<b>Ticket #{ticket_id}</b>", None
@@ -805,7 +809,7 @@ async def apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy:
         # the Ticket card shows the Ticket again.
         card = _ProgressCard(ctx, q.message.chat_id)
         await card.show(f"⏳ {action_name} for #{ticket_id} - working...")
-        await _restore_ticket_card(q, ctx, ticket_id, from_list, from_dm)
+        await _restore_ticket_card(update, q, ctx, ticket_id, from_list, from_dm)
 
         action: FixAction = "fix" if strategy == "redownload" else "mark_failed"
         result = await run_arr_action(
@@ -919,8 +923,7 @@ async def tk_reply_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if not try_begin_action(ctx, start_key):
         return ConversationHandler.END
     try:
-        is_admin, token, decrypt_failed = await token_for(
-            ctx, update.effective_user.id, admin=admin_view(update, ctx))
+        is_admin, token, decrypt_failed = await token_for(ctx, update.effective_user.id)
         if not is_admin and decrypt_failed:
             await q.message.reply_text(
                 DECRYPT_FAILED_MSG
@@ -1027,8 +1030,7 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if not text:
         await update.effective_message.reply_text("Empty message. Send a few words or /cancel.")
         return AWAIT_TICKET_REPLY
-    is_admin, token, decrypt_failed = await token_for(
-        ctx, update.effective_user.id, admin=admin_view(update, ctx))
+    is_admin, token, decrypt_failed = await token_for(ctx, update.effective_user.id)
     if not is_admin and decrypt_failed:
         await _reply_result(update, ctx, DECRYPT_FAILED_MSG,
                             _result_markup(from_list))
@@ -1100,8 +1102,7 @@ async def _resume_ticket_reply(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     blocked, with the text the user had already typed."""
     ticket_id = payload["ticket_id"]
     text = payload["text"]
-    is_admin, token, _ = await token_for(
-        ctx, update.effective_user.id, admin=admin_view(update, ctx))
+    is_admin, token, _ = await token_for(ctx, update.effective_user.id)
     if not is_admin and token is None:
         return  # can't happen right after a successful link; guard anyway
     seerr: SeerrClient = ctx.bot_data["seerr"]
