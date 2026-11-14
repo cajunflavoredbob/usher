@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 
 from telegram.ext import ConversationHandler
 
+from bot import hub
 from bot.access_asks import (REFUSALS, access_ask_cancel, access_ask_ignore,
                              access_ask_send, access_ask_start,
                              remember_sign_in)
@@ -202,7 +203,12 @@ async def test_failed_admin_dm_stores_no_ask_so_they_can_retry(fresh_store):
     assert _callbacks(edit["reply_markup"]) == [ACCESS_SEND, ACCESS_CANCEL]
 
 
-async def test_hub_started_ask_ends_with_the_hub_back_button(fresh_store):
+async def test_hub_started_ask_ends_with_the_hub_back_button(fresh_store,
+                                                              monkeypatch):
+    # The Account Hub is registered by importing the link flow; register it
+    # here on a copy so the test stands alone and leaves HUBS as it found it.
+    monkeypatch.setattr(hub, "HUBS", dict(hub.HUBS))
+    hub.register_hub("account", "Account", None)
     ctx = _ctx(fresh_store)
     remember_sign_in(ctx, "fresh-tok", "account")
     upd = _stranger_update(ACCESS_SEND)
