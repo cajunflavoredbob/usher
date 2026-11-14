@@ -412,10 +412,12 @@ async def _notify_complete(ctx: ContextTypes.DEFAULT_TYPE, fix, extra: str = "",
         "",
         "Did this resolve the problem?",
     ]
-    keyboard = [[
-        InlineKeyboardButton("✅ Yes, close it", callback_data=f"{RESOLVE}:{fix.ticket_id}:yes"),
-        InlineKeyboardButton("💬 No, add a comment", callback_data=f"{RESOLVE}:{fix.ticket_id}:no"),
-    ]]
+    row = [InlineKeyboardButton("💬 No, add a comment", callback_data=f"{RESOLVE}:{fix.ticket_id}:no")]
+    if not retrying:
+        # No close button while the bot's own retry runs: the Ticket is not
+        # done until that retry lands.
+        row.insert(0, InlineKeyboardButton("✅ Yes, close it", callback_data=f"{RESOLVE}:{fix.ticket_id}:yes"))
+    keyboard = [row]
     if repeat is not None and not retrying:
         # The Admin's own repeat offers Mark Failed; a Reporter asks the Admin
         # (not while the bot is already trying a different release).

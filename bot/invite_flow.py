@@ -67,6 +67,7 @@ from bot.shared import (
     INV_CONFIRM,
     INV_EMAIL,
     INV_LIBS,
+    day_count,
     edit_or_send,
     force_end_flow_conversations,
     record_btn,
@@ -737,7 +738,7 @@ def _inactive_label(share: PlexShare, seen: Optional[float],
     if seen is None:
         return f"{who}: never watched"
     days = max(int((now - seen) // 86400), 0)
-    return f"{who}: last watched {days} days ago"
+    return f"{who}: last watched {day_count(days)} ago"
 
 
 async def admin_inactive(update: Update,
@@ -777,12 +778,12 @@ async def admin_inactive(update: Update,
                                         callback_data=f"{ADMIN_SHARES}:0")]
     if not idle:
         await _edit_recorded(update, ctx, f"💤 <b>Inactive</b>\nEvery Share "
-                             f"has watched something in the last {days} days.",
+                             f"has watched something in the last {day_count(days)}.",
                              InlineKeyboardMarkup([shares_back]))
         return
     await _edit_recorded(update, ctx, *_share_page(
         idle, _page_of(q.data), ADMIN_INACTIVE,
-        f"💤 <b>Inactive</b> ({len(idle)})\nNothing watched for {days} days "
+        f"💤 <b>Inactive</b> ({len(idle)})\nNothing watched for {day_count(days)} "
         "or more. Tap one to see it or remove it.",
         labels={s.id: _inactive_label(s, seen[s.id], now) for s in idle},
         back_rows=[shares_back, [back_button(ADMIN_HUB)]]))

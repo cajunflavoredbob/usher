@@ -28,7 +28,7 @@ from bot.admin_hub import refuse_outside_admin_dm
 from bot.callback_prefixes import (ACCESS_APPROVE, ACCESS_ASK, ACCESS_CANCEL,
                                    ACCESS_IGNORE, ACCESS_SEND)
 from bot.hub import end_markup
-from bot.shared import (edit_or_send, end_action, record_btn,
+from bot.shared import (day_count, edit_or_send, end_action, record_btn,
                         try_begin_action)
 from const import ACCESS_ASK_IGNORE_DAYS, ACCESS_ASK_TOKEN_TTL_S
 
@@ -41,7 +41,7 @@ ENDED_TOAST = "That sign-in has ended. Link again to ask for access."
 REFUSALS = {
     "open": "✅ Your ask is already waiting for the Admin.",
     "ignored": ("The Admin can't take another ask from you right now. "
-                f"Try again in {ACCESS_ASK_IGNORE_DAYS} days."),
+                f"Try again in {day_count(ACCESS_ASK_IGNORE_DAYS)}."),
     "full": ("The Admin has too many asks waiting right now. Try again "
              "later."),
 }

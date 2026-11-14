@@ -37,7 +37,8 @@ logger = logging.getLogger("usher")
 
 HEADER = "📣 From the Admin"
 _TEXT_KEY = "bc_text"
-_BC_KEYS = (_TEXT_KEY,)
+_VER_KEY = "bc_ver"
+_BC_KEYS = (_TEXT_KEY,)  # the version counter is never cleared
 _RETRY_AFTER_TRIES = 3
 
 
@@ -45,11 +46,24 @@ def broadcast_body(text: str) -> str:
     return f"{HEADER}\n\n{text}"
 
 
-def _preview_markup() -> InlineKeyboardMarkup:
+def _preview_markup(version: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("📤 Send", callback_data=BROADCAST_SEND),
-        InlineKeyboardButton("🛑 Cancel", callback_data=BROADCAST_CANCEL),
+        InlineKeyboardButton("📤 Send",
+                             callback_data=f"{BROADCAST_SEND}:{version}"),
+        InlineKeyboardButton("🛑 Cancel",
+                             callback_data=f"{BROADCAST_CANCEL}:{version}"),
     ]])
+
+
+async def _is_stale(q, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
+    """A Send or Cancel tap from an older preview than the newest draft:
+    say so and change nothing. A tap with no version counts as old."""
+    tapped = (q.data or "").rpartition(":")[2]
+    if tapped == str(ctx.user_data.get(_VER_KEY)):
+        return False
+    await q.answer("That preview is old. Use the newest one.",
+                   show_alert=True)
+    return True
 
 
 def _clear(ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -71,7 +85,7 @@ def _broadcast_conversation() -> ConversationHandler:
             ],
             BC_CONFIRM: [
                 CallbackQueryHandler(broadcast_send,
-                                     pattern=fr"^{BROADCAST_SEND}$"),
+                                     pattern=fr"^{BROADCAST_SEND}:\d+$"),
                 # Typing again replaces the draft.
                 MessageHandler(filters.TEXT & ~filters.COMMAND,
                                broadcast_text),
@@ -81,7 +95,7 @@ def _broadcast_conversation() -> ConversationHandler:
         fallbacks=[
             CommandHandler("cancel", broadcast_cancel),
             CallbackQueryHandler(broadcast_cancel,
-                                 pattern=fr"^{BROADCAST_CANCEL}$"),
+                                 pattern=fr"^{BROADCAST_CANCEL}:\d+$"),
         ],
         per_user=True,
         per_chat=True,
@@ -134,10 +148,12 @@ async def broadcast_text(update: Update,
     admin_id = ctx.bot_data.get("admin_id")
     count = len([t for t in await store.list_linked_ids() if t != admin_id])
     ctx.user_data[_TEXT_KEY] = text
+    version = ctx.user_data.get(_VER_KEY, 0) + 1
+    ctx.user_data[_VER_KEY] = version
     sent = await update.effective_message.reply_text(
         f"Preview. This goes to {count} Linked user"
         f"{'' if count == 1 else 's'} (not you):\n\n{broadcast_body(text)}",
-        reply_markup=_preview_markup())
+        reply_markup=_preview_markup(version))
     record_btn(ctx.application, update.effective_user.id, sent)
     return BC_CONFIRM
 
@@ -149,6 +165,8 @@ async def broadcast_cancel(update: Update,
     if q is not None:
         if await refuse_outside_admin_dm(update, ctx):
             return ConversationHandler.END
+        if await _is_stale(q, ctx):
+            return BC_CONFIRM
         await q.answer()
     _clear(ctx)
     markup = end_markup(ADMIN_HUB)
@@ -184,6 +202,8 @@ async def broadcast_send(update: Update,
     if await refuse_outside_admin_dm(update, ctx):
         return ConversationHandler.END
     q = update.callback_query
+    if await _is_stale(q, ctx):
+        return BC_CONFIRM
     await q.answer()
     text = ctx.user_data.pop(_TEXT_KEY, None)
     markup = end_markup(ADMIN_HUB)

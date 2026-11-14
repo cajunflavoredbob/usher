@@ -137,3 +137,12 @@ async def test_admin_card_shows_playback_but_reporter_view_does_not():
     text = await _card(ctx2, 42)
     assert "Living Room" not in text and "Transcode" not in text
     tau.get_history.assert_not_called()
+
+
+async def test_season_zero_ticket_is_the_whole_show():
+    rows = [{"row_id": 4, "date": 1781568000, "player": "Den", "platform": "Y",
+             "parent_media_index": 2, "media_index": 3}]
+    issue = _issue(media_type="tv", problem_season=0, problem_episode=0)
+    app = _app(_tau(rows=rows), issue)
+    await handle_seerr_reported(app, _payload())
+    assert "Den" in app.bot.send_message.call_args.kwargs["text"]

@@ -162,3 +162,12 @@ async def test_failed_offline_dm_is_retried_next_check(fresh_store):
     for _ in range(3):
         await check_alarms(ctx)
     assert ctx.bot.send_message.await_count == 2
+
+
+async def test_account_owning_no_server_is_said_plainly(fresh_store):
+    ctx = _ctx(fresh_store, plex=SimpleNamespace(
+        get_owned_server_online=AsyncMock(
+            side_effect=LookupError("this Plex account owns no server"))))
+    text = await status_section(ctx)
+    assert "owns no server" in text
+    assert "unexpected" not in text.lower()

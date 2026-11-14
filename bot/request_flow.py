@@ -98,6 +98,7 @@ from bot.requests_hub import REQUESTS_HUB
 from bot.shared import (
     DECRYPT_FAILED_MSG,
     KEYCAP_DIGITS,
+    day_count,
     RQ_CONFIRM,
     RQ_PICK_MEDIA,
     RQ_PICK_SEASONS,
@@ -890,7 +891,7 @@ async def _quota_line(ctx: ContextTypes.DEFAULT_TYPE, tg_id: int,
         unit = "requests" if media_type == "movie" else "seasons"
         if bucket.remaining <= 0:
             return (f"\n🙅 Your quota ({bucket.limit} {unit} per "
-                    f"{bucket.days} days) is used up, Seerr will reject "
+                    f"{day_count(bucket.days)}) is used up, Seerr will reject "
                     "this until older requests age out of the window.")
         return (f"\nQuota: {bucket.remaining} of {bucket.limit} {unit} left "
                 f"in the current {bucket.days}-day window.")

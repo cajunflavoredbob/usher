@@ -178,6 +178,11 @@ def format_media_label(
     return base
 
 
+def day_count(n: int) -> str:
+    """"1 day", "7 days"."""
+    return f"{n} day{'' if n == 1 else 's'}"
+
+
 def format_se_suffix(problem_season, problem_episode) -> str:
     """Render `S01E02` / `S01` from the Seerr webhook problemSeason+problemEpisode
     fields, tolerating None / string / int variants. Returns empty string if

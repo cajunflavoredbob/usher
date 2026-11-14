@@ -129,6 +129,9 @@ async def test_on_the_reporter_is_told_without_the_ask_button_and_still_refunded
     assert "trying a different release now" in dm["text"]
     assert "That use was given back" in dm["text"]
     assert not any(c.startswith("askadm:") for c in _callbacks(dm))
+    # No close button while the retry runs; the comment button stays.
+    assert not any(c.endswith(":yes") for c in _callbacks(dm))
+    assert any(c.endswith(":no") for c in _callbacks(dm))
     ctx.bot_data["store"].mark_autofix_repeat.assert_awaited_once_with(1, refunded=True)
 
 

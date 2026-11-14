@@ -190,3 +190,19 @@ def test_inactive_handler_registered_before_the_catch_all():
         r"pattern=fr\"\^\{ADMIN_INACTIVE\}:\\d\+\$\"\)", src)
     assert found and found.start() < src.index(
         "CallbackQueryHandler(unmatched_callback)")
+
+
+async def test_one_day_is_singular():
+    ctx = _ctx([_share(1, "old@example.com")],
+               [{"email": "old@example.com", "username": "old",
+                 "last_seen": _days_ago(1)}], days=1)
+    edit = await _inactive(ctx)
+    assert "Nothing watched for 1 day or more" in edit["text"]
+    flat = _flat(edit["reply_markup"])
+    assert ("old@example.com: last watched 1 day ago",
+            f"{SHARE_VIEW}:1") in flat
+    ctx = _ctx([_share(3, "recent@example.com")],
+               [{"email": "recent@example.com", "username": "r",
+                 "last_seen": _days_ago(0)}], days=1)
+    edit = await _inactive(ctx)
+    assert "in the last 1 day." in edit["text"]

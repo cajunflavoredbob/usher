@@ -63,6 +63,7 @@ POPULAR_LABEL = "🏆 Popular here this week"
 POPULAR_PER_STAT = 10
 
 _STALE_BROWSE_TOAST = "That browse list is stale: run /trending again."
+_POPULAR_GONE_TOAST = "Popular here isn't available now: run /trending again."
 
 
 NOT_LINKED_MSG = "DM me /link first so I know which Plex account is yours."
@@ -295,7 +296,10 @@ async def dv_category(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     ctx.user_data["dv_popular_ok"] = await _popular_allowed(
         ctx, update.effective_user.id)
     if category not in _labels(ctx):
-        await q.answer()
+        if category == POPULAR_CATEGORY:
+            await q.answer(_POPULAR_GONE_TOAST, show_alert=True)
+        else:
+            await q.answer()
         return
     await q.answer()
     await send_typing(update, ctx)

@@ -225,6 +225,9 @@ async def plex_state(ctx) -> tuple[Optional[bool], str]:
         seen = await plex.get_owned_server_online(token)
         if seen is not None:
             answers.append(seen)
+    except LookupError:
+        errors.append("the linked Plex account owns no server "
+                      "(check which Plex account the Admin linked with /link)")
     except Exception as exc:
         logger.warning("Plex presence check failed: %s", exc)
         errors.append(user_friendly_message(exc))

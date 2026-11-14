@@ -111,8 +111,8 @@ async def test_group_chat_is_refused(fresh_store):
 
 async def test_text_and_send_steps_refuse_a_non_admin_too(fresh_store):
     await _link(fresh_store, 1)
-    ctx = _ctx(fresh_store, user_data={"bc_text": "hi"})
-    upd = _tap(BROADCAST_SEND, user_id=42)
+    ctx = _ctx(fresh_store, user_data={"bc_text": "hi", "bc_ver": 1})
+    upd = _tap(f"{BROADCAST_SEND}:1", user_id=42)
     assert await broadcast_send(upd, ctx) == ConversationHandler.END
     typed = make_update(text="hi", user_id=42)
     assert await broadcast_text(typed, ctx) == ConversationHandler.END
@@ -123,10 +123,10 @@ async def test_text_and_send_steps_refuse_a_non_admin_too(fresh_store):
 
 
 async def test_group_chat_is_refused_at_every_step(fresh_store):
-    ctx = _ctx(fresh_store, user_data={"bc_text": "hi"})
+    ctx = _ctx(fresh_store, user_data={"bc_text": "hi", "bc_ver": 1})
     for call, upd in (
-            (broadcast_send, _tap(BROADCAST_SEND)),
-            (broadcast_cancel, _tap(BROADCAST_CANCEL)),
+            (broadcast_send, _tap(f"{BROADCAST_SEND}:1")),
+            (broadcast_cancel, _tap(f"{BROADCAST_CANCEL}:1")),
             (broadcast_text, make_update(text="hi", user_id=ADMIN))):
         upd.effective_chat.type = "group"
         assert await call(upd, ctx) == ConversationHandler.END
@@ -134,7 +134,7 @@ async def test_group_chat_is_refused_at_every_step(fresh_store):
 
 
 async def test_typed_cancel_sends_nothing(fresh_store):
-    ctx = _ctx(fresh_store, user_data={"bc_text": "hi"})
+    ctx = _ctx(fresh_store, user_data={"bc_text": "hi", "bc_ver": 1})
     upd = make_update(text="/cancel", user_id=ADMIN)
     assert await broadcast_cancel(upd, ctx) == ConversationHandler.END
     reply = upd.effective_message.reply_calls[0]
@@ -153,8 +153,8 @@ async def test_preview_shows_header_text_and_count_without_the_admin(
     assert HEADER in reply["text"] and "*tonight* <b>x</b>" in reply["text"]
     assert "2 Linked users" in reply["text"]
     assert "parse_mode" not in reply
-    assert _callbacks(reply["reply_markup"]) == [BROADCAST_SEND,
-                                                 BROADCAST_CANCEL]
+    assert _callbacks(reply["reply_markup"]) == [f"{BROADCAST_SEND}:1",
+                                                 f"{BROADCAST_CANCEL}:1"]
 
 
 async def test_overlong_text_is_refused(fresh_store):
@@ -167,7 +167,7 @@ async def test_overlong_text_is_refused(fresh_store):
 async def test_cancel_sends_nothing(fresh_store):
     await _link(fresh_store, 1)
     ctx, _upd, _ = await _preview(fresh_store)
-    upd = _tap(BROADCAST_CANCEL)
+    upd = _tap(f"{BROADCAST_CANCEL}:1")
     assert await broadcast_cancel(upd, ctx) == ConversationHandler.END
     edit = upd.callback_query.edits[0]
     assert "Nothing was sent" in edit["text"]
@@ -184,7 +184,7 @@ async def test_send_reaches_every_linked_user_but_the_admin_with_exact_text(
     await _link(fresh_store, ADMIN, 1, 2, 3)
     text = "Down 9pm *tonight* <b>x</b> [a](b) _c_"
     ctx, _upd, _ = await _preview(fresh_store, text)
-    upd = _tap(BROADCAST_SEND)
+    upd = _tap(f"{BROADCAST_SEND}:1")
     assert await broadcast_send(upd, ctx) == ConversationHandler.END
     await _drain(ctx)
     calls = ctx.bot.send_message.await_args_list
@@ -203,7 +203,7 @@ async def test_report_edits_the_preview_with_matching_counts(fresh_store):
             raise Forbidden("Forbidden: bot was blocked by the user")
         return SimpleNamespace(message_id=1, chat_id=chat_id)
     ctx.bot.send_message = AsyncMock(side_effect=send)
-    upd = _tap(BROADCAST_SEND)
+    upd = _tap(f"{BROADCAST_SEND}:1")
     await broadcast_send(upd, ctx)
     await _drain(ctx)
     kw = ctx.bot.edit_message_text.await_args.kwargs
@@ -227,7 +227,7 @@ async def test_flood_wait_is_waited_out_and_retried(fresh_store, monkeypatch):
     monkeypatch.setattr(bc.asyncio, "sleep", fake_sleep)
     ctx.bot.send_message = AsyncMock(side_effect=[
         RetryAfter(3), SimpleNamespace(message_id=1, chat_id=1)])
-    await broadcast_send(_tap(BROADCAST_SEND), ctx)
+    await broadcast_send(_tap(f"{BROADCAST_SEND}:1"), ctx)
     await _drain(ctx)
     assert 3 in sleeps
     assert _db(fresh_store).execute(
@@ -245,7 +245,7 @@ async def test_sends_are_spaced_by_the_interval(fresh_store, monkeypatch):
         sleeps.append(s)
         await real_sleep(0)
     monkeypatch.setattr(bc.asyncio, "sleep", fake_sleep)
-    await broadcast_send(_tap(BROADCAST_SEND), ctx)
+    await broadcast_send(_tap(f"{BROADCAST_SEND}:1"), ctx)
     await _drain(ctx)
     assert sleeps == [0.04, 0.04, 0.04]
 
@@ -253,7 +253,7 @@ async def test_sends_are_spaced_by_the_interval(fresh_store, monkeypatch):
 async def test_send_with_no_other_linked_user_says_so(fresh_store):
     await _link(fresh_store, ADMIN)
     ctx, _upd, _ = await _preview(fresh_store)
-    upd = _tap(BROADCAST_SEND)
+    upd = _tap(f"{BROADCAST_SEND}:1")
     await broadcast_send(upd, ctx)
     assert "No Linked users" in upd.callback_query.edits[0]["text"]
     ctx.bot.send_message.assert_not_called()
@@ -319,3 +319,39 @@ async def test_old_finished_broadcasts_are_pruned(fresh_store):
 def test_conversation_wires_the_states():
     conv = _broadcast_conversation()
     assert set(conv.states) >= {BC_TEXT, BC_CONFIRM}
+
+
+async def test_a_tap_on_an_older_preview_sends_nothing(fresh_store):
+    await _link(fresh_store, 1)
+    ctx, upd1, _ = await _preview(fresh_store, "first draft")
+    first = _callbacks(upd1.effective_message.reply_calls[0]["reply_markup"])
+    upd2 = make_update(text="second draft", user_id=ADMIN)
+    await broadcast_text(upd2, ctx)
+    second = _callbacks(upd2.effective_message.reply_calls[0]["reply_markup"])
+    assert first != second
+    for stale in first:
+        upd = _tap(stale)
+        handler = broadcast_send if stale.startswith(BROADCAST_SEND) \
+            else broadcast_cancel
+        assert await handler(upd, ctx) == BC_CONFIRM
+        text, alert = upd.callback_query.answers[-1]
+        assert "old" in text and alert
+        assert upd.callback_query.edits == []
+    assert ctx.user_data["bc_text"] == "second draft"
+    await broadcast_send(_tap(second[0]), ctx)
+    await _drain(ctx)
+    texts = [c.kwargs["text"] for c in ctx.bot.send_message.await_args_list]
+    assert texts == [f"{HEADER}\n\nsecond draft"]
+
+
+async def test_an_old_preview_stays_old_after_a_new_broadcast(fresh_store):
+    await _link(fresh_store, 1)
+    ctx, upd1, _ = await _preview(fresh_store, "A")
+    old_send = _callbacks(upd1.effective_message.reply_calls[0]["reply_markup"])[0]
+    await broadcast_cancel(_tap(f"{BROADCAST_CANCEL}:1"), ctx)
+    upd2 = make_update(text="B", user_id=ADMIN)
+    await broadcast_text(upd2, ctx)
+    upd = _tap(old_send)
+    assert await broadcast_send(upd, ctx) == BC_CONFIRM
+    assert upd.callback_query.edits == []
+    ctx.bot.send_message.assert_not_called()

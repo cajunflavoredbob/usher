@@ -36,6 +36,9 @@ def _pick_row(rows: list, media_type: str, season: Optional[int],
     """The newest history row for the Ticket's scope. A movie or a Ticket
     on the whole show takes the newest row; a season-only Ticket the newest
     row of that season; an episode Ticket only that season and episode."""
+    # Seerr sends 0 for "not set": a whole-show Ticket is season 0.
+    season = season or None
+    episode = episode or None
     for r in rows:  # Tautulli returns newest first
         if media_type == "tv":
             if season is not None and _int(r.get("parent_media_index")) != season:

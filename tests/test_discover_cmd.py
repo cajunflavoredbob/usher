@@ -97,3 +97,14 @@ async def test_unknown_category_ignored():
     upd = make_update(callback_data="dvc:hax", user_id=USER_ID)
     await dv_category(upd, ctx)
     ctx.bot_data["seerr"].discover.assert_not_awaited()
+
+
+async def test_stale_popular_tap_after_tautulli_is_gone_toasts():
+    ctx = make_ctx(link=make_link(telegram_id=USER_ID))
+    ctx.bot_data["tautulli"] = None
+    upd = make_update(callback_data="dvc:popular", user_id=USER_ID)
+    await dv_category(upd, ctx)
+    ctx.bot_data["seerr"].discover.assert_not_awaited()
+    assert upd.callback_query.edits == []
+    text, alert = upd.callback_query.answers[-1]
+    assert text and alert
