@@ -98,7 +98,7 @@ async def test_double_submit_is_noop():
     """Second concurrent confirm tap must not file a duplicate Seerr Ticket."""
     upd = make_update(text="", user_id=42)
     ctx = make_ctx(admin_id=999, link=make_link(plex_token="tok"),
-                   user_data={"submitting_ticket": True,
+                   user_data={"submitting_ticket": 0,  # the flow generation it started under
                               "media": {"type": "movie", "tmdb_id": 1,
                                         "seerr_media_id": 5, "title": "M",
                                         "year": ""},

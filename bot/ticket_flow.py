@@ -69,6 +69,8 @@ from bot.shared import (
     require_seerr,
     edit_or_send,
     end_action,
+    flow_step_gen,
+    flow_step_is_stale,
     force_end_flow_conversations,
     send_typing,
     media_action_key,
@@ -949,13 +951,19 @@ async def _submit_ticket(
     concurrent_updates(True), a second confirm tap runs in parallel and
     would file a duplicate Seerr Ticket. user_data is shared across the
     user's updates and there is no await between check and set."""
-    if ctx.user_data.get("submitting_ticket"):
+    # The marker holds the flow generation the submit started under, so it
+    # blocks only this report's double tap: a /issue started while this one
+    # is still submitting runs under a later generation and is not blocked.
+    gen = flow_step_gen(ctx)
+    if ctx.user_data.get("submitting_ticket") == gen:
         return ConversationHandler.END
-    ctx.user_data["submitting_ticket"] = True
+    ctx.user_data["submitting_ticket"] = gen
     try:
         return await _submit_ticket_inner(update, ctx, autofix=autofix)
     finally:
-        ctx.user_data.pop("submitting_ticket", None)
+        # Only our own marker: a newer report's submit may have replaced it.
+        if ctx.user_data.get("submitting_ticket") == gen:
+            ctx.user_data.pop("submitting_ticket", None)
 
 
 async def _submit_ticket_inner(
@@ -1145,7 +1153,10 @@ async def _submit_ticket_inner(
                 reply_markup=markup.to_json() if markup is not None else "")
         except Exception as exc:
             logger.exception("couldn't attach autofix card message", exc_info=exc)
-    _clear_issue_state(ctx)
+    # A force-end while this submit ran already cleared its draft, and a newer
+    # report may own the keys now: leave them alone.
+    if not flow_step_is_stale(ctx):
+        _clear_issue_state(ctx)
     return ConversationHandler.END
 
 

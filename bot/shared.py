@@ -1071,6 +1071,15 @@ def flow_step_is_stale(ctx) -> bool:
     return cell is not None and cell[0] != _flow_gen(ctx)
 
 
+def flow_step_gen(ctx) -> int:
+    """The flow generation the running step started under (the user's current
+    one outside a guarded step). A submit stamps its in-flight marker with it,
+    so a newer flow, which starts under a later generation, is not blocked by
+    an older flow's submit that is still running."""
+    cell = _STEP_GEN.get()
+    return cell[0] if cell is not None else _flow_gen(ctx)
+
+
 def guard_flow_steps(conv: ConversationHandler) -> None:
     """Wrap every step callback of `conv` so a step that was overtaken by a
     force-end returns END instead of the state it computed (PTB would store

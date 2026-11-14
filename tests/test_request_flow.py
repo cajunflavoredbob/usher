@@ -347,7 +347,7 @@ async def test_submit_nothing_to_request_message():
 
 async def test_submit_double_tap_guard():
     ctx = _confirm_ctx()
-    ctx.user_data["rq_submitting"] = True
+    ctx.user_data["rq_submitting"] = 0  # the flow generation it started under
     upd = make_update(callback_data="rqgo:1", user_id=USER_ID)
     state = await request_submit(upd, ctx)
     assert state == ConversationHandler.END

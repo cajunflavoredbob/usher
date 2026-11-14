@@ -113,6 +113,8 @@ from bot.shared import (
     RELINK_RESUME_EXECUTORS,
     RQ_KEYS,
     edit_or_send,
+    flow_step_gen,
+    flow_step_is_stale,
     force_end_flow_conversations,
     prompt_plex_relink,
     record_btn,
@@ -1143,9 +1145,13 @@ async def request_submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await q.answer(_STALE_MENU_TOAST, show_alert=True)
         return RQ_CONFIRM
     await q.answer()
-    if ctx.user_data.get("rq_submitting"):
+    # The marker holds the flow generation the submit started under, so it
+    # blocks only this flow's double tap: a /request started while this one
+    # is still submitting runs under a later generation and is not blocked.
+    gen = flow_step_gen(ctx)
+    if ctx.user_data.get("rq_submitting") == gen:
         return ConversationHandler.END
-    ctx.user_data["rq_submitting"] = True
+    ctx.user_data["rq_submitting"] = gen
     # Remembered (not just parsed) so a relink-resume re-submits at the tier
     # the user actually chose.
     is4k = prefix == RQ_GO_4K
@@ -1153,7 +1159,9 @@ async def request_submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     try:
         return await _submit_request(update, ctx, is4k=is4k)
     finally:
-        ctx.user_data.pop("rq_submitting", None)
+        # Only our own marker: a newer flow's submit may have replaced it.
+        if ctx.user_data.get("rq_submitting") == gen:
+            ctx.user_data.pop("rq_submitting", None)
 
 
 async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
@@ -1226,7 +1234,7 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             "or requested. Nothing to do 🎉",
             hub, parse_mode="HTML",
         )
-        _clear_rq_state(ctx)
+        _clear_finished_rq_state(ctx)
         return ConversationHandler.END
     except DuplicateRequestError:
         await end_flow(
@@ -1236,20 +1244,20 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             typed_text=f"<b>{html.escape(label)}</b> is already requested. "
                        "It's on its way. See /requests for status.",
         )
-        _clear_rq_state(ctx)
+        _clear_finished_rq_state(ctx)
         return ConversationHandler.END
     except QuotaExceededError as exc:
         await end_flow(
             update, ctx,
             _quota_text(exc, who), hub, parse_mode="HTML",
         )
-        _clear_rq_state(ctx)
+        _clear_finished_rq_state(ctx)
         return ConversationHandler.END
     except RequestPermissionError as exc:
         await end_flow(
             update, ctx, _permission_text(exc, who), hub, parse_mode="HTML",
         )
-        _clear_rq_state(ctx)
+        _clear_finished_rq_state(ctx)
         return ConversationHandler.END
     except Exception as exc:
         logger.exception("create_request failed")
@@ -1307,7 +1315,7 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         # same show.
         seasons=(sorted(created.seasons or seasons)
                  if media["type"] == "tv" else None))
-    _clear_rq_state(ctx)
+    _clear_finished_rq_state(ctx)
     return ConversationHandler.END
 
 
@@ -1523,6 +1531,15 @@ async def _remaining_seasons_submit(update: Update,
 def _clear_rq_state(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     for key in _RQ_KEYS:
         ctx.user_data.pop(key, None)
+
+
+def _clear_finished_rq_state(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """The end of a submit: clear the draft unless the user's flows were
+    force-ended while it ran. Then a newer /request may own these keys (the
+    force-end already cleared the draft this submit belonged to), and wiping
+    them would break its list and confirm."""
+    if not flow_step_is_stale(ctx):
+        _clear_rq_state(ctx)
 
 
 async def _resume_submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
