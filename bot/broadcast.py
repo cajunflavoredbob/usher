@@ -168,6 +168,11 @@ async def broadcast_cancel(update: Update,
             return ConversationHandler.END
         if await _is_stale(q, ctx):
             return BC_CONFIRM
+        if ctx.user_data.get(_SENT_VER_KEY) == ctx.user_data.get(_VER_KEY):
+            # This preview's Send was already taken (updates run
+            # concurrently): the job sends, so leave the Sending note.
+            await q.answer("Already sending.")
+            return ConversationHandler.END
         await q.answer()
     _clear(ctx)
     markup = end_markup(ADMIN_HUB)

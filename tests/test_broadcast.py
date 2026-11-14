@@ -357,6 +357,34 @@ async def test_an_old_preview_stays_old_after_a_new_broadcast(fresh_store):
     ctx.bot.send_message.assert_not_called()
 
 
+async def test_cancel_after_send_started_leaves_the_note_and_still_sends(
+        fresh_store):
+    await _link(fresh_store, 1, 2)
+    ctx, _upd, _ = await _preview(fresh_store)
+    send = _tap(f"{BROADCAST_SEND}:1")
+    await broadcast_send(send, ctx)
+    cancel = _tap(f"{BROADCAST_CANCEL}:1")
+    assert await broadcast_cancel(cancel, ctx) == ConversationHandler.END
+    assert cancel.callback_query.edits == []
+    assert cancel.callback_query.answers[-1][0] == "Already sending."
+    await _drain(ctx)
+    assert ctx.bot.send_message.await_count == 2
+
+
+async def test_cancel_before_send_still_cancels_after_an_earlier_broadcast(
+        fresh_store):
+    await _link(fresh_store, 1)
+    ctx, _upd, _ = await _preview(fresh_store, "A")
+    await broadcast_send(_tap(f"{BROADCAST_SEND}:1"), ctx)
+    await _drain(ctx)
+    upd2 = make_update(text="B", user_id=ADMIN)
+    await broadcast_text(upd2, ctx)
+    cancel = _tap(f"{BROADCAST_CANCEL}:2")
+    assert await broadcast_cancel(cancel, ctx) == ConversationHandler.END
+    assert "Nothing was sent" in cancel.callback_query.edits[0]["text"]
+    assert "bc_text" not in ctx.user_data
+
+
 async def test_a_second_send_tap_leaves_the_sending_note_alone(fresh_store):
     await _link(fresh_store, 1, 2)
     ctx, _upd, _ = await _preview(fresh_store)
