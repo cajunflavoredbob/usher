@@ -172,6 +172,38 @@ async def test_submit_without_pick_sends_no_user_id():
     assert ctx.bot_data["seerr"].create_request.call_args.kwargs["user_id"] is None
 
 
+async def test_behalf_progress_card_is_owned_by_the_picked_user():
+    ctx = _confirm_ctx()
+    ctx.bot_data["seerr"].create_request.return_value = CreatedRequest(
+        id=5, status=REQUEST_STATUS_APPROVED)
+    upd = make_update(callback_data="rqgo:1", user_id=ADMIN_ID)
+    await request_submit(upd, ctx)
+    kwargs = ctx.bot_data["store"].add_progress_card.call_args.kwargs
+    assert kwargs["user_id"] == 1001
+    assert kwargs["chat_id"] == upd.effective_chat.id
+
+
+async def test_behalf_card_takes_the_requesters_webhook_events_only():
+    from bot.progress_card import apply_webhook_event
+    ctx = _confirm_ctx()
+    app = ctx.application
+    card = {"id": 1, "chat_id": 100, "message_id": 55, "user_id": 1001,
+            "media_type": "movie", "tmdb_id": 1, "label": "New Movie",
+            "is4k": 0, "status": "waiting", "arr_id": None,
+            "last_progress": "", "bumped": 0,
+            "timeout_at": "2099-01-01 00:00:00"}
+    app.bot_data["store"].find_progress_cards = AsyncMock(return_value=[card])
+    # The Admin's own Request of the same title must not flip it.
+    await apply_webhook_event(app, "MEDIA_APPROVED", "movie", 1,
+                              requester_id=ADMIN_ID, requester_known=True)
+    app.bot_data["store"].update_progress_card.assert_not_awaited()
+    # The picked user's Request does.
+    await apply_webhook_event(app, "MEDIA_APPROVED", "movie", 1,
+                              requester_id=1001, requester_known=True)
+    app.bot_data["store"].update_progress_card.assert_awaited_with(
+        1, status="grabbing")
+
+
 async def test_quota_error_names_the_user():
     ctx = _confirm_ctx()
     ctx.bot_data["seerr"].create_request.side_effect = QuotaExceededError(

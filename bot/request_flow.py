@@ -1246,42 +1246,61 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     sent = await edit_or_send(q, text, parse_mode="HTML",
                               reply_markup=end_markup(REQUESTS_HUB))
     record_btn(ctx.application, update.effective_user.id, sent)
-    # The Progress card is a separate new message: the poller paints
-    # download progress onto it and lifecycle webhooks finish it; for a new
-    # submit, neither edits the confirmation above.
+    # The card lives in the Admin's chat, but its row is owned by the
+    # requester it was made for: webhook events and cancels match on that.
+    await _send_progress_card(
+        ctx, chat_id=update.effective_chat.id,
+        owner_id=((target or {}).get("telegram_id")
+                  or update.effective_user.id),
+        media_type=media["type"], tmdb_id=media["tmdb_id"], label=label,
+        is4k=is4k, approved=approved,
+        # The seasons Seerr granted (the picked ones when it lists none), so
+        # a later cancel can tell this card from another season pick of the
+        # same show.
+        seasons=(sorted(created.seasons or seasons)
+                 if media["type"] == "tv" else None))
+    _clear_rq_state(ctx)
+    return ConversationHandler.END
+
+
+async def _send_progress_card(ctx: ContextTypes.DEFAULT_TYPE, *, chat_id: int,
+                              owner_id: int, media_type: str, tmdb_id: int,
+                              label: str, is4k: bool, approved: bool,
+                              seasons: Optional[list]) -> None:
+    """Send the Progress card for a just-filed Request and store its row.
+    One helper for every submit path (normal, remaining seasons, relink
+    resume) so they cannot drift. `owner_id` is the Telegram id of the
+    requester (the Request's owner), which can differ from the chat the card
+    is sent to when the Admin requests for someone. The card is a separate
+    new message: the poller paints download progress onto it and lifecycle
+    webhooks finish it; neither edits the confirmation. Best effort."""
     try:
         card = await ctx.bot.send_message(
-            chat_id=update.effective_chat.id,
+            chat_id=chat_id,
             text=card_text(label, APPROVED_LINE if approved
                             else "⏳ Waiting for approval…"),
             parse_mode="HTML",
         )
     except Exception as exc:
         logger.exception("couldn't send the Progress card (no row added)", exc_info=exc)
-    else:
-        try:
-            # The Progress card row also drives the SABnzbd priority bump.
-            store: UserStore = ctx.bot_data["store"]
-            await store.add_progress_card(
-                chat_id=update.effective_chat.id,
-                message_id=card.message_id,
-                user_id=update.effective_user.id,
-                media_type=media["type"],
-                tmdb_id=media["tmdb_id"],
-                label=label,
-                is4k=is4k,
-                status="grabbing" if approved else "waiting",
-                timeout_hours=PROGRESS_CARD_TIMEOUT_HOURS,
-                # The seasons Seerr granted (the picked ones when it lists
-                # none), so a later cancel can tell this card from another
-                # season pick of the same show.
-                seasons=(sorted(created.seasons or seasons)
-                         if media["type"] == "tv" else None),
-            )
-        except Exception as exc:
-            logger.exception("couldn't enqueue the Progress card row (card stays static)", exc_info=exc)
-    _clear_rq_state(ctx)
-    return ConversationHandler.END
+        return
+    try:
+        # The Progress card row also drives the SABnzbd priority bump.
+        store: UserStore = ctx.bot_data["store"]
+        await store.add_progress_card(
+            chat_id=chat_id,
+            message_id=card.message_id,
+            user_id=owner_id,
+            media_type=media_type,
+            tmdb_id=tmdb_id,
+            label=label,
+            is4k=is4k,
+            status="grabbing" if approved else "waiting",
+            timeout_hours=PROGRESS_CARD_TIMEOUT_HOURS,
+            seasons=seasons,
+        )
+    except Exception as exc:
+        logger.exception("couldn't enqueue the Progress card row (card stays static)", exc_info=exc)
 
 
 def _quota_text(exc: Exception, who: Optional[str] = None) -> str:
