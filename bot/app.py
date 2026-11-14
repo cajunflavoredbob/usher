@@ -411,9 +411,9 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text(
             "Hi! I take movie/TV requests and file tickets in Seerr.\n\n"
             "*Commands*\n"
-            "  /account - link or unlink your Plex account\n"
             "  /request - new request, your requests, trending, subscriptions\n"
             "  /tickets - report a problem or check on your tickets\n"
+            "  /account - link or unlink your Plex account\n"
             "  /help - show this\n\n"
             "(/link, /unlink, /issue, /requests, /trending and /subscriptions "
             "still work when typed.)\n"
@@ -435,10 +435,10 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         format_status(summary),
         "",
         "<b>Commands</b>",
-        "  /account - link or unlink your Plex account",
+        "  /admin - invite someone, see and remove Shares, connection status",
         "  /request - new request, your requests, trending, subscriptions",
         "  /tickets - report a problem or check on your tickets",
-        "  /admin - invite someone, see and remove Shares, connection status",
+        "  /account - link or unlink your Plex account",
         "  /help - show this",
         "",
         "(/link, /unlink, /issue, /requests, /trending and /subscriptions "
@@ -775,20 +775,22 @@ async def _prune_autofix_history_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 # the code. Without this the menu is whatever was last typed into BotFather
 # by hand and silently goes stale when commands are added (0.15.0 shipped
 # /request with no menu entry).
+# Order: Admin (the Admin only), Requests, Issues (/tickets), Account, Help.
+# cmd_start lists the commands in the same order.
 _BOT_COMMANDS = [
-    ("account", "your Plex link: link or unlink"),
     ("request", "new request, your requests, trending, subscriptions"),
     ("tickets", "report a problem or check on your tickets"),
+    ("account", "your Plex link: link or unlink"),
     ("help", "show commands and status"),
 ]
-_ADMIN_BOT_COMMANDS = _BOT_COMMANDS + [
+_ADMIN_BOT_COMMANDS = [
     ("admin", "invite someone, Shares, connection status"),
-]
+] + _BOT_COMMANDS
 
 
 async def _register_commands(app: Application) -> None:
     """Publish the command menu: the default scope for everyone, plus an
-    admin-chat scope that appends /admin. Failure is non-fatal (the menu
+    admin-chat scope that puts /admin first. Failure is non-fatal (the menu
     is cosmetic; commands work regardless)."""
     from telegram import BotCommand, BotCommandScopeChat
     try:

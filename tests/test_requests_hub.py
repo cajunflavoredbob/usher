@@ -333,7 +333,7 @@ def test_menu_drops_requests_trending_subscriptions():
     from bot.app import _ADMIN_BOT_COMMANDS, _BOT_COMMANDS
     for menu in (_BOT_COMMANDS, _ADMIN_BOT_COMMANDS):
         names = [c for c, _ in menu]
-        assert names[0] == "account"
+        assert "request" in names
         for gone in ("requests", "trending", "subscriptions"):
             assert gone not in names
     assert ("request", "new request, your requests, trending, subscriptions") \

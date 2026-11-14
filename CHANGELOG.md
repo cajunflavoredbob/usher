@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Menu order**: the command menu and the /start and /help list now run /admin (the Admin only), /request, /tickets, /account, then /help. /admin used to come last and /account first.
+
 ## [0.20.0] - 2026-11-14
 
 ### Added

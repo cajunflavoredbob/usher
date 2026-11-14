@@ -410,7 +410,7 @@ def test_menu_lists_account_not_link_or_unlink():
     from bot.app import _ADMIN_BOT_COMMANDS, _BOT_COMMANDS
     for menu in (_BOT_COMMANDS, _ADMIN_BOT_COMMANDS):
         names = [c for c, _ in menu]
-        assert names[0] == "account"
+        assert "account" in names
         assert "link" not in names and "unlink" not in names
 
 

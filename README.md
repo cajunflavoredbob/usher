@@ -33,11 +33,11 @@ The bot's command menu lists the Hubs plus `/help`. A Hub is a command that open
 
 | Menu entry | Shown to | What it holds |
 |---|---|---|
+| `/admin` | the Admin only (first menu entry in the Admin's chat) | **Admin Hub**: Invite, Shares (the Share list), Status, Broadcast, and Downloads when SABnzbd is connected. DM only. |
 | `/request` | everyone | **Requests Hub**: New request, My requests, Trending, Subscriptions, Follows, Coming this week, and for the Admin Request for someone (pick a Linked user, then request as them: Seerr applies their permissions and quota, and they get the Requester DMs). `/request <title>` skips the Hub and starts a Request for that title. |
 | `/tickets` | everyone | **Tickets Hub**: Report a problem, and My tickets (Open tickets for the Admin). |
 | `/account` | everyone | **Account Hub**: Link, or Unlink once linked, and 🔔 Notices (daily digest, automatic follows). |
 | `/help` | everyone | The command list. For the Admin it also shows connection status. |
-| `/admin` | the Admin only (extra menu entry in the Admin's chat) | **Admin Hub**: Invite, Shares (the Share list), Status, Broadcast, and Downloads when SABnzbd is connected. DM only. |
 
 Every command that is not in the menu still works when typed, including the ones that take an argument:
 
