@@ -287,3 +287,61 @@ async def test_admin_tapping_request_for_someone_in_a_group_gets_nothing():
     assert state == ConversationHandler.END
     assert upd.callback_query.edits == []
     ctx.bot_data["store"].list_linked_users.assert_not_awaited()
+
+
+async def test_behalf_card_is_closed_by_the_picked_users_decline():
+    """The card the real submit stored is the one a decline event finds."""
+    from bot.progress_card import apply_webhook_event
+    ctx = _confirm_ctx()
+    ctx.bot_data["seerr"].create_request.return_value = CreatedRequest(
+        id=5, status=REQUEST_STATUS_APPROVED)
+    upd = make_update(callback_data="rqgo:1", user_id=ADMIN_ID)
+    await request_submit(upd, ctx)
+    kwargs = ctx.bot_data["store"].add_progress_card.call_args.kwargs
+    card = {"id": 1, "chat_id": kwargs["chat_id"], "message_id": 55,
+            "user_id": kwargs["user_id"], "media_type": "movie", "tmdb_id": 1,
+            "label": "New Movie", "is4k": 0, "status": "waiting",
+            "arr_id": None, "last_progress": "", "bumped": 0, "seasons": None,
+            "timeout_at": "2099-01-01 00:00:00"}
+    app = ctx.application
+    app.bot_data["store"].find_progress_cards = AsyncMock(return_value=[card])
+    # The Admin's own decline of the same title leaves it alone.
+    await apply_webhook_event(app, "MEDIA_DECLINED", "movie", 1,
+                              requester_id=ADMIN_ID, requester_known=True)
+    app.bot_data["store"].delete_progress_card.assert_not_awaited()
+    await apply_webhook_event(app, "MEDIA_DECLINED", "movie", 1,
+                              requester_id=1001, requester_known=True)
+    app.bot_data["store"].delete_progress_card.assert_awaited_once_with(1)
+
+
+async def test_picked_users_cancel_closes_the_behalf_card():
+    """The Request filed for the picked user, cancelled by that user, closes
+    the card the Admin's submit stored for them."""
+    from seerr import RequestListItem, REQUEST_STATUS_PENDING
+    from bot.requests_cmd import rq_list_cancel
+    ctx = _confirm_ctx()
+    ctx.bot_data["seerr"].create_request.return_value = CreatedRequest(
+        id=5, status=REQUEST_STATUS_PENDING)
+    await request_submit(
+        make_update(callback_data="rqgo:1", user_id=ADMIN_ID), ctx)
+    kwargs = ctx.bot_data["store"].add_progress_card.call_args.kwargs
+    card = {"id": 1, "chat_id": kwargs["chat_id"], "message_id": 55,
+            "user_id": kwargs["user_id"], "media_type": "movie", "tmdb_id": 1,
+            "label": "New Movie", "is4k": 0, "status": "waiting",
+            "arr_id": None, "last_progress": None, "bumped": 0, "seasons": None,
+            "timeout_at": "2099-01-01 00:00:00"}
+    ctx2 = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=1001))
+    item = RequestListItem(id=5, status=REQUEST_STATUS_PENDING,
+                           media_type="movie", tmdb_id=1,
+                           created_at="2026-08-16T10:00:00.000Z",
+                           requested_by="Person 1")
+    item.requested_by_id = 21
+    seerr = ctx2.bot_data["seerr"]
+    seerr.get_request.side_effect = None
+    seerr.get_request.return_value = item
+    store = ctx2.bot_data["store"]
+    store.find_by_seerr_id.return_value = make_link(telegram_id=1001)
+    store.find_progress_cards.return_value = [card]
+    await rq_list_cancel(make_update(callback_data="rqlc:5", user_id=1001), ctx2)
+    store.delete_progress_card.assert_awaited_once_with(1)
+    assert "Request cancelled." in ctx2.bot.edit_message_text.await_args.kwargs["text"]

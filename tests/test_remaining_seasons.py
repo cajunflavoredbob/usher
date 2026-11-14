@@ -219,3 +219,15 @@ async def test_send_unlinked_user_is_told_to_link():
     await remaining_seasons_send(upd, ctx)
     assert "/link" in upd.callback_query.edits[-1]["text"]
     ctx.bot_data["seerr"].create_request.assert_not_awaited()
+
+
+async def test_send_card_falls_back_to_the_requestable_seasons():
+    """Seerr's response lists no seasons: the card stores the seasons the
+    request was for, so a later cancel can still match it."""
+    ctx = _linked_ctx()  # season 1 is covered; 2 and 3 are requestable
+    ctx.bot_data["seerr"].create_request.return_value = CreatedRequest(
+        id=3, status=REQUEST_STATUS_PENDING)
+    upd = make_update(callback_data=f"rqrgo:{SHOW}", user_id=USER_ID)
+    await remaining_seasons_send(upd, ctx)
+    kwargs = ctx.bot_data["store"].add_progress_card.call_args.kwargs
+    assert kwargs["seasons"] == [2, 3]

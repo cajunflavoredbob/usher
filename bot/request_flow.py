@@ -1279,8 +1279,9 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     sent = await edit_or_send(q, text, parse_mode="HTML",
                               reply_markup=end_markup(REQUESTS_HUB))
     record_btn(ctx.application, update.effective_user.id, sent)
-    # The card lives in the Admin's chat, but its row is owned by the
-    # requester it was made for: webhook events and cancels match on that.
+    # Only when requesting on behalf of someone: the card lives in the
+    # Admin's chat, but its row is owned by the picked user the Request was
+    # made for, since webhook events and cancels match on that owner.
     await _send_progress_card(
         ctx, chat_id=update.effective_chat.id,
         owner_id=((target or {}).get("telegram_id")
@@ -1453,6 +1454,10 @@ async def _remaining_seasons_submit(update: Update,
         logger.debug("submit working-state edit failed (non-fatal)",
                      exc_info=True)
     seerr: SeerrClient = ctx.bot_data["seerr"]
+    # The seasons a "all" request will stick for, read before the POST: the
+    # card's fallback when Seerr's response lists none (None when the lookup
+    # failed).
+    expected = await requestable_seasons(seerr, tmdb_id)
     try:
         created = await seerr.create_request(
             media_type="tv", tmdb_id=tmdb_id, seasons="all",
@@ -1497,7 +1502,8 @@ async def _remaining_seasons_submit(update: Update,
         owner_id=update.effective_user.id, media_type="tv", tmdb_id=tmdb_id,
         label=label, is4k=False,
         approved=created.status == REQUEST_STATUS_APPROVED,
-        seasons=sorted(created.seasons) if created.seasons else None)
+        seasons=(sorted(created.seasons or expected)
+                 if (created.seasons or expected) else None))
 
 
 def _clear_rq_state(ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1549,6 +1555,8 @@ async def _resume_submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         await update.effective_message.reply_text(
             f"Couldn't submit the request. {user_friendly_message(exc)}")
         return
+    if media["type"] == "tv" and (created.seasons or seasons):
+        label += f" - {_summarize_seasons(sorted(created.seasons or seasons))}"
     if created.status == REQUEST_STATUS_APPROVED:
         msg = f"✅ Approved: {label} is being grabbed."
     else:

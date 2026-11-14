@@ -1117,3 +1117,22 @@ async def test_old_list_tap_does_not_replace_an_open_request_draft():
     ok = make_update(callback_data="rqfi:movie:550", user_id=USER_ID)
     assert await request_from_ticket(ok, ctx) == RQ_CONFIRM
     assert ctx.user_data["rq_media"]["tmdb_id"] == 550
+
+
+async def test_resume_submit_request_tv_stores_and_names_the_seasons():
+    from bot.request_flow import _resume_submit_request
+    ctx = _linked_ctx(user_data={
+        "rq_media": {"type": "tv", "tmdb_id": 1399, "title": "Show",
+                     "year": "2020"},
+        "rq_selected": {3, 1, 2},
+    })
+    ctx.bot_data["conversations"] = {}
+    ctx.bot_data["seerr"].create_request.return_value = CreatedRequest(
+        id=9, status=REQUEST_STATUS_APPROVED)  # Seerr lists no seasons
+    upd = make_update(text="resumed", user_id=USER_ID)
+    await _resume_submit_request(upd, ctx, {})
+    assert ctx.bot_data["seerr"].create_request.call_args.kwargs["seasons"] == [1, 2, 3]
+    assert "S1-S3" in upd.effective_message.reply_calls[0]["text"]
+    kwargs = ctx.bot_data["store"].add_progress_card.call_args.kwargs
+    assert kwargs["seasons"] == [1, 2, 3]
+    assert "S1-S3" in kwargs["label"]
