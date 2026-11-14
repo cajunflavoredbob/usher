@@ -896,7 +896,7 @@ async def test_trending_tap_on_available_movie_toasts_and_keeps_list():
                                     status=MEDIA_STATUS_AVAILABLE))
     upd = make_update(callback_data="rqfi:movie:550", user_id=USER_ID)
     state = await request_from_ticket(upd, ctx)
-    assert state is None
+    assert state == ConversationHandler.END
     assert upd.callback_query.answers == [("", False)]
     assert upd.effective_message.reply_calls[0]["text"] == (
         "Fight Club: Already available in Plex ✅")
@@ -910,7 +910,7 @@ async def test_trending_tap_on_blocklisted_title_toasts():
                                     status=MEDIA_STATUS_BLOCKLISTED))
     upd = make_update(callback_data="rqfi:movie:550", user_id=USER_ID)
     state = await request_from_ticket(upd, ctx)
-    assert state is None
+    assert state == ConversationHandler.END
     assert upd.callback_query.answers == [("", False)]
     assert upd.effective_message.reply_calls[0]["text"] == (
         "Fight Club: That title isn't requestable here 🚫")
@@ -979,9 +979,86 @@ async def test_trending_refusal_does_not_end_an_open_request_flow():
         states={RQ_CONFIRM: [CommandHandler("y", _noop)]}, fallbacks=[],
         per_user=True, per_chat=True, allow_reentry=True)
     upd = make_update(callback_data="rqfi:movie:550", user_id=USER_ID)
-    state = await request_from_ticket(upd, ctx)
     key = (upd.effective_chat.id, USER_ID)
     conv._conversations[key] = RQ_CONFIRM
+    ctx.bot_data["conversations"] = {"request": conv}
+    state = await request_from_ticket(upd, ctx)
+    assert state is None
     conv._update_state(state, key)
     assert conv._conversations[key] == RQ_CONFIRM
     assert ctx.user_data["rq_media"]["tmdb_id"] == 7
+
+
+# --- the refusal through the real ConversationHandler ------------------------
+
+class _FakeJobQueue:
+    """Records every timeout job PTB schedules for a conversation."""
+
+    def __init__(self):
+        self.scheduler = type("S", (), {"running": True})()
+        self.scheduled: list = []
+
+    def run_once(self, callback, when, data=None, **kw):
+        job = type("J", (), {"schedule_removal": lambda self: None})()
+        self.scheduled.append((callback, when, data))
+        return job
+
+
+async def _refused_tap_through_real_handler(monkeypatch, *, flow_open):
+    from unittest.mock import AsyncMock
+    import datetime
+    from telegram import (Bot, CallbackQuery, Chat, Message, Update, User)
+    from telegram.ext import ApplicationBuilder, CallbackContext
+    import bot.request_flow as rf
+    from bot.shared import guard_flow_steps
+
+    bot = Bot("123:abc")
+    bot._bot_user = User(1, "usher", True, username="usherbot")
+    app = ApplicationBuilder().token("123:abc").build()
+    jq = _FakeJobQueue()
+    monkeypatch.setattr(type(app), "job_queue", property(lambda self: jq))
+    conv = rf._request_conversation()
+    guard_flow_steps(conv)
+    app.bot_data["conversations"] = {"request": conv}
+    app.bot_data["flow_convs"] = [conv]
+    app.bot_data["seerr"] = AsyncMock()
+    chat, user = Chat(100, "private"), User(USER_ID, "u", False)
+    now = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+    msg = Message(7, now, chat, from_user=user, text="list")
+    msg.set_bot(bot)
+    cq = CallbackQuery("1", user, "x", message=msg, data="rqfi:movie:550")
+    cq.set_bot(bot)
+    update = Update(1, callback_query=cq)
+    monkeypatch.setattr(CallbackQuery, "answer", AsyncMock())
+    sent = AsyncMock()
+    monkeypatch.setattr(Message, "reply_text", sent)
+    monkeypatch.setattr(rf, "_gate_entry", AsyncMock(return_value=True))
+    monkeypatch.setattr(rf, "send_typing", AsyncMock())
+    app.user_data[USER_ID]["dv_results"] = [MediaResult(
+        "movie", 550, "Fight Club", "1999", 5, status=MEDIA_STATUS_AVAILABLE)]
+    key = (100, USER_ID)
+    if flow_open:
+        conv._conversations[key] = RQ_CONFIRM
+    check = conv.check_update(update)
+    assert check is not None
+    ctx = CallbackContext.from_update(update, app)
+    await conv.handle_update(update, app, check, ctx)
+    assert sent.await_args.args[0] == "Fight Club: Already available in Plex ✅"
+    return conv, jq, key
+
+
+async def test_refused_trending_tap_arms_no_timeout_when_no_request_is_open(
+        monkeypatch):
+    conv, jq, key = await _refused_tap_through_real_handler(
+        monkeypatch, flow_open=False)
+    assert jq.scheduled == []
+    assert key not in conv._conversations
+    assert key not in conv.timeout_jobs
+
+
+async def test_refused_trending_tap_leaves_an_open_request_flow_parked(
+        monkeypatch):
+    conv, jq, key = await _refused_tap_through_real_handler(
+        monkeypatch, flow_open=True)
+    assert conv._conversations[key] == RQ_CONFIRM
+    assert len(jq.scheduled) == 1  # the open flow's own timeout, re-armed

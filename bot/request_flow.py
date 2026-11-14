@@ -500,10 +500,15 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
             # The list stays, and so does the Hub origin of any flow the
             # user has open (set_hub_origin only runs once the tap proceeds).
             # An open /request flow stays open too: returning None from this
-            # re-entered entry point leaves its conversation where it is.
+            # re-entered entry point leaves its conversation where it is. With
+            # none open, None would still make PTB arm a conversation timeout
+            # for a conversation that doesn't exist (a stray "timed out"
+            # notice and a user-wide state wipe ten minutes later), so END.
             await update.effective_message.reply_text(
                 f"{tapped.title}: {refusal}")
-            return None
+            if user_in_conversation(ctx, update, "request"):
+                return None
+            return ConversationHandler.END
     set_hub_origin(ctx, hub)
     # Another flow may still be parked in a pick state; end everything (this
     # conversation isn't active yet, so it's untouched) so no stale flow can
