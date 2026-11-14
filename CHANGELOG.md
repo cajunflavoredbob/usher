@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-11-14
+
 ### Added
 - **Plex watchlist**: a detail card has a ➕ Plex watchlist button for anyone with a Link, the Admin included. It finds the title on Plex's side by its TMDb id (a Plex Discover title search, keeping only an item whose ids include that TMDb id, so a remake with the same title is never picked) and adds it to your own Plex watchlist with your own Plex sign-in. When Plex has no match it says so and suggests adding it in Plex, and adds nothing. A Plex sign-in that is no longer valid gets the usual sign-in-again prompt.
 - **Share expiry**: the Admin can give a Share an expiry date. The Invite's confirm card has a Never / 7 days / 30 days / 90 days row (Never is the default), and a Share's view has a ⏳ Set expiry button with the same choices and a Clear button, so an existing Share or a pending Invite can get one later. The Shares list marks each Share that has one with "⏳" and the date, and the Share view shows it. Dates are kept in the database, so they survive a restart and travel in a backup. Three days before the date the Admin gets a DM with Extend 30 days, Let it end and Remove now, and a Linked holder gets one telling them to ask the Admin for more time. On or after the date the bot removes the Share by itself (the same removal as /uninvite) and tells the Admin; a Share already gone is forgotten quietly. A removal that fails is retried every hour, and the Admin is told at most once a day, with a Retry button.
@@ -68,7 +70,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Ask the Admin DM warns that Mark Failed deletes the current file.
 - README and /help now list Now playing, Popular here this week, /mystats, the Reporter's playback details, Ask the Admin, Follows, the Digest, Coming this week, Downloads, Broadcast and access asks. The privacy line names every plex.tv use, and the Docker note says `WEBHOOK_BIND=127.0.0.1` needs host networking or a proxy on the same host.
 - README, Unraid template and `.env.example`: corrected first-run and webhook-secret steps, the full list of Seerr events to enable, and what `USHER_ENCRYPTION_KEY` does. The Unraid template now restarts the container after Usher's own restarts.
-- The release workflow refuses a tag that disagrees with `_version.py`; a manual run builds without publishing.
 
 ## [0.19.1] - 2026-11-12
 
