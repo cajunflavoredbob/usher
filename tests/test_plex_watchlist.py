@@ -1,7 +1,6 @@
 """Wire tests for the Plex watchlist client: the TMDb to Discover ratingKey
 lookup (a Discover title search, then each candidate's tmdb:// guids) and the
-watchlist PUT. The lookup's calls are the ones docs/prior-art settled in the
-#71 spike."""
+watchlist PUT. The tests check the exact requests and the matching rules."""
 from __future__ import annotations
 
 import httpx

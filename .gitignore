@@ -23,7 +23,7 @@ data/
 dist/
 build/
 
-# Local tooling notes (never shipped)
+# Local notes, not part of the project
 CLAUDE.md
 .claude/
 docs/agents/
