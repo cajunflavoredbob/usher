@@ -357,3 +357,33 @@ async def test_tautulli_test_reports_version_and_error(client, monkeypatch):
     body = json.loads(await (await _post(
         client, "/admin/test/tautulli", fields)).text())
     assert not body["ok"] and "Invalid apikey" in body["detail"]
+
+
+# Alarms block on the Telegram tab
+
+async def test_telegram_save_stores_alarm_switches_and_thresholds(client):
+    r = await _post(client, "/admin/telegram",
+                    {"admin_telegram_id": "4242", "alarm_disk": "on",
+                     "low_disk_percent": "15", "low_disk_gb": "100"})
+    assert r.status == 200
+    s = client.store.settings
+    assert (s.alarm_health, s.alarm_disk) == (False, True)
+    assert (s.low_disk_percent, s.low_disk_gb) == (15, 100)
+
+
+@pytest.mark.parametrize("field,bad", [("low_disk_percent", "101"),
+                                       ("low_disk_percent", "x"),
+                                       ("low_disk_gb", "-1")])
+async def test_telegram_save_refuses_bad_disk_thresholds(client, field, bad):
+    r = await _post(client, "/admin/telegram",
+                    {"admin_telegram_id": "4242", field: bad})
+    assert r.status == 400
+    assert client.store.settings.low_disk_percent == 10
+    assert client.store.settings.low_disk_gb == 50
+
+
+def test_alarm_settings_default_on_with_10_percent_and_50_gb():
+    from settings import Settings
+    s = Settings.from_dict({})
+    assert (s.alarm_health, s.alarm_disk, s.low_disk_percent, s.low_disk_gb) \
+        == (True, True, 10, 50)

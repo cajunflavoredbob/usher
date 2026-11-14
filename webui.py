@@ -715,6 +715,8 @@ def _settings_page(
     req_chk = " checked" if s.tg_notify_requester else ""
     adm_chk = " checked" if s.tg_notify_admin_requests else ""
     fail_chk = " checked" if s.tg_notify_admin_failed else ""
+    alarm_health_chk = " checked" if s.alarm_health else ""
+    alarm_disk_chk = " checked" if s.alarm_disk else ""
     iss_chk = " checked" if s.tg_notify_issues else ""
     subscriptions_chk = " checked" if s.tg_notify_subscriptions else ""
     token_rejected_note = (
@@ -742,6 +744,15 @@ def _settings_page(
   <label class="inline-check"><input type="checkbox" name="tg_notify_admin_failed"{fail_chk}> Failed-download alarm to the admin</label>
   <label class="inline-check"><input type="checkbox" name="tg_notify_issues"{iss_chk}> Ticket DMs</label>
   <label class="inline-check"><input type="checkbox" name="tg_notify_subscriptions"{subscriptions_chk}> Subscription DMs</label>
+
+  <h2>Alarms</h2>
+  <div class="note">DMs to the admin when something needs attention, checked every 5 minutes, once for each new problem and once when it clears.</div>
+  <label class="inline-check"><input type="checkbox" name="alarm_health"{alarm_health_chk}> Radarr and Sonarr health warnings and errors</label>
+  <label class="inline-check"><input type="checkbox" name="alarm_disk"{alarm_disk_chk}> Low disk space</label>
+  <label>Alarm when a disk has less free space than <span class="note">percent, whichever is hit first</span></label>
+  <input type="text" name="low_disk_percent" value="{_esc(s.low_disk_percent)}" inputmode="numeric" pattern="[0-9]+" required>
+  <label>or less than <span class="note">GB</span></label>
+  <input type="text" name="low_disk_gb" value="{_esc(s.low_disk_gb)}" inputmode="numeric" pattern="[0-9]+" required>
 
   <div class="btn-row divided">
     <button type="button" class="test-btn" data-test="telegram" data-form="telegram-form">Test</button>
@@ -1382,9 +1393,35 @@ async def telegram_post(request: web.Request) -> web.Response:
                                 csrf_token=csrf_for_request(request)),
             content_type="text/html", status=400,
         )
+    thresholds = {}
+    for name, label, top in (("low_disk_percent", "Low disk percent", 100),
+                             ("low_disk_gb", "Low disk GB", None)):
+        if form.get(name) is None:   # field not sent: keep the saved value
+            thresholds[name] = getattr(s, name)
+            continue
+        raw = str(form.get(name)).strip()
+        try:
+            v = int(raw)
+            if v < 0 or (top is not None and v > top):
+                raise ValueError
+        except ValueError:
+            bound = f" from 0 to {top}" if top is not None else ""
+            return web.Response(
+                text=_settings_page(
+                    s, error=f"{label} must be a whole number{bound}.",
+                    active_tab="telegram",
+                    webhook_url=_webhook_url_from_request(request),
+                    csrf_token=csrf_for_request(request)),
+                content_type="text/html", status=400,
+            )
+        thresholds[name] = v
     s.telegram_bot_token = token
     s.admin_telegram_id = admin_tg
     s.usher_public_url = public_url
+    s.low_disk_percent = thresholds["low_disk_percent"]
+    s.low_disk_gb = thresholds["low_disk_gb"]
+    for flag in ("alarm_health", "alarm_disk"):
+        setattr(s, flag, form.get(flag) is not None)
     for flag in ("tg_notify_requester", "tg_notify_admin_requests",
                  "tg_notify_admin_failed", "tg_notify_issues",
                  "tg_notify_subscriptions"):

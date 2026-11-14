@@ -82,6 +82,8 @@ from bot.callback_prefixes import (
 from bot.ticket_flow import _new_ticket_conversation
 from bot.admin_hub import ADMIN_HUB, cmd_admin, refuse_outside_admin_dm
 from bot.nowplaying import now_playing_section, stop_ask, stop_confirmed
+from bot.alarms import (ALARM_FIRST_DELAY_S, ALARM_INTERVAL_S, check_alarms,
+                        status_section as alarms_section)
 from bot.hub import end_markup, hub_open_callback
 from bot.link_flow import (_link_conversation, account_unlink, cmd_account,
                            cmd_link_didnt_work, cmd_unlink)
@@ -386,6 +388,7 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     summary = await _check_connections(ctx.application)
     playing, stop_rows = await now_playing_section(ctx)
+    playing = await alarms_section(ctx) + playing
     sent = await update.effective_message.reply_text(
         f"<b>Connection status:</b>\n{format_status(summary)}{playing}",
         parse_mode="HTML",
@@ -407,6 +410,7 @@ async def admin_hub_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
     await edit_or_send(q, "📶 Checking connections…")
     summary = await _check_connections(ctx.application)
     playing, stop_rows = await now_playing_section(ctx)
+    playing = await alarms_section(ctx) + playing
     sent = await edit_or_send(
         q, f"<b>Connection status:</b>\n{format_status(summary)}{playing}",
         parse_mode="HTML",
@@ -579,6 +583,12 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
         interval=AUTOFIX_POLL_INTERVAL_S,
         first=AUTOFIX_POLL_FIRST_DELAY_S,
         name="autofix_poller",
+    )
+    app.job_queue.run_repeating(
+        check_alarms,
+        interval=ALARM_INTERVAL_S,
+        first=ALARM_FIRST_DELAY_S,
+        name="service_alarms",
     )
     # Keep autofix bookkeeping tables from growing for the life of the
     # install (also pruned once at startup in _post_init).

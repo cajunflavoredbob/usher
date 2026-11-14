@@ -65,6 +65,8 @@ class AdminAccount:
 
 DEFAULT_DAILY_AUTOFIX_LIMIT = 3
 DEFAULT_INACTIVE_SHARE_DAYS = 60
+DEFAULT_LOW_DISK_PERCENT = 10
+DEFAULT_LOW_DISK_GB = 50
 
 
 @dataclass
@@ -96,6 +98,12 @@ class Settings:
     tg_notify_admin_failed: bool = True    # failed-download alarm to the admin
     tg_notify_issues: bool = True          # Ticket reported/comment/resolved DMs
     tg_notify_subscriptions: bool = True   # Subscription fan-out
+    # Service alarms (DMs to the admin): Radarr/Sonarr health, and a disk
+    # below either threshold (whichever is hit first).
+    alarm_health: bool = True
+    alarm_disk: bool = True
+    low_disk_percent: int = DEFAULT_LOW_DISK_PERCENT
+    low_disk_gb: int = DEFAULT_LOW_DISK_GB
     allowed_autofix_telegram_ids: list[int] = field(default_factory=list)
     # When True, every linked user may auto-fix regardless of the allowlist
     # (the admin is always allowed). The list above is retained either way.
@@ -141,6 +149,12 @@ class Settings:
             inactive_days = DEFAULT_INACTIVE_SHARE_DAYS
         if inactive_days < 1:
             inactive_days = DEFAULT_INACTIVE_SHARE_DAYS
+        def _threshold(key: str, default: int) -> int:
+            try:
+                v = int(data.get(key) if data.get(key) is not None else default)
+            except (TypeError, ValueError):
+                return default
+            return v if v >= 0 else default
         return cls(
             telegram_bot_token=data.get("telegram_bot_token", "") or "",
             admin_telegram_id=admin_tg_id,
@@ -160,6 +174,10 @@ class Settings:
             tautulli_url=data.get("tautulli_url", "") or "",
             tautulli_api_key=data.get("tautulli_api_key", "") or "",
             inactive_share_days=inactive_days,
+            alarm_health=bool(data.get("alarm_health", True)),
+            alarm_disk=bool(data.get("alarm_disk", True)),
+            low_disk_percent=_threshold("low_disk_percent", DEFAULT_LOW_DISK_PERCENT),
+            low_disk_gb=_threshold("low_disk_gb", DEFAULT_LOW_DISK_GB),
             tg_notify_requester=bool(data.get("tg_notify_requester", True)),
             tg_notify_admin_requests=bool(data.get("tg_notify_admin_requests", True)),
             tg_notify_admin_failed=bool(data.get("tg_notify_admin_failed", True)),

@@ -55,6 +55,18 @@ class SonarrClient:
         r = await execute(self._client, "GET", "/system/status", service=_SERVICE)
         return json_or_raise(r, service=_SERVICE, what="system status").get("version", "?")
 
+    async def get_health(self) -> list[dict]:
+        """GET /health: the warnings the app shows on its System page.
+        Each item has source, type (ok, notice, warning, error), message and
+        wikiUrl."""
+        r = await execute(self._client, "GET", "/health", service=_SERVICE)
+        return json_or_raise(r, service=_SERVICE, what="health", expect=list)
+
+    async def get_disk_space(self) -> list[dict]:
+        """GET /diskspace: path, label, freeSpace and totalSpace (bytes)."""
+        r = await execute(self._client, "GET", "/diskspace", service=_SERVICE)
+        return json_or_raise(r, service=_SERVICE, what="disk space", expect=list)
+
     async def get_series_by_tvdb(self, tvdb_id: int) -> Optional[SonarrSeries]:
         r = await execute(self._client, "GET", "/series", service=_SERVICE,
                           params={"tvdbId": tvdb_id})

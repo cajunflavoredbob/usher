@@ -677,6 +677,7 @@ async def test_hub_status_shows_connection_status_with_back(monkeypatch):
     monkeypatch.setattr(app_mod, "_check_connections",
                         AsyncMock(return_value={"Seerr": "✅ 1.0"}))
     monkeypatch.setattr(app_mod, "format_status", lambda s: "Seerr ok")
+    monkeypatch.setattr(app_mod, "alarms_section", AsyncMock(return_value=""))
     ctx = _shares_ctx()
     upd = make_update(callback_data=ADMIN_STATUS, user_id=ADMIN_ID)
     await app_mod.admin_hub_status(upd, ctx)

@@ -326,6 +326,19 @@ class UserStore:
                 )
                 """
             )
+            # Service alarms: one row per active problem. `key` names it
+            # (kind:service:detail), `text` is what the Admin was told, and
+            # `notified` is 1 once the "new problem" DM went out.
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS alarm_state (
+                    key TEXT PRIMARY KEY,
+                    text TEXT NOT NULL DEFAULT '',
+                    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    notified INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
             c.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_watch_media
@@ -1106,6 +1119,38 @@ class UserStore:
                     (status, pending_id),
                 )
 
+        await self._run(_do)
+
+    # Service alarms
+
+    async def list_alarms(self) -> list[tuple[str, str, bool]]:
+        """Every active alarm as (key, text, notified)."""
+        def _do():
+            with self._conn() as c:
+                return [(r[0], r[1], bool(r[2])) for r in c.execute(
+                    "SELECT key, text, notified FROM alarm_state ORDER BY started_at, key")]
+        return await self._run(_do)
+
+    async def add_alarm(self, key: str, text: str) -> None:
+        """Start tracking a problem (not yet notified). A key already
+        tracked keeps its start time and notified flag."""
+        def _do():
+            with self._conn() as c:
+                c.execute(
+                    "INSERT OR IGNORE INTO alarm_state (key, text) VALUES (?, ?)",
+                    (key, text))
+        await self._run(_do)
+
+    async def mark_alarm_notified(self, key: str) -> None:
+        def _do():
+            with self._conn() as c:
+                c.execute("UPDATE alarm_state SET notified = 1 WHERE key = ?", (key,))
+        await self._run(_do)
+
+    async def delete_alarm(self, key: str) -> None:
+        def _do():
+            with self._conn() as c:
+                c.execute("DELETE FROM alarm_state WHERE key = ?", (key,))
         await self._run(_do)
 
     async def prune_autofix_history(self) -> tuple[int, int]:
