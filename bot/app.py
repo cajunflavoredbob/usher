@@ -69,6 +69,8 @@ from bot.callback_prefixes import (
     DV_PAGE,
     SUBSCRIPTION_ADD,
     FOLLOW_ADD,
+    RQ_REMAINING,
+    RQ_REMAINING_GO,
     FOLLOW_DEL,
     FOLLOW_REMOVE,
     REQUESTS_FOLLOWS,
@@ -130,6 +132,7 @@ from bot.new_content import (NEW_CONTENT_FIRST_DELAY_S, NEW_CONTENT_INTERVAL_S,
 from bot.subscriptions import (cmd_subscriptions, subscription_add,
                                subscription_del, subscriptions_hub)
 from bot.request_flow import (_RQ_KEYS, _request_conversation,
+                              remaining_seasons_ask, remaining_seasons_send,
                               request_info_dismiss)
 from bot.requests_cmd import cmd_requests, requests_hub_mine, rq_list_cancel
 from bot.request_admin import rq_admin_action
@@ -562,6 +565,12 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     # live even when no conversation is active.
     app.add_handler(CallbackQueryHandler(rq_list_cancel, pattern=fr"^{RQ_LIST_CANCEL}:\d+$"))
     app.add_handler(CallbackQueryHandler(request_info_dismiss, pattern=fr"^{RQ_INFO_DISMISS}$"))
+    # "Request remaining seasons" on detail cards and availability notices,
+    # and the Send on its confirm.
+    app.add_handler(CallbackQueryHandler(remaining_seasons_ask,
+                                         pattern=fr"^{RQ_REMAINING}:\d+$"))
+    app.add_handler(CallbackQueryHandler(remaining_seasons_send,
+                                         pattern=fr"^{RQ_REMAINING_GO}:\d+$"))
     # Approve / Decline / Retry on the Admin's Request DMs (webhook).
     app.add_handler(CallbackQueryHandler(
         rq_admin_action,

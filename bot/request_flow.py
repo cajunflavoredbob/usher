@@ -77,6 +77,7 @@ from bot.callback_prefixes import (
     RQ_INFO_DISMISS,
     RQ_MEDIA,
     RQ_PAGE,
+    RQ_REMAINING_GO,
     RQ_SEASON,
     RQ_SEASON_ALL,
     RQ_SEASON_DONE,
@@ -94,6 +95,7 @@ from bot.hub import (
 )
 from bot.media_card import send_detail_card
 from bot.progress_card import APPROVED_LINE, card_text
+from bot.remaining import requestable_seasons
 from bot.requests_hub import REQUESTS_HUB
 from bot.shared import (
     DECRYPT_FAILED_MSG,
@@ -1052,16 +1054,13 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     except QuotaExceededError as exc:
         await end_flow(
             update, ctx,
-            f"🙅 {html.escape(str(exc))} Your quota frees up as older "
-            "requests age out of the window.",
-            hub, parse_mode="HTML",
+            _quota_text(exc), hub, parse_mode="HTML",
         )
         _clear_rq_state(ctx)
         return ConversationHandler.END
     except RequestPermissionError as exc:
         await end_flow(
-            update, ctx, f"🚫 Seerr said no: {html.escape(str(exc))}",
-            hub, parse_mode="HTML",
+            update, ctx, _permission_text(exc), hub, parse_mode="HTML",
         )
         _clear_rq_state(ctx)
         return ConversationHandler.END
@@ -1141,6 +1140,155 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             logger.exception("couldn't enqueue the Progress card row (card stays static)", exc_info=exc)
     _clear_rq_state(ctx)
     return ConversationHandler.END
+
+
+def _quota_text(exc: Exception) -> str:
+    return (f"🙅 {html.escape(str(exc))} Your quota frees up as older "
+            "requests age out of the window.")
+
+
+def _permission_text(exc: Exception) -> str:
+    return f"🚫 Seerr said no: {html.escape(str(exc))}"
+
+
+# Request remaining seasons (global handlers: the button sits on detail cards
+# and availability notices, outside any /request conversation)
+
+NOTHING_LEFT_TEXT = "Nothing left to request 🎉"
+
+
+def _tmdb_from_data(q) -> Optional[int]:
+    try:
+        return int(q.data.split(":")[1])
+    except (ValueError, IndexError, AttributeError):
+        return None
+
+
+async def remaining_seasons_ask(update: Update,
+                                ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Tap on "Request remaining seasons": re-read the seasons (they may have
+    changed since the card was sent) and send a confirm naming them."""
+    q = update.callback_query
+    tmdb_id = _tmdb_from_data(q)
+    if tmdb_id is None:
+        await q.answer()
+        return
+    await q.answer()
+    if await require_seerr(update, ctx) is None:
+        return
+    user_id = update.effective_user.id
+    is_admin, token, decrypt_failed = await token_for(ctx, user_id)
+    if not is_admin and not token:
+        await q.message.reply_text(
+            DECRYPT_FAILED_MSG if decrypt_failed else
+            "DM me /link first so requests are filed as you.")
+        return
+    seerr: SeerrClient = ctx.bot_data["seerr"]
+    left = await requestable_seasons(seerr, tmdb_id)
+    if left is None:
+        await q.message.reply_text("Couldn't fetch seasons. Try again in a bit.")
+        return
+    if not left:
+        await q.message.reply_text(NOTHING_LEFT_TEXT)
+        return
+    try:
+        title, year = await seerr.get_media_title("tv", tmdb_id)
+    except Exception:
+        title, year = f"TMDb {tmdb_id}", ""
+    label = _media_label({"title": title, "year": year})
+    quota_note = await _quota_line(ctx, user_id, "tv")
+    text = (f"Request the remaining seasons of <b>{html.escape(label)}</b>?\n"
+            f"Seasons: {_summarize_seasons(left)}" + html.escape(quota_note))
+    sent = await q.message.reply_text(
+        text, parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "✅ Send", callback_data=f"{RQ_REMAINING_GO}:{tmdb_id}"),
+            InlineKeyboardButton("🛑 Cancel", callback_data=RQ_INFO_DISMISS),
+        ]]))
+    record_btn(ctx.application, user_id, sent)
+
+
+async def remaining_seasons_send(update: Update,
+                                 ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send on the remaining-seasons confirm: POST /request with seasons
+    "all" as the user. Seerr skips seasons already available or requested."""
+    q = update.callback_query
+    tmdb_id = _tmdb_from_data(q)
+    if tmdb_id is None:
+        await q.answer()
+        return
+    await q.answer()
+    busy: set = ctx.user_data.setdefault("rq_remaining_busy", set())
+    if tmdb_id in busy:
+        return  # a second tap while the first is in flight
+    busy.add(tmdb_id)
+    try:
+        await _remaining_seasons_submit(update, ctx, tmdb_id)
+    finally:
+        busy.discard(tmdb_id)
+
+
+async def _remaining_seasons_submit(update: Update,
+                                    ctx: ContextTypes.DEFAULT_TYPE,
+                                    tmdb_id: int) -> None:
+    q = update.callback_query
+    is_admin, token, decrypt_failed = await token_for(ctx, update.effective_user.id)
+    if not is_admin and not token:
+        await edit_or_send(q, DECRYPT_FAILED_MSG if decrypt_failed else
+                           "DM me /link first so requests are filed as you.")
+        return
+    try:
+        title, year = await ctx.bot_data["seerr"].get_media_title("tv", tmdb_id)
+    except Exception:
+        title, year = f"TMDb {tmdb_id}", ""
+    label = _media_label({"title": title, "year": year})
+    try:
+        await q.edit_message_text(
+            f"Submitting <b>{html.escape(label)}</b>…", parse_mode="HTML")
+    except Exception:
+        logger.debug("submit working-state edit failed (non-fatal)",
+                     exc_info=True)
+    seerr: SeerrClient = ctx.bot_data["seerr"]
+    try:
+        created = await seerr.create_request(
+            media_type="tv", tmdb_id=tmdb_id, seasons="all",
+            as_plex_token=token)
+    except PlexTokenInvalidError:
+        await prompt_plex_relink(update, ctx)
+        return
+    except NothingToRequestError:
+        await edit_or_send(q, NOTHING_LEFT_TEXT)
+        return
+    except DuplicateRequestError:
+        await edit_or_send(
+            q, f"<b>{html.escape(label)}</b> is already requested and on its "
+               "way.", parse_mode="HTML")
+        return
+    except QuotaExceededError as exc:
+        await edit_or_send(q, _quota_text(exc), parse_mode="HTML")
+        return
+    except RequestPermissionError as exc:
+        await edit_or_send(q, _permission_text(exc), parse_mode="HTML")
+        return
+    except Exception as exc:
+        logger.exception("remaining-seasons create_request failed")
+        await edit_or_send(
+            q, f"Couldn't submit the request. {user_friendly_message(exc)}")
+        return
+    if created.seasons:
+        label += f" - {_summarize_seasons(created.seasons)}"
+    settings_store = ctx.bot_data.get("settings_store")
+    dms_on = (settings_store is None
+              or settings_store.settings.tg_notify_requester)
+    if created.status == REQUEST_STATUS_APPROVED:
+        text = (f"✅ Approved: <b>{html.escape(label)}</b> is being grabbed."
+                + ("\nI'll DM you when it's available." if dms_on else ""))
+    else:
+        text = (f"📨 Requested: <b>{html.escape(label)}</b>.\n"
+                "Waiting for approval."
+                + (" I'll DM you when it moves." if dms_on else ""))
+    await edit_or_send(q, text, parse_mode="HTML")
 
 
 def _clear_rq_state(ctx: ContextTypes.DEFAULT_TYPE) -> None:

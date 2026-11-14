@@ -16,6 +16,7 @@ from telegram.ext import ContextTypes
 
 from bot.callback_prefixes import FOLLOW_ADD, FOLLOW_DEL, FOLLOW_REMOVE
 from bot.hub import back_button, end_markup, reply_end
+from bot.remaining import remaining_button, requestable_seasons
 from bot.requests_hub import REQUESTS_HUB
 from bot.shared import (
     DECRYPT_FAILED_MSG,
@@ -58,13 +59,19 @@ async def follow_state(bot_data: dict, telegram_id: int,
 async def notice_markup(bot_data: dict, media_type: str, tmdb_id: int,
                         chat_id: int, watch_button) -> Optional[InlineKeyboardMarkup]:
     """Keyboard of an availability notice: Watch now when `watch_button` is
-    given, and Follow or Unfollow beside it for a show."""
+    given, and Follow or Unfollow beside it for a show, with Request remaining
+    seasons on its own row when a season is left to request."""
     row = [watch_button] if watch_button else []
+    rows = [row] if row else []
     if media_type == "tv" and tmdb_id:
         state = await follow_state(bot_data, chat_id, tmdb_id)
         if state is not None:
             row.append(follow_button(tmdb_id, state))
-    return InlineKeyboardMarkup([row]) if row else None
+            if not rows:
+                rows.append(row)
+            if await requestable_seasons(bot_data["seerr"], tmdb_id):
+                rows.append([remaining_button(tmdb_id)])
+    return InlineKeyboardMarkup(rows) if rows else None
 
 
 async def _swap_button(q, tmdb_id: int, following: bool) -> None:

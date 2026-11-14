@@ -57,6 +57,9 @@ RQ_INFO_DISMISS: Final = "rqx"        # dismiss a detail card (global handler)
 RQ_CANCEL: Final = "rqcancel"         # rqcancel:<version> (bare via /cancel)
 RQ_FROM_TICKET: Final = "rqfi"        # rqfi:<media_type>:<tmdb_id> jump from
                                       # the /issue not-in-library dead-end
+RQ_REMAINING: Final = "rqrem"         # rqrem:<tmdb_id> "Request remaining seasons"
+                                      # (detail card, availability notice)
+RQ_REMAINING_GO: Final = "rqrgo"      # rqrgo:<tmdb_id> its confirm's Send
 RQ_LIST_CANCEL: Final = "rqlc"        # rqlc:<request_id> cancel from /requests
 
 # Admin Request DM buttons (webhook DMs; see bot.request_admin)

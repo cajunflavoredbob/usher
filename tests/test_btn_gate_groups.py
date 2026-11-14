@@ -28,6 +28,8 @@ FAMILIES = {
     "subscription_add": f"{cp.SUBSCRIPTION_ADD}:movie:550",
     "follow_add": f"{cp.FOLLOW_ADD}:550",
     "follow_del": f"{cp.FOLLOW_DEL}:550",
+    "remaining_ask": f"{cp.RQ_REMAINING}:550",
+    "remaining_send": f"{cp.RQ_REMAINING_GO}:550",
     "follow_remove": f"{cp.FOLLOW_REMOVE}:4",
     "follows_hub": cp.REQUESTS_FOLLOWS,
     "tk_open": f"{cp.TK_OPEN}:9",
@@ -136,7 +138,8 @@ async def test_admin_dm_buttons_still_pass(prefix):
 
 
 @pytest.mark.parametrize("data", [cp.RQ_INFO_DISMISS, f"{cp.SUBSCRIPTION_ADD}:movie:550",
-                                  f"{cp.FOLLOW_ADD}:550", f"{cp.FOLLOW_DEL}:550"])
+                                  f"{cp.FOLLOW_ADD}:550", f"{cp.FOLLOW_DEL}:550",
+                                  f"{cp.RQ_REMAINING}:550"])
 async def test_detail_card_owner_admitted_and_other_refused(data):
     from bot.shared import record_card_owner
     app = _app()

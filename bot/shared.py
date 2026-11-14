@@ -36,6 +36,7 @@ from bot.callback_prefixes import (
     RQ_INFO_DISMISS,
     SUBSCRIPTION_ADD,
     FOLLOW_ADD,
+    RQ_REMAINING,
     FOLLOW_DEL,
     TK_CLOSE,
     TK_FIX,
@@ -686,7 +687,7 @@ async def run_relink_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> b
 
 _GATE_EXEMPT_PREFIXES: Final = frozenset({
     RQ_INFO_DISMISS, SUBSCRIPTION_ADD, FOLLOW_ADD, FOLLOW_DEL, DIGEST_INFO,
-    RQ_ADMIN_APPROVE, RQ_ADMIN_DECLINE, RQ_ADMIN_RETRY,
+    RQ_REMAINING, RQ_ADMIN_APPROVE, RQ_ADMIN_DECLINE, RQ_ADMIN_RETRY,
     ACCESS_APPROVE, ACCESS_IGNORE, ASK_ADMIN,
 })
 
@@ -745,6 +746,9 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     #    card; Notify-me only writes a row for the tapper.
     #  - Follow and Unfollow sit on detail cards, availability notices and
     #    Follow pings; they only write the tapper's own Follow row.
+    #  - Request remaining seasons sits on detail cards and availability
+    #    notices; it only opens a confirm message (recorded, with its own
+    #    Send) and files nothing itself.
     #  - A Digest entry's detail-card button: read-only, and a Digest DM is
     #    not recorded (it can be a day old when tapped).
     #  - Approve/Decline/Retry sit on the Admin's Request DMs. They are
