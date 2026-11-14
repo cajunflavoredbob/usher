@@ -262,23 +262,79 @@ async def test_a_first_ever_import_is_recorded_and_pinged(fresh_store):
     sonarr.get_import_records.return_value = [
         {"id": 50, "date": "2026-11-14T10:00:00Z"}]
     ctx = await _poll_once(fresh_store, sonarr=sonarr)
-    sonarr.get_import_records.assert_awaited_once_with(50)
+    assert sonarr.get_import_records.await_args.args == (50,)
     assert ctx.application.bot.send_message.await_count == 1
     assert len(await fresh_store.list_new_content_between(
         "2000-01-01 00:00:00", "2100-01-01 00:00:00")) == 1
 
 
+def _clock(monkeypatch, iso):
+    """Pin the poller's clock to an ISO time (UTC)."""
+    from datetime import datetime
+    import bot.new_content as nc
+    now = datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
+    monkeypatch.setattr(nc, "time", SimpleNamespace(time=lambda: now))
+
+
+async def _episode_rows(store):
+    return sorted((r[3], r[4]) for r in await store.list_new_content_between(
+        "2000-01-01 00:00:00", "2100-01-01 00:00:00"))
+
+
 async def test_a_history_lookup_error_pings_nothing_and_is_read_again(
-        fresh_store):
+        fresh_store, monkeypatch):
+    _clock(monkeypatch, "2026-11-14T10:10:00Z")
     sonarr = _sonarr([_rec(50, 1, 1, "2026-11-14T10:00:00Z"),
                       _rec(51, 1, 2, "2026-11-14T10:05:00Z")])
     sonarr.get_import_records.side_effect = [
         RuntimeError("down"), [{"id": 51, "date": "2026-11-14T10:05:00Z"}]]
     ctx = await _poll_once(fresh_store, sonarr=sonarr)
     assert ctx.application.bot.send_message.await_count == 1  # E02 only
+    assert await _episode_rows(fresh_store) == [(1, 2)]  # E01 has no row
     # The mark stops before the failed import so it is read again.
     assert await fresh_store.get_poller_mark("sonarr_history") == (
         "2026-11-14T09:00:00Z")
+
+
+async def test_a_lookup_error_that_repeats_is_given_up_after_the_window(
+        fresh_store, monkeypatch):
+    from bot.new_content import TAUTULLI_RETRY_S
+    _clock(monkeypatch, "2026-11-14T10:00:00Z")
+    sonarr = _sonarr([_rec(50, 1, 1, "2026-11-14T10:00:00Z")])
+    sonarr.get_import_records.side_effect = RuntimeError("down")
+    await _poll_once(fresh_store, sonarr=sonarr)
+    assert await fresh_store.get_poller_mark("sonarr_history") == (
+        "2026-11-14T09:00:00Z")  # held inside the window
+    _clock(monkeypatch, "2026-11-14T16:00:01Z")
+    assert TAUTULLI_RETRY_S == 6 * 3600
+    ctx = _app(fresh_store, sonarr=sonarr)
+    await poll_new_content(ctx)
+    assert await _episode_rows(fresh_store) == []  # skipped, not announced
+    assert ctx.application.bot.send_message.await_count == 0
+    assert await fresh_store.get_poller_mark("sonarr_history") == (
+        "2026-11-14T10:00:00Z")  # the mark moved on
+
+
+async def test_a_first_import_with_a_later_upgrade_in_history_is_recorded(
+        fresh_store):
+    sonarr = _sonarr([_rec(50, 1, 1)])
+    sonarr.get_import_records.return_value = [
+        {"id": 60, "date": "2026-11-14T10:30:00Z"},
+        {"id": 50, "date": "2026-11-14T10:00:00Z"}]
+    await _poll_once(fresh_store, sonarr=sonarr)
+    assert await _episode_rows(fresh_store) == [(1, 1)]
+
+
+async def test_a_library_import_then_upgrade_is_not_recorded(fresh_store):
+    # No earlier downloadFolderImported, but the client returns the
+    # file-deleted record that came before this import.
+    sonarr = _sonarr([_rec(50, 1, 1)])
+    sonarr.get_import_records.return_value = [
+        {"id": 50, "date": "2026-11-14T10:00:00Z"},
+        {"id": 45, "date": "2026-11-14T09:59:00Z"}]
+    ctx = await _poll_once(fresh_store, sonarr=sonarr)
+    assert await _episode_rows(fresh_store) == []
+    assert ctx.application.bot.send_message.await_count == 0
 
 
 async def test_a_radarr_upgrade_is_not_recorded(fresh_store):
@@ -289,8 +345,52 @@ async def test_a_radarr_upgrade_is_not_recorded(fresh_store):
              "movie": {"tmdbId": 550, "title": "Fight Club"}}]),
         get_import_records=AsyncMock(return_value=[{"id": 9}, {"id": 2}]))
     await poll_new_content(_app(fresh_store, radarr=radarr))
-    radarr.get_import_records.assert_awaited_once_with(4)
+    assert radarr.get_import_records.await_args.args == (4,)
     assert await fresh_store.add_new_content("radarr:9", "movie", 550, "x")
+
+
+def _radarr_poll(records, history):
+    return SimpleNamespace(
+        get_history_imports_since=AsyncMock(return_value=records),
+        get_import_records=AsyncMock(
+            side_effect=history if isinstance(history, Exception) else None,
+            return_value=None if isinstance(history, Exception) else history))
+
+
+_MOVIE_IMPORT = {"id": 9, "date": "2026-11-14T10:00:00Z", "movieId": 4,
+                 "movie": {"tmdbId": 550, "title": "Fight Club"}}
+
+
+async def test_a_radarr_first_import_with_a_later_upgrade_is_recorded(
+        fresh_store):
+    await fresh_store.set_poller_mark("radarr_history", "2026-11-14T09:00:00Z")
+    radarr = _radarr_poll([_MOVIE_IMPORT], [{"id": 12}, {"id": 9}])
+    await poll_new_content(_app(fresh_store, radarr=radarr))
+    assert not await fresh_store.add_new_content(
+        "radarr:9", "movie", 550, "x")  # already recorded
+
+
+async def test_a_radarr_library_import_then_upgrade_is_not_recorded(
+        fresh_store):
+    await fresh_store.set_poller_mark("radarr_history", "2026-11-14T09:00:00Z")
+    radarr = _radarr_poll([_MOVIE_IMPORT], [{"id": 9}, {"id": 5}])
+    await poll_new_content(_app(fresh_store, radarr=radarr))
+    assert await fresh_store.add_new_content("radarr:9", "movie", 550, "x")
+
+
+async def test_a_radarr_lookup_error_holds_the_mark_then_gives_up(
+        fresh_store, monkeypatch):
+    await fresh_store.set_poller_mark("radarr_history", "2026-11-14T09:00:00Z")
+    radarr = _radarr_poll([_MOVIE_IMPORT], RuntimeError("down"))
+    _clock(monkeypatch, "2026-11-14T10:10:00Z")
+    await poll_new_content(_app(fresh_store, radarr=radarr))
+    assert await fresh_store.add_new_content("radarr:9", "movie", 550, "x")
+    assert await fresh_store.get_poller_mark("radarr_history") == (
+        "2026-11-14T09:00:00Z")
+    _clock(monkeypatch, "2026-11-14T16:00:01Z")
+    await poll_new_content(_app(fresh_store, radarr=radarr))
+    assert await fresh_store.get_poller_mark("radarr_history") == (
+        "2026-11-14T10:00:00Z")
 
 
 # --- Follow pings -------------------------------------------------------------

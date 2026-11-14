@@ -13,6 +13,12 @@ ADMIN_ID = 999
 MARK = "1700000000"
 
 
+def _iso(epoch):
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(epoch, timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+
+
 def _item(key, added, **kw):
     return {"rating_key": key, "added_at": str(added), **kw}
 
@@ -147,8 +153,10 @@ async def test_a_reimported_episode_is_skipped_with_sonarr_configured(
         get_episodes=AsyncMock(return_value=[
             SimpleNamespace(id=11, episode=1), SimpleNamespace(id=12, episode=2)]),
         get_import_records=AsyncMock(
-            side_effect=lambda eid: [{"id": 1}, {"id": 2}] if eid == 11
-            else [{"id": 3}]))
+            side_effect=lambda eid, stop=None: [
+                {"id": 2, "date": _iso(1700000600 - 30)},
+                {"id": 1, "date": _iso(1700000600 - 86400)}] if eid == 11
+            else [{"id": 3, "date": _iso(1700000700 - 30)}]))
     await poll_new_content(_ctx(fresh_store, tautulli=tau, sonarr=sonarr))
     assert await _rows(fresh_store) == [
         ("episode", 1396, "Breaking Bad", 1, 2)]
@@ -161,9 +169,50 @@ async def test_a_reimported_movie_is_skipped_with_radarr_configured(
     tau = _tautulli([_movie(1, 1700000500, ["tmdb://550"])])
     radarr = SimpleNamespace(
         get_movie_by_tmdb=AsyncMock(return_value=SimpleNamespace(id=4)),
-        get_import_records=AsyncMock(return_value=[{"id": 1}, {"id": 2}]))
+        get_import_records=AsyncMock(return_value=[
+            {"id": 2, "date": _iso(1700000500 - 30)},
+            {"id": 1, "date": _iso(1700000500 - 86400)}]))
     await poll_new_content(_ctx(fresh_store, tautulli=tau, radarr=radarr))
     assert await _rows(fresh_store) == []
+
+
+async def test_a_new_movie_upgraded_before_it_is_read_is_recorded(
+        fresh_store):
+    # The import Plex listed and a quick upgrade of it are both within ten
+    # minutes of added_at: no file existed well before, so it is new.
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    tau = _tautulli([_movie(1, 1700000500, ["tmdb://550"])])
+    radarr = SimpleNamespace(
+        get_movie_by_tmdb=AsyncMock(return_value=SimpleNamespace(id=4)),
+        get_import_records=AsyncMock(return_value=[
+            {"id": 2, "date": _iso(1700000500 + 120)},
+            {"id": 1, "date": _iso(1700000500 - 120)}]))
+    await poll_new_content(_ctx(fresh_store, tautulli=tau, radarr=radarr))
+    assert [r[1] for r in await _rows(fresh_store)] == [550]
+
+
+async def test_a_library_import_then_upgrade_is_skipped_on_the_tautulli_path(
+        fresh_store):
+    # Only a file-deleted record (no earlier import) dated a day before.
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    tau = _tautulli([_movie(1, 1700000500, ["tmdb://550"])])
+    radarr = SimpleNamespace(
+        get_movie_by_tmdb=AsyncMock(return_value=SimpleNamespace(id=4)),
+        get_import_records=AsyncMock(return_value=[
+            {"id": 3, "date": _iso(1700000500 - 30)},
+            {"id": 2, "date": _iso(1700000500 - 86400)}]))
+    await poll_new_content(_ctx(fresh_store, tautulli=tau, radarr=radarr))
+    assert await _rows(fresh_store) == []
+
+
+async def test_an_arr_lookup_error_past_the_window_records_the_item_as_new(
+        fresh_store):
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    tau = _tautulli([_movie(1, 1700000500, ["tmdb://550"])])  # years old
+    radarr = SimpleNamespace(
+        get_movie_by_tmdb=AsyncMock(side_effect=RuntimeError("down")))
+    await poll_new_content(_ctx(fresh_store, tautulli=tau, radarr=radarr))
+    assert [r[1] for r in await _rows(fresh_store)] == [550]
 
 
 async def test_an_arr_lookup_error_leaves_the_tautulli_item_for_next_poll(

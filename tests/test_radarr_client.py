@@ -264,13 +264,15 @@ async def test_lookup_failure_message_names_no_exception_class(monkeypatch):
     assert "isn't responding" in result.message
 
 
-async def test_get_import_records_uses_per_movie_history_and_keeps_imports():
+async def test_get_import_records_keeps_imports_and_file_deletes_of_the_movie():
     client, requests = _client_with_history([
-        {"id": 200, "eventType": "downloadFolderImported"},
-        {"id": 123, "eventType": "grabbed"},
-        {"id": 50, "eventType": "downloadFolderImported"},
+        {"id": 200, "movieId": 5, "eventType": "downloadFolderImported"},
+        {"id": 150, "movieId": 5, "eventType": "movieFileDeleted"},
+        {"id": 123, "movieId": 5, "eventType": "grabbed"},
+        {"id": 90, "movieId": 6, "eventType": "downloadFolderImported"},
+        {"id": 50, "movieId": 5, "eventType": "downloadFolderImported"},
     ])
     records = await client.get_import_records(5)
     await client.close()
-    assert [r["id"] for r in records] == [200, 50]
+    assert [r["id"] for r in records] == [200, 150, 50]
     assert requests[0].url.params["movieId"] == "5"

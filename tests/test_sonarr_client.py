@@ -397,7 +397,15 @@ async def test_fix_result_names_the_sonarr_episode_title():
     assert 'S01E03 "Three"' in result.message
 
 
-async def test_get_import_records_keeps_only_imports_and_pages():
+def _history_client(handler):
+    client = SonarrClient("http://sonarr.test", "key")
+    client._client = httpx.AsyncClient(
+        base_url="http://sonarr.test/api/v3",
+        transport=httpx.MockTransport(handler))
+    return client
+
+
+async def test_get_import_records_keeps_imports_and_deletes_of_the_episode():
     from sonarr import _HISTORY_PAGE_SIZE
 
     pages = []
@@ -409,17 +417,57 @@ async def test_get_import_records_keeps_only_imports_and_pages():
         pages.append(page)
         if page == 1:
             return httpx.Response(200, json={"records": [
-                {"id": i, "eventType": "grabbed"}
+                {"id": i, "episodeId": 501, "eventType": "grabbed"}
                 for i in range(_HISTORY_PAGE_SIZE)]})
         return httpx.Response(200, json={"records": [
-            {"id": 9, "eventType": "downloadFolderImported"},
-            {"id": 8, "eventType": "grabbed"}]})
+            {"id": 9, "episodeId": 501, "eventType": "downloadFolderImported"},
+            {"id": 8, "episodeId": 501, "eventType": "grabbed"},
+            {"id": 7, "episodeId": 501, "eventType": "episodeFileDeleted"},
+            {"id": 6, "episodeId": 777,
+             "eventType": "downloadFolderImported"}]})
 
-    client = SonarrClient("http://sonarr.test", "key")
-    client._client = httpx.AsyncClient(
-        base_url="http://sonarr.test/api/v3",
-        transport=httpx.MockTransport(handler))
+    client = _history_client(handler)
     records = await client.get_import_records(501)
     await client.close()
-    assert [r["id"] for r in records] == [9]
+    assert [r["id"] for r in records] == [9, 7]
     assert pages == [1, 2]
+
+
+async def test_get_import_records_reads_past_five_pages_until_stop_is_met():
+    from sonarr import _HISTORY_PAGE_SIZE
+
+    pages = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = int(request.url.params["page"])
+        pages.append(page)
+        records = [{"id": 1000 - page * 100 - i, "episodeId": 501,
+                    "eventType": "grabbed"} for i in range(_HISTORY_PAGE_SIZE)]
+        if page == 7:
+            records[3] = {"id": 4, "episodeId": 501,
+                          "eventType": "downloadFolderImported"}
+        return httpx.Response(200, json={"records": records})
+
+    client = _history_client(handler)
+    records = await client.get_import_records(
+        501, stop=lambda r: r["id"] < 10)
+    await client.close()
+    assert [r["id"] for r in records] == [4]
+    assert pages == [1, 2, 3, 4, 5, 6, 7]
+
+
+async def test_get_import_records_stops_at_the_hard_page_cap():
+    from sonarr import _HISTORY_PAGE_SIZE, _IMPORT_HISTORY_MAX_PAGES
+
+    pages = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        pages.append(int(request.url.params["page"]))
+        return httpx.Response(200, json={"records": [
+            {"id": i, "episodeId": 501, "eventType": "grabbed"}
+            for i in range(_HISTORY_PAGE_SIZE)]})
+
+    client = _history_client(handler)
+    assert await client.get_import_records(501) == []
+    await client.close()
+    assert len(pages) == _IMPORT_HISTORY_MAX_PAGES

@@ -33,6 +33,10 @@ TAUTULLI_PAGE = 50
 TAUTULLI_READ_PAGES = 40
 TAUTULLI_MAX_ITEMS = 250
 TAUTULLI_RETRY_S = 6 * 3600
+# On the Tautulli path, an arr import or delete record counts as an earlier
+# file only when it is dated this much before Tautulli's added_at: a record
+# closer than that is the import Plex just picked up (or an upgrade of it).
+TAUTULLI_PRIOR_GAP_S = 10 * 60
 
 
 def _now_iso() -> str:
@@ -45,11 +49,43 @@ def _latest(records: list[dict], current: str) -> str:
     return max([current, *dates])
 
 
-def _has_earlier(records: list[dict], rec_id) -> bool:
-    """True when an import record older than `rec_id` (history ids only
-    grow) exists: this import is an upgrade or a re-import, not new."""
-    return any(isinstance(r, dict) and isinstance(r.get("id"), int)
-               and r["id"] < rec_id for r in records)
+def _epoch(value) -> Optional[float]:
+    """Seconds since the epoch of an ISO 8601 date string, or None."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _is_older(record, rec_id) -> bool:
+    return (isinstance(record, dict) and isinstance(record.get("id"), int)
+            and record["id"] < rec_id)
+
+
+async def _has_earlier(client, item_id, rec_id) -> bool:
+    """True when the item's history holds an earlier import, or a file-deleted
+    record that is not after this import (history ids only grow), so this
+    import is an upgrade, a Fix or a re-import and not new. A title that came
+    in by Library Import has no earlier import record, so its deleted-file
+    record is what shows it had a file before. The client returns only
+    import and file-deleted records. A lookup error propagates."""
+    records = await client.get_import_records(
+        item_id, stop=lambda r: _is_older(r, rec_id))
+    return any(_is_older(r, rec_id) for r in records)
+
+
+def _gave_up(rec: dict) -> bool:
+    """True once a failing lookup has been retried for TAUTULLI_RETRY_S after
+    the import (the same window the Tautulli path uses): the item is then
+    skipped and the mark moves on, so one broken item cannot hold the mark
+    forever."""
+    when = _epoch(rec.get("date"))
+    return when is not None and time.time() - when >= TAUTULLI_RETRY_S
 
 
 def _mark_before_failed(records: list[dict], since: str,
@@ -80,13 +116,18 @@ async def _poll_radarr(store, radarr) -> None:
             continue
         movie_id = rec.get("movieId") or movie.get("id")
         if movie_id is not None:
-            # An import with an earlier import on record is an upgrade or a
-            # Fix, not new content. On a lookup error, skip it this pass and
-            # read it again next poll rather than ping falsely.
+            # An import with an earlier import or delete on record is an
+            # upgrade or a Fix, not new content. On a lookup error, skip it
+            # this pass and read it again next poll rather than ping falsely,
+            # until the retry window has passed.
             try:
-                prior = _has_earlier(
-                    await radarr.get_import_records(movie_id), rec["id"])
+                prior = await _has_earlier(radarr, movie_id, rec["id"])
             except Exception:
+                if _gave_up(rec):
+                    logger.warning("Radarr import history of movie %s failed"
+                                   " past the retry window; skipped",
+                                   movie_id, exc_info=True)
+                    continue
                 logger.warning("Radarr import history of movie %s failed",
                                movie_id, exc_info=True)
                 if isinstance(rec.get("date"), str):
@@ -128,12 +169,16 @@ async def _poll_sonarr(store, sonarr) -> None:
                 continue
             season, number = nums
         if rec.get("episodeId") is not None:
-            # See _poll_radarr: an earlier import means an upgrade or a Fix.
+            # See _poll_radarr: an earlier import or delete means an upgrade or Fix.
             try:
-                prior = _has_earlier(
-                    await sonarr.get_import_records(rec["episodeId"]),
-                    rec["id"])
+                prior = await _has_earlier(
+                    sonarr, rec["episodeId"], rec["id"])
             except Exception:
+                if _gave_up(rec):
+                    logger.warning("Sonarr import history of episode %s "
+                                   "failed past the retry window; skipped",
+                                   rec["episodeId"], exc_info=True)
+                    continue
                 logger.warning("Sonarr import history of episode %s failed",
                                rec["episodeId"], exc_info=True)
                 if isinstance(rec.get("date"), str):
@@ -223,18 +268,39 @@ async def _expand_episodes(tautulli, item: dict) -> list[tuple[dict, object]]:
     return out
 
 
-async def _was_imported_before(arr, find_id) -> bool:
-    """With a configured Radarr or Sonarr that knows the item: True when it
-    has two or more import records, the newest being the one Tautulli just
-    listed, so this add is an upgrade or a re-import. False when there is no
-    such client, or it does not know the item (today's behavior). A lookup
-    error propagates so the caller reads the item again."""
+async def _was_imported_before(arr, find_id, added: int,
+                               fail_open: bool = False) -> bool:
+    """With a configured Radarr or Sonarr that knows the item: True when its
+    history holds a downloadFolderImported or file-deleted record dated more
+    than TAUTULLI_PRIOR_GAP_S before Tautulli's added_at, meaning a file
+    existed well before this one and this add is an upgrade or a re-import.
+    A record near added_at is the import Plex just listed, or a quick upgrade
+    of it, and does not count. False when there is no such client, or it
+    does not know the item. A lookup error propagates so the caller reads
+    the item again; once `fail_open` is set (the retry window has passed)
+    the error is logged and the item counts as new, so it is announced
+    rather than dropped."""
     if arr is None:
         return False
-    item_id = await find_id()
-    if item_id is None:
+    cutoff = added - TAUTULLI_PRIOR_GAP_S
+
+    def before(r) -> bool:
+        when = _epoch(r.get("date")) if isinstance(r, dict) else None
+        return when is not None and when < cutoff
+
+    try:
+        item_id = await find_id()
+        if item_id is None:
+            return False
+        records = await arr.get_import_records(item_id, stop=before)
+    except Exception:
+        if not fail_open:
+            raise
+        logger.warning("Sonarr/Radarr history lookup failed past the retry "
+                       "window; the Tautulli item is recorded as new",
+                       exc_info=True)
         return False
-    return len(await arr.get_import_records(item_id)) >= 2
+    return any(before(r) for r in records)
 
 
 async def _poll_tautulli(store, tautulli, radarr=None, sonarr=None) -> None:
@@ -298,7 +364,8 @@ async def _poll_tautulli(store, tautulli, radarr=None, sonarr=None) -> None:
                         await tautulli.get_metadata(key))
                 if tmdb:
                     if await _was_imported_before(
-                            radarr, lambda: radarr_movie_id(tmdb)):
+                            radarr, lambda: radarr_movie_id(tmdb), added,
+                            fail_open=not retry):
                         continue
                     await store.add_new_content(
                         f"tautulli:{key}", "movie", tmdb,
@@ -328,7 +395,9 @@ async def _poll_tautulli(store, tautulli, radarr=None, sonarr=None) -> None:
                          or (item.get("title") if kind == "show" else None)
                          or "?")
                 if await _was_imported_before(
-                        sonarr, lambda: sonarr_episode_id(tvdb, season, number)):
+                        sonarr,
+                        lambda: sonarr_episode_id(tvdb, season, number),
+                        added, fail_open=not retry):
                     continue
                 await store.add_new_content(
                     f"tautulli:{ep_key}", "episode", tmdb, title, season,

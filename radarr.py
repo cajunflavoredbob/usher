@@ -256,12 +256,17 @@ class RadarrClient:
         return json_or_raise(r, service=_SERVICE, what="history since",
                              expect=list)
 
-    async def get_import_records(self, movie_id: int) -> list[dict]:
-        """GET /history/movie: the movie's `downloadFolderImported` records
-        (each with id and date), newest first."""
+    async def get_import_records(self, movie_id: int,
+                                 stop=None) -> list[dict]:
+        """GET /history/movie: the movie's `downloadFolderImported` and
+        `movieFileDeleted` records (each with id and date), newest first.
+        Only records whose movieId is this movie are kept. The endpoint
+        returns the whole history in one reply, so `stop` (used by the
+        Sonarr client to stop paging) is accepted and ignored."""
         return [x for x in await self._movie_history(movie_id)
-                if isinstance(x, dict)
-                and x.get("eventType") == "downloadFolderImported"]
+                if isinstance(x, dict) and x.get("movieId") == movie_id
+                and x.get("eventType") in (
+                    "downloadFolderImported", "movieFileDeleted")]
 
     async def get_calendar(self, start: str, end: str) -> list[dict]:
         """GET /calendar: movies with an `inCinemas`, `digitalRelease` or

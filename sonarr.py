@@ -20,6 +20,9 @@ _SERVICE = "Sonarr"
 # a pathological history can't spin forever (5 x 50 = 250 records deep).
 _HISTORY_PAGE_SIZE = 50
 _HISTORY_MAX_PAGES = 5
+# The re-import check reads deeper: it needs the oldest import or delete.
+_IMPORT_HISTORY_MAX_PAGES = 20
+_IMPORT_EVENTS = ("downloadFolderImported", "episodeFileDeleted")
 
 
 @dataclass
@@ -422,13 +425,17 @@ class SonarrClient:
         return json_or_raise(r, service=_SERVICE, what="history since",
                              expect=list)
 
-    async def get_import_records(self, episode_id: int) -> list[dict]:
-        """GET /history for one episode: its `downloadFolderImported`
-        records (each with id and date), newest first. Pages up to
-        _HISTORY_MAX_PAGES x _HISTORY_PAGE_SIZE records deep; the poller only
-        asks whether an import earlier than a known one exists."""
+    async def get_import_records(self, episode_id: int,
+                                 stop=None) -> list[dict]:
+        """GET /history for one episode: its `downloadFolderImported` and
+        `episodeFileDeleted` records (each with id and date), newest first.
+        Only records whose episodeId is this episode are kept (Sonarr
+        ignores a filter it does not know and then returns library-wide
+        history). Pages up to _IMPORT_HISTORY_MAX_PAGES x _HISTORY_PAGE_SIZE
+        records deep, and stops early once `stop(record)` is true for a kept
+        record, so the poller reads only as far as the record it needs."""
         out: list[dict] = []
-        for page in range(1, _HISTORY_MAX_PAGES + 1):
+        for page in range(1, _IMPORT_HISTORY_MAX_PAGES + 1):
             r = await execute(
                 self._client, "GET", "/history", service=_SERVICE,
                 params={"episodeId": episode_id, "page": page,
@@ -436,9 +443,13 @@ class SonarrClient:
                         "sortKey": "date", "sortDirection": "descending"})
             records = json_or_raise(
                 r, service=_SERVICE, what="episode history").get("records") or []
-            out.extend(x for x in records if isinstance(x, dict)
-                       and x.get("eventType") == "downloadFolderImported")
+            kept = [x for x in records if isinstance(x, dict)
+                    and x.get("episodeId") == episode_id
+                    and x.get("eventType") in _IMPORT_EVENTS]
+            out.extend(kept)
             if len(records) < _HISTORY_PAGE_SIZE:
+                break
+            if stop is not None and any(stop(x) for x in kept):
                 break
         return out
 
