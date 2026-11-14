@@ -456,20 +456,32 @@ def _coverage_verdict(ctx: ContextTypes.DEFAULT_TYPE, media_type: str,
     return None, False
 
 
-def _trending_result(ctx: ContextTypes.DEFAULT_TYPE,
-                     data: Optional[str]) -> Optional[MediaResult]:
+def _trending_result(ctx: ContextTypes.DEFAULT_TYPE, data: Optional[str],
+                     stash: dict) -> Optional[MediaResult]:
     """The /trending list entry a rqfi tap points at, or None (no list, a
-    different entry, or the /issue jump, which stashes its own title)."""
+    different entry, or the /issue jump, whose `stash` holds its own title)."""
     try:
         _, media_type, tmdb_id_s = (data or "").split(":")
         tmdb_id = int(tmdb_id_s)
     except ValueError:
         return None
-    stash = ctx.user_data.get("rq_jump_media") or {}
     if stash.get("tmdb_id") == tmdb_id:
         return None
     return next((r for r in ctx.user_data.get("dv_results") or []
                  if r.media_type == media_type and r.tmdb_id == tmdb_id), None)
+
+
+def _in_latest_browse(ctx: ContextTypes.DEFAULT_TYPE,
+                      data: Optional[str]) -> bool:
+    """True if the tapped title is in the latest /trending list (an
+    unparseable tap counts as in: the parse error path owns it)."""
+    try:
+        _, media_type, tmdb_id_s = (data or "").split(":")
+        tmdb_id = int(tmdb_id_s)
+    except ValueError:
+        return True
+    return any(r.media_type == media_type and r.tmdb_id == tmdb_id
+               for r in ctx.user_data.get("dv_results") or [])
 
 
 async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
@@ -480,10 +492,25 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     # Ack first: the gate below can run a slow Seerr login, and a late
     # answer to an expired tap raises out of the handler.
     await q.answer()
+    # Take the /issue jump's stash now, before anything can end or refuse the
+    # tap: a stash left behind would make a later /trending tap on the same
+    # title skip the availability check. (The force-end below then has no
+    # stash to keep.)
+    stash = ctx.user_data.pop("rq_jump_media", None) or {}
     # A /trending number tap carries no title, but the latest browse list is
     # still in user_data with each title's status. The /issue jump stashes
     # its own title and has no status to check.
-    tapped = _trending_result(ctx, q.data)
+    tapped = _trending_result(ctx, q.data, stash)
+    if (tapped is None and not stash
+            and user_in_conversation(ctx, update, "request")
+            and not _in_latest_browse(ctx, q.data)):
+        # An older list's button carries no list version. While a /request is
+        # open, a title the latest browse no longer holds must not replace
+        # its draft.
+        await update.effective_message.reply_text(
+            "That list is out of date. Run /trending again to pick from "
+            "the new one.")
+        return None
     # A pick from a Hub's list (the tapped message carries the back button)
     # ends back at that Hub; any other pick behaves like a typed /request.
     hub = REQUESTS_HUB if came_from_hub(q.message, REQUESTS_HUB) else None
@@ -523,7 +550,6 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         return ConversationHandler.END
     # Title travels via user_data (stashed by ticket_flow when it renders the
     # button); fall back to a TMDb lookup if it got clobbered.
-    stash = ctx.user_data.pop("rq_jump_media", None) or {}
     title = stash.get("title")
     year = stash.get("year", "")
     if not title or stash.get("tmdb_id") != tmdb_id:

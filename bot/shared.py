@@ -956,10 +956,11 @@ ISSUE_KEYS: Final = ("media", "search_results", "seasons", "season", "episode",
                      "submitting_ticket", "rq_jump_media",
                      "_pending_autofix_id", "hub_origin")
 # The ones force-ending the /issue conversation leaves alone: a jump that
-# ends it hands rq_jump_media and the Hub origin to the next flow, and
-# submitting_ticket is the in-flight submit's own guard (its finally pops it).
-_ISSUE_KEYS_KEPT_ON_FORCE_END: Final = ("rq_jump_media", "hub_origin",
-                                        "submitting_ticket")
+# ends it hands the Hub origin to the next flow, and submitting_ticket and
+# _pending_autofix_id belong to the in-flight submit (it pops both itself; the
+# second carries the Auto-fix Progress card's row id).
+_ISSUE_KEYS_KEPT_ON_FORCE_END: Final = ("hub_origin", "submitting_ticket",
+                                        "_pending_autofix_id")
 
 
 def force_end_flow_conversations(ctx: ContextTypes.DEFAULT_TYPE,

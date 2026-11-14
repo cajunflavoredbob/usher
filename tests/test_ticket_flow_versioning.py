@@ -261,10 +261,11 @@ async def test_force_end_clears_the_ended_issue_draft():
     ended = force_end_flow_conversations(ctx, upd)
     assert ended == [conv]
     for gone in ("media", "season", "episode", "research_parent",
-                 "_pending_autofix_id", "description"):
+                 "rq_jump_media", "description"):
         assert gone not in ctx.user_data, gone
-    # The jump to /request reads these after the force-end.
-    assert ctx.user_data["rq_jump_media"] == {"tmdb_id": 9}
+    # The Hub origin goes to the next flow; the in-flight submit pops its own
+    # Auto-fix Progress card id when it finishes.
+    assert ctx.user_data["_pending_autofix_id"] == 7
     assert ctx.user_data["hub_origin"] == "tickets"
     assert ctx.user_data["search_version"] == 2
 
@@ -275,3 +276,23 @@ async def test_force_end_leaves_the_draft_when_no_issue_flow_is_live():
     ctx.application.bot_data["flow_convs"] = []
     force_end_flow_conversations(ctx, make_update(text="/x", user_id=USER_ID))
     assert ctx.user_data["media"] == {"title": "Old"}
+
+
+async def test_new_issue_keeps_the_interrupted_submit_resume_marker():
+    """A new /issue must not silently drop the earlier report's relink
+    resume: the marker stays so the resume can say it was not submitted."""
+    from bot.shared import run_relink_resume
+    import time
+    marker = {"kind": "submit_ticket", "payload": {"autofix": False},
+              "saved_at": time.time()}
+    ctx = _ctx(search_version=2, relink_resume=dict(marker), **_DRAFT)
+    await ticket_start(make_update(text="/issue", user_id=USER_ID), ctx)
+    assert ctx.user_data["relink_resume"]["kind"] == "submit_ticket"
+    # The re-link finishes while the new /issue is open: the user is told.
+    class _Conv:
+        _conversations = {(100, USER_ID): 1}
+    ctx.bot_data["conversations"] = {"issue": _Conv()}
+    upd = make_update(text="x", user_id=USER_ID)
+    assert await run_relink_resume(upd, ctx) is True
+    texts = [c["text"] for c in upd.effective_message.reply_calls]
+    assert any("didn't auto-submit" in t for t in texts)

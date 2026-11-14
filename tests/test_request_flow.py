@@ -1062,3 +1062,58 @@ async def test_refused_trending_tap_leaves_an_open_request_flow_parked(
         monkeypatch, flow_open=True)
     assert conv._conversations[key] == RQ_CONFIRM
     assert len(jq.scheduled) == 1  # the open flow's own timeout, re-armed
+
+
+async def test_refused_tap_consumes_a_stale_jump_stash():
+    """A stash left by the /issue dead end must not let a later tap on the
+    same title skip the availability refusal."""
+    from bot.request_flow import request_from_ticket
+    covered = MediaResult("movie", 550, "Fight Club", "1999", 5,
+                          status=MEDIA_STATUS_AVAILABLE)
+    other = MediaResult("movie", 7, "Other", "2000", 5,
+                        status=MEDIA_STATUS_AVAILABLE)
+    ctx = _trending_ctx(covered)
+    ctx.user_data["dv_results"] = [covered, other]
+    ctx.user_data["rq_jump_media"] = {"tmdb_id": 550, "title": "Fight Club",
+                                      "year": "1999"}
+    first = make_update(callback_data="rqfi:movie:7", user_id=USER_ID)
+    await request_from_ticket(first, ctx)
+    assert "rq_jump_media" not in ctx.user_data
+    second = make_update(callback_data="rqfi:movie:550", user_id=USER_ID)
+    state = await request_from_ticket(second, ctx)
+    assert state == ConversationHandler.END
+    assert "Already available" in second.effective_message.reply_calls[0]["text"]
+
+
+async def test_force_end_drops_the_stash_of_a_jump_that_proceeds():
+    from bot.request_flow import request_from_ticket
+    ctx = _trending_ctx(MediaResult("movie", 7, "Other", "2000", 5, status=None))
+    ctx.user_data["rq_jump_media"] = {"tmdb_id": 550, "title": "Old",
+                                      "year": ""}
+    upd = make_update(callback_data="rqfi:movie:7", user_id=USER_ID)
+    state = await request_from_ticket(upd, ctx)
+    assert state == RQ_CONFIRM
+    assert "rq_jump_media" not in ctx.user_data
+
+
+async def test_old_list_tap_does_not_replace_an_open_request_draft():
+    """A title the latest browse no longer holds is refused while a /request
+    is open; the draft and the open conversation stay."""
+    from bot.request_flow import request_from_ticket
+    ctx = _trending_ctx(MediaResult("movie", 550, "Fight Club", "1999", 5,
+                                    status=None))
+    ctx.user_data["rq_media"] = {"type": "movie", "tmdb_id": 7}
+
+    class _Conv:
+        _conversations = {(100, USER_ID): RQ_CONFIRM}
+
+    ctx.bot_data["conversations"] = {"request": _Conv()}
+    upd = make_update(callback_data="rqfi:movie:999", user_id=USER_ID)
+    state = await request_from_ticket(upd, ctx)
+    assert state is None
+    assert ctx.user_data["rq_media"]["tmdb_id"] == 7
+    assert "out of date" in upd.effective_message.reply_calls[0]["text"]
+    # A title in the latest browse still proceeds.
+    ok = make_update(callback_data="rqfi:movie:550", user_id=USER_ID)
+    assert await request_from_ticket(ok, ctx) == RQ_CONFIRM
+    assert ctx.user_data["rq_media"]["tmdb_id"] == 550

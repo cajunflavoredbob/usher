@@ -141,13 +141,17 @@ async def _is_stale(update, ctx, version: Optional[int]) -> bool:
     return True
 
 
-def _clear_issue_state(ctx) -> None:
+def _clear_issue_state(ctx, *, keep_resume: bool = False) -> None:
     for key in _ISSUE_KEYS:
         ctx.user_data.pop(key, None)
     # A resume marker for this flow's own submit is stale once the flow ends;
-    # markers other flows left (a Request, a Ticket reply) stay.
+    # markers other flows left (a Request, a Ticket reply) stay. A NEW report
+    # keeps it (keep_resume): when the re-link finishes, the resume then tells
+    # the user the interrupted report was not auto-submitted, instead of the
+    # report vanishing without a word.
     marker = ctx.user_data.get("relink_resume")
-    if isinstance(marker, dict) and marker.get("kind") == "submit_ticket":
+    if (not keep_resume and isinstance(marker, dict)
+            and marker.get("kind") == "submit_ticket"):
         ctx.user_data.pop("relink_resume", None)
 
 
@@ -243,7 +247,7 @@ def _new_ticket_conversation() -> ConversationHandler:
 
 async def ticket_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     # A typed /issue is never a Hub flow, even if a Hub left its mark behind.
-    _clear_issue_state(ctx)
+    _clear_issue_state(ctx, keep_resume=True)
     set_hub_origin(ctx, None)
     # A restart makes every button of the earlier report stale, even before
     # this one runs a search.
@@ -281,7 +285,7 @@ async def ticket_hub_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     q = update.callback_query
     await q.answer()
     force_end_flow_conversations(ctx, update)
-    _clear_issue_state(ctx)
+    _clear_issue_state(ctx, keep_resume=True)
     set_hub_origin(ctx, TICKETS_HUB)
     _bump_version(ctx)
     if await require_seerr(update, ctx,
@@ -504,6 +508,11 @@ async def ticket_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
         if rows:
             # Keep the re-search / request buttons live in the gate's history.
             record_btn(ctx.application, update.effective_user.id, sent)
+        if not parent:
+            # END: a stash left behind would make a later /trending tap on
+            # this title skip the availability check. The jump falls back to
+            # a title lookup.
+            ctx.user_data.pop("rq_jump_media", None)
         # END unless the parent re-search (which needs this conversation's
         # state) is offered. The "Request it instead" button is a request-
         # conversation ENTRY POINT, so it works after END too; staying

@@ -8,7 +8,7 @@ from telegram.ext import ConversationHandler
 from bot.ticket_flow import ticket_pick_media
 from bot.shared import PICK_TYPE
 from seerr import MediaResult
-from tests._handler_harness import make_ctx, make_update
+from tests._handler_harness import make_ctx, make_link, make_update
 
 
 def _seed(ctx, version: int, results: list[MediaResult]):
@@ -122,4 +122,29 @@ async def test_not_in_library_offers_request_jump_and_ends():
     callbacks = [b.callback_data for row in edit["reply_markup"].inline_keyboard
                  for b in row]
     assert "rqfi:movie:77" in callbacks
-    assert ctx.user_data["rq_jump_media"]["tmdb_id"] == 77
+    # Ended with no parent offered: no stash left to bypass a later check.
+    assert "rq_jump_media" not in ctx.user_data
+
+
+async def test_dead_end_leaves_no_stash_that_skips_the_trending_refusal():
+    """End to end: after the dead end ENDs, a /trending tap on the same title,
+    now Available in a browse list, is still refused."""
+    from seerr import MEDIA_STATUS_AVAILABLE
+    from bot.request_flow import request_from_ticket
+    ctx = make_ctx(admin_id=999, link=make_link(telegram_id=42), user_data={
+        "search_results": {"version": 1, "by_key": {
+            ("movie", 77): MediaResult("movie", 77, "Not In Lib", "2026", None)}},
+        "search_version": 1,
+    })
+    await ticket_pick_media(
+        make_update(callback_data="media:1:movie:77", user_id=42), ctx)
+    ctx.user_data["dv_results"] = [MediaResult(
+        "movie", 77, "Not In Lib", "2026", 5, status=MEDIA_STATUS_AVAILABLE)]
+    ctx.bot_data["conversations"] = {}
+    ctx.bot_data["flow_convs"] = []
+    ctx.bot_data["seerr"].get_my_permissions.return_value = 0
+    upd = make_update(callback_data="rqfi:movie:77", user_id=42)
+    state = await request_from_ticket(upd, ctx)
+    assert state == ConversationHandler.END
+    assert "Already available" in upd.effective_message.reply_calls[0]["text"]
+    assert "rq_media" not in ctx.user_data
