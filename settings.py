@@ -63,6 +63,7 @@ class AdminAccount:
 
 
 DEFAULT_DAILY_AUTOFIX_LIMIT = 3
+DEFAULT_INACTIVE_SHARE_DAYS = 60
 
 
 @dataclass
@@ -82,6 +83,11 @@ class Settings:
     # Queue-priority boost for downloads that originate from this bot
     # (requests + auto-fixes): "off", "high", or "force".
     sabnzbd_boost: str = "off"
+    # Tautulli (optional): watch stats and playback details. A Share counts
+    # as inactive after this many days without a play.
+    tautulli_url: str = ""
+    tautulli_api_key: str = ""
+    inactive_share_days: int = DEFAULT_INACTIVE_SHARE_DAYS
     # Bot DM classes, all on by default. Admin-level switches: turning one
     # off silences that class for everyone.
     tg_notify_requester: bool = True      # approved/declined/available/failed to requesters
@@ -127,6 +133,13 @@ class Settings:
             daily_limit = DEFAULT_DAILY_AUTOFIX_LIMIT
         if daily_limit < 1:
             daily_limit = DEFAULT_DAILY_AUTOFIX_LIMIT
+        try:
+            inactive_days = int(data.get("inactive_share_days")
+                                or DEFAULT_INACTIVE_SHARE_DAYS)
+        except (TypeError, ValueError):
+            inactive_days = DEFAULT_INACTIVE_SHARE_DAYS
+        if inactive_days < 1:
+            inactive_days = DEFAULT_INACTIVE_SHARE_DAYS
         return cls(
             telegram_bot_token=data.get("telegram_bot_token", "") or "",
             admin_telegram_id=admin_tg_id,
@@ -143,6 +156,9 @@ class Settings:
             sabnzbd_boost=(data.get("sabnzbd_boost") or "off")
             if (data.get("sabnzbd_boost") or "off") in ("off", "high", "force")
             else "off",
+            tautulli_url=data.get("tautulli_url", "") or "",
+            tautulli_api_key=data.get("tautulli_api_key", "") or "",
+            inactive_share_days=inactive_days,
             tg_notify_requester=bool(data.get("tg_notify_requester", True)),
             tg_notify_admin_requests=bool(data.get("tg_notify_admin_requests", True)),
             tg_notify_admin_failed=bool(data.get("tg_notify_admin_failed", True)),

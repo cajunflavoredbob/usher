@@ -15,7 +15,7 @@ A Telegram bot and web admin panel that sit in front of a Plex server and its [S
 - **SABnzbd priority**: with SABnzbd connected, the Admin can have downloads that Requests and auto-fixes trigger bumped up its queue, at High priority or Force. The bump applies once per download.
 - **Notification toggles**: in the web admin panel's Telegram tab, the Admin can turn off five classes of bot DM for everyone: Request updates to Requesters, new-Request notices to the Admin, the failed-download alarm to the Admin, Ticket DMs, and availability notices for Subscriptions.
 - **Webhook-driven updates**: Seerr posts to Usher at `/webhook/seerr`, so new comments on a Ticket, resolutions and Request status changes are delivered in Telegram and the close flow stays in sync.
-- **Admin web panel** at `/admin`: first-run setup wizard, settings tabs for Telegram, Seerr, Auto-fix, SABnzbd, Webhook and Account, connection **Test** buttons, encrypted backups, and restore.
+- **Admin web panel** at `/admin`: first-run setup wizard, settings tabs for Telegram, Seerr, Auto-fix, SABnzbd, Tautulli, Webhook and Account, connection **Test** buttons, encrypted backups, and restore.
 - Works in DMs or any Telegram group the bot is added to with per-user conversation state. The Admin Hub is DM-only.
 - The Admin also gets a startup health DM.
 
@@ -203,7 +203,7 @@ Because users sign in with Plex, Usher authenticates to Seerr **as the user** (v
 - `bot/`: the Telegram application package (entry point `python -m bot`): app wiring, Hubs, Request/Ticket/Link flows, Ticket management, webhook handlers, auto-fix poller.
 - `webui.py`: aiohttp web admin panel (`/admin`): setup, settings tabs, connection tests, backup/restore.
 - `webhook.py`: Seerr webhook receiver (`/webhook/seerr`).
-- `seerr.py`, `radarr.py`, `sonarr.py`, `sabnzbd.py`, `plex.py`: API clients.
+- `seerr.py`, `radarr.py`, `sonarr.py`, `sabnzbd.py`, `tautulli.py`, `plex.py`: API clients.
 - `store.py`: SQLite store (encrypted Plex tokens, Links, Subscriptions, auto-fix audit).
 - `settings.py`, `const.py`: settings model/persistence and named constants.
 - `http_util.py`, `fix_result.py`: API error contracts and retry, auto-fix result types.
@@ -216,7 +216,7 @@ Because users sign in with Plex, Usher authenticates to Seerr **as the user** (v
 - The Telegram side uses long-polling, so no public URL is required.
 - Seerr reaches Usher over your LAN for webhooks; nothing needs to be exposed publicly.
 - Plex tokens are encrypted at rest (Fernet) in the local SQLite DB.
-- Usher talks only to the Telegram API, your Seerr, your *arr stack, SABnzbd if you connect it, and Plex's auth API. Nothing else.
+- Usher talks only to the Telegram API, your Seerr, your *arr stack, SABnzbd and Tautulli if you connect them, and Plex's auth API. Nothing else.
 
 ## Securing the admin UI
 

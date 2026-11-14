@@ -1,0 +1,118 @@
+"""Async client for Tautulli's API v2.
+
+Every command goes to `/api/v2?apikey=..&cmd=..` and answers the envelope
+`{"response": {"result", "message", "data"}}`. `call` unwraps it and raises
+the project's API errors on an error result, so callers (the later features
+use it for their own commands) only see `data`.
+"""
+from __future__ import annotations
+
+import logging
+import time
+from typing import Optional
+
+import httpx
+
+from http_util import PermanentAPIError, execute, json_or_raise
+
+logger = logging.getLogger("usher." + __name__)
+
+_SERVICE = "Tautulli"
+
+# How long a get_users answer is reused by the mapping helpers below.
+USERS_CACHE_TTL_S = 60.0
+
+
+class TautulliClient:
+    """Thin wrapper over Tautulli's single-endpoint API v2."""
+
+    def __init__(self, base_url: str, api_key: str, timeout: float = 10.0):
+        self.base_url = base_url.rstrip("/")
+        self._api_key = api_key
+        self._client = httpx.AsyncClient(base_url=self.base_url,
+                                         timeout=timeout)
+        self._users_cache: Optional[tuple[float, list]] = None
+
+    async def close(self) -> None:
+        await self._client.aclose()
+
+    async def call(self, cmd: str, *, post: bool = False, retries: int = 3,
+                   **params):
+        """Run one API command and return the envelope's `data`.
+
+        `post=True` sends the parameters as a form body (Tautulli's
+        terminate_session accepts POST only); a POST is never retried
+        blindly: it is sent once. Raises PermanentAPIError when the envelope's result is
+        not "success"."""
+        query = {"apikey": self._api_key, "cmd": cmd}
+        params = {k: v for k, v in params.items() if v is not None}
+        if post:
+            r = await execute(self._client, "POST", "/api/v2",
+                              service=_SERVICE, retries=0,
+                              params=query, data=params)
+        else:
+            query.update(params)
+            r = await execute(self._client, "GET", "/api/v2",
+                              service=_SERVICE, retries=retries,
+                              params=query)
+        body = json_or_raise(r, service=_SERVICE, what=f"Tautulli {cmd}")
+        resp = body.get("response")
+        if not isinstance(resp, dict):
+            raise PermanentAPIError(
+                f"returned an unexpected response shape for Tautulli {cmd}",
+                service=_SERVICE)
+        if resp.get("result") != "success":
+            raise PermanentAPIError(
+                str(resp.get("message") or f"Tautulli rejected {cmd}"),
+                service=_SERVICE)
+        return resp.get("data")
+
+    async def ping(self) -> str:
+        data = await self.call("get_tautulli_info")
+        if not isinstance(data, dict):
+            return "?"
+        return str(data.get("tautulli_version", "?"))
+
+    async def get_users(self) -> list:
+        """Tautulli's user list, cached for USERS_CACHE_TTL_S so a burst of
+        mapping lookups costs one call."""
+        now = time.monotonic()
+        if (self._users_cache is not None
+                and now - self._users_cache[0] < USERS_CACHE_TTL_S):
+            return self._users_cache[1]
+        data = await self.call("get_users")
+        users = [u for u in (data or []) if isinstance(u, dict)]
+        self._users_cache = (now, users)
+        return users
+
+
+def _same(a, b) -> bool:
+    a = (a or "").strip().lower()
+    return bool(a) and a == (b or "").strip().lower()
+
+
+async def find_user_by_plex_username(client: TautulliClient,
+                                     plex_username: Optional[str]
+                                     ) -> Optional[dict]:
+    """The Tautulli user row for a Linked user's Plex username (letter case
+    ignored), or None. Tautulli's `user_id` is the Plex account id."""
+    if not (plex_username or "").strip():
+        return None
+    for u in await client.get_users():
+        if _same(u.get("username"), plex_username):
+            return u
+    return None
+
+
+async def find_user_for_share(client: TautulliClient, email: Optional[str],
+                              username: Optional[str]) -> Optional[dict]:
+    """The Tautulli user row for a Share: matched by email first, then by
+    username (letter case ignored), or None."""
+    users = await client.get_users()
+    for u in users:
+        if _same(u.get("email"), email):
+            return u
+    for u in users:
+        if _same(u.get("username"), username):
+            return u
+    return None

@@ -22,6 +22,7 @@ VALUES = {
     "radarr_api_key": "STORED-radarr-key",
     "sonarr_api_key": "STORED-sonarr-key",
     "sabnzbd_api_key": "STORED-sab-key",
+    "tautulli_api_key": "STORED-tautulli-key",
     "webhook_secret": "STORED-webhook-secret",
 }
 
@@ -39,6 +40,7 @@ async def client(tmp_path, monkeypatch):
     st.radarr_url = "http://192.0.2.10:7878"
     st.sonarr_url = "http://192.0.2.10:8989"
     st.sabnzbd_url = "http://192.0.2.10:8080"
+    st.tautulli_url = "http://192.0.2.10:8181"
     for k, v in VALUES.items():
         setattr(st, k, v)
     store.save()
@@ -88,6 +90,8 @@ async def test_save_response_page_renders_no_stored_secret(client):
     ("/admin/autofix", {"daily_autofix_limit": "5"}, "sonarr_api_key"),
     ("/admin/sabnzbd", {"sabnzbd_url": "http://192.0.2.10:8080"},
      "sabnzbd_api_key"),
+    ("/admin/tautulli", {"tautulli_url": "http://192.0.2.10:8181",
+                         "inactive_share_days": "60"}, "tautulli_api_key"),
     ("/admin/webhook", {}, "webhook_secret"),
 ])
 async def test_blank_secret_post_keeps_stored_value(client, path, extra, field):
@@ -134,6 +138,8 @@ async def test_blank_field_tests_use_stored_secrets(client, monkeypatch):
         monkeypatch.setattr(webui, name, _Ping)
     import sabnzbd
     monkeypatch.setattr(sabnzbd, "SabnzbdClient", _Ping)
+    import tautulli
+    monkeypatch.setattr(tautulli, "TautulliClient", _Ping)
 
     async def go(which, fields):
         r = await _post(client, f"/admin/test/{which}", fields)
@@ -147,9 +153,12 @@ async def test_blank_field_tests_use_stored_secrets(client, monkeypatch):
                                  "sonarr_api_key": ""}))["ok"]
     assert (await go("sabnzbd", {"sabnzbd_url": "http://192.0.2.10:8080",
                                  "sabnzbd_api_key": ""}))["ok"]
+    assert (await go("tautulli", {"tautulli_url": "http://192.0.2.10:8181",
+                                  "tautulli_api_key": ""}))["ok"]
     keys = [k for _, k in _Ping.seen]
     assert keys == [VALUES["seerr_api_key"], VALUES["radarr_api_key"],
-                    VALUES["sonarr_api_key"], VALUES["sabnzbd_api_key"]]
+                    VALUES["sonarr_api_key"], VALUES["sabnzbd_api_key"],
+                    VALUES["tautulli_api_key"]]
 
 
 async def test_blank_field_telegram_test_uses_stored_token(client, monkeypatch):
@@ -205,6 +214,8 @@ async def test_whitespace_only_key_in_autofix_test_uses_stored_key(
     ("/admin/autofix", {"daily_autofix_limit": "5"}, "sonarr_api_key"),
     ("/admin/sabnzbd", {"sabnzbd_url": "http://192.0.2.10:8080"},
      "sabnzbd_api_key"),
+    ("/admin/tautulli", {"tautulli_url": "http://192.0.2.10:8181",
+                         "inactive_share_days": "60"}, "tautulli_api_key"),
 ])
 async def test_ticked_remove_box_clears_optional_key_even_if_typed(
         client, path, extra, field):
@@ -217,7 +228,8 @@ async def test_ticked_remove_box_clears_optional_key_even_if_typed(
 async def test_remove_box_shown_only_for_optional_keys_with_a_stored_value(
         client):
     html = await (await client.get("/admin", cookies=_cookies())).text()
-    for field in ("radarr_api_key", "sonarr_api_key", "sabnzbd_api_key"):
+    for field in ("radarr_api_key", "sonarr_api_key", "sabnzbd_api_key",
+                  "tautulli_api_key"):
         assert f'name="clear_{field}"' in html
     for field in ("telegram_bot_token", "seerr_api_key", "webhook_secret"):
         assert f"clear_{field}" not in html
@@ -241,11 +253,14 @@ def _patch_clients(monkeypatch):
         monkeypatch.setattr(webui, name, _Ping)
     import sabnzbd
     monkeypatch.setattr(sabnzbd, "SabnzbdClient", _Ping)
+    import tautulli
+    monkeypatch.setattr(tautulli, "TautulliClient", _Ping)
 
 
 @pytest.mark.parametrize("which,urlfield,keyfield", [
     ("seerr", "seerr_url", "seerr_api_key"),
     ("sabnzbd", "sabnzbd_url", "sabnzbd_api_key"),
+    ("tautulli", "tautulli_url", "tautulli_api_key"),
     ("autofix", "radarr_url", "radarr_api_key"),
     ("autofix", "sonarr_url", "sonarr_api_key"),
 ])
@@ -292,3 +307,53 @@ async def test_autofix_test_refuses_changed_radarr_but_pings_unchanged_sonarr(
     assert "Radarr" in body["detail"]
     assert _Ping.seen == [("http://192.0.2.10:8989",
                            VALUES["sonarr_api_key"])]
+
+
+# Tautulli tab: inactive days, test failure, and the status of "not linked"
+
+async def test_tautulli_save_stores_url_and_inactive_days(client):
+    r = await _post(client, "/admin/tautulli",
+                    {"tautulli_url": "http://192.0.2.10:8181",
+                     "tautulli_api_key": "", "inactive_share_days": "90"})
+    assert r.status == 200
+    assert client.store.settings.inactive_share_days == 90
+    assert client.store.settings.tautulli_url == "http://192.0.2.10:8181"
+
+
+@pytest.mark.parametrize("bad", ["", "0", "-3", "abc"])
+async def test_tautulli_save_refuses_bad_inactive_days(client, bad):
+    r = await _post(client, "/admin/tautulli",
+                    {"tautulli_url": "http://192.0.2.10:8181",
+                     "inactive_share_days": bad})
+    assert r.status == 400
+    assert client.store.settings.inactive_share_days == 60
+
+
+async def test_tautulli_test_reports_version_and_error(client, monkeypatch):
+    import tautulli
+    from http_util import PermanentAPIError
+
+    class _T:
+        fail = False
+
+        def __init__(self, *a, **k):
+            pass
+
+        async def ping(self):
+            if _T.fail:
+                raise PermanentAPIError("Invalid apikey", service="Tautulli")
+            return "v2.14.5"
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(tautulli, "TautulliClient", _T)
+    fields = {"tautulli_url": "http://192.0.2.10:8181",
+              "tautulli_api_key": "typed"}
+    body = json.loads(await (await _post(
+        client, "/admin/test/tautulli", fields)).text())
+    assert body["ok"] and "v2.14.5" in body["detail"]
+    _T.fail = True
+    body = json.loads(await (await _post(
+        client, "/admin/test/tautulli", fields)).text())
+    assert not body["ok"] and "Invalid apikey" in body["detail"]

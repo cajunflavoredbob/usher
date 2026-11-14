@@ -388,6 +388,7 @@ code { background: var(--code-bg); padding: 2px 6px; border-radius: 3px; font-si
 #tab-seerr:checked    ~ .tab-labels label[for="tab-seerr"],
 #tab-autofix:checked  ~ .tab-labels label[for="tab-autofix"],
 #tab-sabnzbd:checked  ~ .tab-labels label[for="tab-sabnzbd"],
+#tab-tautulli:checked ~ .tab-labels label[for="tab-tautulli"],
 #tab-webhook:checked  ~ .tab-labels label[for="tab-webhook"],
 #tab-account:checked  ~ .tab-labels label[for="tab-account"] {
   background: var(--surface); color: var(--fg); border-color: var(--border);
@@ -398,6 +399,7 @@ code { background: var(--code-bg); padding: 2px 6px; border-radius: 3px; font-si
 #tab-seerr:checked    ~ .tab-contents .tab-c-seerr,
 #tab-autofix:checked  ~ .tab-contents .tab-c-autofix,
 #tab-sabnzbd:checked  ~ .tab-contents .tab-c-sabnzbd,
+#tab-tautulli:checked ~ .tab-contents .tab-c-tautulli,
 #tab-webhook:checked  ~ .tab-contents .tab-c-webhook,
 #tab-account:checked  ~ .tab-contents .tab-c-account { display: block; }
 /* The first card in a pane attaches to the tab strip: squared top corners
@@ -624,7 +626,8 @@ def _flash(message: str = "", error: str = "") -> str:
     return out
 
 
-TAB_KEYS = ("telegram", "seerr", "autofix", "sabnzbd", "webhook", "account")
+TAB_KEYS = ("telegram", "seerr", "autofix", "sabnzbd", "tautulli", "webhook",
+            "account")
 
 
 # Set by bot/app.py when Telegram rejected the bot token at startup: the
@@ -814,6 +817,27 @@ def _settings_page(
 </form>
 """
 
+    tautulli_form = f"""
+<form id="tautulli-form" method="POST" action="/admin/tautulli">
+  {csrf}
+  <h2>Tautulli</h2>
+  <p class="intro">Optional. Lets Usher show watch stats and playback details. Every Tautulli feature stays hidden until it is linked.</p>
+  <label>Tautulli URL <span class="note">optional</span></label>
+  <input type="text" name="tautulli_url" value="{_esc(s.tautulli_url)}" placeholder="http://192.0.2.10:8181">
+  <label>Tautulli API Key</label>
+  {_secret_field("tautulli_api_key", s.tautulli_api_key, clearable=True)}
+  <div class="note">In Tautulli: Settings → Web Interface → API Key.</div>
+  <label>Inactive Share after (days)</label>
+  <input type="text" name="inactive_share_days" value="{_esc(s.inactive_share_days)}" inputmode="numeric" pattern="[0-9]+" required>
+  <div class="note">A Share whose person has not watched for this many days, or never, is listed as inactive.</div>
+  <div class="btn-row divided">
+    <button type="button" class="test-btn" data-test="tautulli" data-form="tautulli-form">Test</button>
+    <button type="submit">Save</button>{marker("tautulli")}
+    <span class="test-detail" data-detail="tautulli"></span>
+  </div>
+</form>
+"""
+
     webhook_form = f"""
 <form id="webhook-form" method="POST" action="/admin/webhook">
   {csrf}
@@ -888,6 +912,7 @@ def _settings_page(
   <input type="radio" name="tab" id="tab-seerr"{chk('seerr')}>
   <input type="radio" name="tab" id="tab-autofix"{chk('autofix')}>
   <input type="radio" name="tab" id="tab-sabnzbd"{chk('sabnzbd')}>
+  <input type="radio" name="tab" id="tab-tautulli"{chk('tautulli')}>
   <input type="radio" name="tab" id="tab-webhook"{chk('webhook')}>
   <input type="radio" name="tab" id="tab-account"{chk('account')}>
   <div class="tab-labels">
@@ -895,6 +920,7 @@ def _settings_page(
     <label for="tab-seerr">Seerr</label>
     <label for="tab-autofix">Auto-fix</label>
     <label for="tab-sabnzbd">SABnzbd</label>
+    <label for="tab-tautulli">Tautulli</label>
     <label for="tab-webhook">Webhook</label>
     <label for="tab-account">Account</label>
   </div>
@@ -903,6 +929,7 @@ def _settings_page(
     <div class="tab-content tab-c-seerr">{seerr_form}</div>
     <div class="tab-content tab-c-autofix">{autofix_form}</div>
     <div class="tab-content tab-c-sabnzbd">{sabnzbd_form}</div>
+    <div class="tab-content tab-c-tautulli">{tautulli_form}</div>
     <div class="tab-content tab-c-webhook">{webhook_form}</div>
     <div class="tab-content tab-c-account">{account_section}</div>
   </div>
@@ -1418,6 +1445,40 @@ async def autofix_post(request: web.Request) -> web.Response:
     return await _save_and_render(request, active_tab="autofix")
 
 
+async def tautulli_post(request: web.Request) -> web.Response:
+    store: SettingsStore = request.app["settings_store"]
+    form = await request.post()
+    csrf_resp = _csrf_check_or_403(request, form)
+    if csrf_resp is not None:
+        return csrf_resp
+    s = store.settings
+
+    def _fail(msg: str) -> web.Response:
+        return web.Response(
+            text=_settings_page(s, error=msg, active_tab="tautulli",
+                                webhook_url=_webhook_url_from_request(request),
+                                csrf_token=csrf_for_request(request)),
+            content_type="text/html", status=400,
+        )
+
+    value = (form.get("tautulli_url") or "").strip()
+    url_err = validate_public_url(value) if value else None
+    if url_err:
+        return _fail(f"Tautulli URL: {url_err}")
+    days_raw = (form.get("inactive_share_days") or "").strip()
+    try:
+        days = int(days_raw)
+        if days < 1:
+            raise ValueError
+    except ValueError:
+        return _fail("Inactive Share days must be a positive integer.")
+    s.tautulli_url = value
+    s.tautulli_api_key = _form_secret(
+        form, "tautulli_api_key", s.tautulli_api_key, clearable=True)
+    s.inactive_share_days = days
+    return await _save_and_render(request, active_tab="tautulli")
+
+
 async def sabnzbd_post(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
     form = await request.post()
@@ -1912,6 +1973,32 @@ async def test_autofix(request: web.Request) -> web.Response:
     return _test_json(ok_all, " · ".join(results))
 
 
+async def test_tautulli(request: web.Request) -> web.Response:
+    """Ping Tautulli with the typed (unsaved) URL + API key."""
+    form = await request.post()
+    guard = await _test_csrf_guard(request, form)
+    if guard is not None:
+        return guard
+    url = (form.get("tautulli_url") or "").strip()
+    saved = request.app["settings_store"].settings
+    if _reuses_stored_key_for_new_url(form, "tautulli_api_key",
+                                      saved.tautulli_api_key, url,
+                                      saved.tautulli_url):
+        return _test_json(False, _key_retype_message("Tautulli"))
+    key = _form_secret(form, "tautulli_api_key", saved.tautulli_api_key)
+    if not url or not key:
+        return _test_json(False, "Tautulli URL and API key are required.")
+    from tautulli import TautulliClient
+    client = TautulliClient(url, key)
+    try:
+        version = await client.ping()
+        return _test_json(True, f"Connected (Tautulli {version})")
+    except Exception as exc:
+        return _test_json(False, user_friendly_message(exc))
+    finally:
+        await client.close()
+
+
 async def test_sabnzbd(request: web.Request) -> web.Response:
     """Ping SABnzbd with the typed (unsaved) URL + API key."""
     form = await request.post()
@@ -2112,11 +2199,13 @@ def attach_webui(
     app.router.add_post("/admin/seerr", seerr_post)
     app.router.add_post("/admin/autofix", autofix_post)
     app.router.add_post("/admin/sabnzbd", sabnzbd_post)
+    app.router.add_post("/admin/tautulli", tautulli_post)
     app.router.add_post("/admin/webhook", webhook_post)
     app.router.add_post("/admin/test/telegram", test_telegram)
     app.router.add_post("/admin/test/seerr", test_seerr)
     app.router.add_post("/admin/test/autofix", test_autofix)
     app.router.add_post("/admin/test/sabnzbd", test_sabnzbd)
+    app.router.add_post("/admin/test/tautulli", test_tautulli)
     app.router.add_post("/admin/test/webhook", test_webhook)
     app.router.add_get("/admin/seerr/newplex-warning", newplex_warning_check)
     app.router.add_post("/admin/seerr/newplex-warning/dismiss", newplex_warning_dismiss)

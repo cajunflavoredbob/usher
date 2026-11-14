@@ -29,6 +29,7 @@ from radarr import RadarrClient
 from seerr import SeerrClient, REQUIRED_WEBHOOK_TYPES
 from settings import SettingsStore, load_or_create_session_secret, public_base_url
 from sabnzbd import SabnzbdClient
+from tautulli import TautulliClient
 from sonarr import SonarrClient
 from store import TokenCrypto, UserStore
 from webhook import attach_webhook, start_http_server
@@ -200,7 +201,7 @@ def _build_clients_from_settings(app: Application) -> None:
     # the time it ran (race) and close those instead. Capture-then-close is
     # the only safe order.
     old_clients: list[tuple[str, object]] = []
-    for key in ("seerr", "radarr", "sonarr", "sabnzbd"):
+    for key in ("seerr", "radarr", "sonarr", "sabnzbd", "tautulli"):
         c = app.bot_data.get(key)
         if c is not None and hasattr(c, "close"):
             old_clients.append((key, c))
@@ -212,6 +213,7 @@ def _build_clients_from_settings(app: Application) -> None:
     radarr = RadarrClient(s.radarr_url, s.radarr_api_key) if (s.radarr_url and s.radarr_api_key) else None
     sonarr = SonarrClient(s.sonarr_url, s.sonarr_api_key) if (s.sonarr_url and s.sonarr_api_key) else None
     sabnzbd = SabnzbdClient(s.sabnzbd_url, s.sabnzbd_api_key) if (s.sabnzbd_url and s.sabnzbd_api_key) else None
+    tautulli = TautulliClient(s.tautulli_url, s.tautulli_api_key) if (s.tautulli_url and s.tautulli_api_key) else None
 
     allowlist = set(s.allowed_autofix_telegram_ids)
     if not allowlist:
@@ -221,6 +223,7 @@ def _build_clients_from_settings(app: Application) -> None:
     app.bot_data["radarr"] = radarr
     app.bot_data["sonarr"] = sonarr
     app.bot_data["sabnzbd"] = sabnzbd
+    app.bot_data["tautulli"] = tautulli
     app.bot_data["allowlist"] = allowlist
     app.bot_data["autofix_allow_all"] = s.autofix_allow_all
 
@@ -267,11 +270,12 @@ def _build_clients_from_settings(app: Application) -> None:
             pass
 
     logger.info(
-        "Clients (re)built: Seerr=%s Radarr=%s Sonarr=%s SABnzbd=%s allowlist=%d",
+        "Clients (re)built: Seerr=%s Radarr=%s Sonarr=%s SABnzbd=%s Tautulli=%s allowlist=%d",
         "yes" if seerr else "no",
         "yes" if radarr else "no",
         "yes" if sonarr else "no",
         "yes" if sabnzbd else "no",
+        "yes" if tautulli else "no",
         len(allowlist),
     )
 
@@ -281,7 +285,8 @@ async def _check_connections(app: Application) -> dict[str, str]:
     access. Returns dict of service -> status string."""
     out: dict[str, str] = {"Usher": f"✅ {USHER_VERSION}"}
     for key, label in (("seerr", "Seerr"), ("radarr", "Radarr"),
-                       ("sonarr", "Sonarr"), ("sabnzbd", "SABnzbd")):
+                       ("sonarr", "Sonarr"), ("sabnzbd", "SABnzbd"),
+                       ("tautulli", "Tautulli")):
         client = app.bot_data.get(key)
         if client is None:
             out[label] = "not configured"
@@ -769,7 +774,7 @@ async def _post_shutdown(app: Application) -> None:
     # Close current API clients explicitly so httpx connection pools don't
     # leak. PlexClient is built once at startup and stashed under "plex";
     # the arr clients are managed by _build_clients_from_settings.
-    for key in ("seerr", "radarr", "sonarr", "sabnzbd", "plex"):
+    for key in ("seerr", "radarr", "sonarr", "sabnzbd", "tautulli", "plex"):
         client = app.bot_data.get(key)
         if client is not None and hasattr(client, "close"):
             try:
