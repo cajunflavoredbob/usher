@@ -74,6 +74,7 @@ DV_INFO: Final = "dvi"                # dvi:<version>:<media_type>:<tmdb_id>
 DV_GENRE_TYPE: Final = "dvg"         # dvg:<version>:<media_type> genre picker
 DV_GENRE: Final = "dvr"              # dvr:<version>:<media_type>:<genre_id>
 DV_SIMILAR: Final = "dvs"            # dvs:<media_type>:<tmdb_id> more like a card's title
+PLEX_WATCHLIST_ADD: Final = "pwl"    # pwl:<media_type>:<tmdb_id> card's Plex watchlist
 MYSTATS: Final = "mys"                # "📊 My stats" in the Trending list
 
 # Availability subscriptions

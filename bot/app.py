@@ -70,6 +70,7 @@ from bot.callback_prefixes import (
     DV_INFO,
     DV_PAGE,
     DV_SIMILAR,
+    PLEX_WATCHLIST_ADD,
     SUBSCRIPTION_ADD,
     FOLLOW_ADD,
     RQ_REMAINING,
@@ -122,6 +123,7 @@ from bot.hub import end_markup, hub_open_callback
 from bot.link_flow import (_link_conversation, account_unlink, cmd_account,
                            cmd_link_didnt_work, cmd_unlink)
 from bot.mystats_cmd import cmd_mystats, mystats_button
+from bot.watchlist import watchlist_add
 from bot.discover_cmd import (cmd_trending, dv_category, dv_genre,
                               dv_genre_type, dv_info, dv_page, dv_similar,
                               trending_hub)
@@ -596,6 +598,8 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CallbackQueryHandler(dv_genre, pattern=fr"^{DV_GENRE}:"))
     app.add_handler(CallbackQueryHandler(dv_info, pattern=fr"^{DV_INFO}:"))
     app.add_handler(CallbackQueryHandler(dv_similar, pattern=fr"^{DV_SIMILAR}:"))
+    app.add_handler(CallbackQueryHandler(watchlist_add,
+                                         pattern=fr"^{PLEX_WATCHLIST_ADD}:"))
     # Subscription callbacks (detail-card 🔔 + /subscriptions ❌).
     app.add_handler(CallbackQueryHandler(subscription_add,
                                          pattern=fr"^{SUBSCRIPTION_ADD}:"))

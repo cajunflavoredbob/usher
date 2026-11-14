@@ -24,6 +24,7 @@ from bot.callback_prefixes import DV_SIMILAR, RQ_INFO_DISMISS, SUBSCRIPTION_ADD
 from bot.follows import follow_button, follow_state
 from bot.remaining import remaining_button, requestable_seasons
 from bot.shared import record_card_owner
+from bot.watchlist import watchlist_allowed, watchlist_button
 from const import DETAIL_OVERVIEW_MAX_CHARS
 
 logger = logging.getLogger("usher")
@@ -64,13 +65,14 @@ def build_card_caption(r: MediaResult) -> str:
 
 def card_keyboard(r: MediaResult,
                   following: "bool | None" = None,
-                  remaining: bool = False) -> InlineKeyboardMarkup:
+                  remaining: bool = False,
+                  watchlist: bool = False) -> InlineKeyboardMarkup:
     """Dismiss always; 🔔 Notify-me only when availability could still
     change (an already-available or blocklisted title would never fire);
     Follow or Unfollow for a show when `following` is given (None = the
     viewer may not follow, so no button); Request remaining seasons for a
-    show when `remaining` says a season is left to request; More like this
-    always."""
+    show when `remaining` says a season is left to request; Plex watchlist
+    when `watchlist` says the viewer has a Link; More like this always."""
     rows = []
     if (r.status or 0) not in (MEDIA_STATUS_AVAILABLE, MEDIA_STATUS_BLOCKLISTED):
         rows.append([InlineKeyboardButton(
@@ -80,6 +82,8 @@ def card_keyboard(r: MediaResult,
         rows.append([follow_button(r.tmdb_id, following)])
     if r.media_type == "tv" and remaining:
         rows.append([remaining_button(r.tmdb_id)])
+    if watchlist:
+        rows.append([watchlist_button(r.media_type, r.tmdb_id)])
     rows.append([InlineKeyboardButton(
         "🔁 More like this",
         callback_data=f"{DV_SIMILAR}:{r.media_type}:{r.tmdb_id}")])
@@ -102,7 +106,9 @@ async def send_detail_card(ctx, chat_id: int, r: MediaResult,
         if following is not None:
             left = await requestable_seasons(ctx.bot_data["seerr"], r.tmdb_id)
             remaining = bool(left)
-    kb = card_keyboard(r, following, remaining)
+    watchlist = await watchlist_allowed(
+        ctx.bot_data, owner_id if owner_id is not None else chat_id)
+    kb = card_keyboard(r, following, remaining, watchlist)
     if r.poster_path:
         try:
             sent = await ctx.bot.send_photo(

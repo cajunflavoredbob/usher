@@ -35,6 +35,7 @@ from bot.callback_prefixes import (
     RQ_ADMIN_RETRY,
     RQ_INFO_DISMISS,
     DV_SIMILAR,
+    PLEX_WATCHLIST_ADD,
     SUBSCRIPTION_ADD,
     FOLLOW_ADD,
     RQ_REMAINING,
@@ -616,12 +617,14 @@ async def unmatched_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
 async def prompt_plex_relink(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *,
                              resume_kind: Optional[str] = None,
                              resume_payload: Optional[dict] = None,
-                             back: Optional[InlineKeyboardButton] = None) -> None:
+                             back: Optional[InlineKeyboardButton] = None,
+                             reply: bool = False) -> None:
     """Recovery prompt for a revoked Plex token (PlexTokenInvalidError): one
     tap drops the user into the sign-in flow
     (link_flow.cmd_relink). Works from both callback and message contexts.
     `back` (a flow started from a Hub) goes on its own row below the relink
-    button.
+    button. `reply` sends it as a new message under a tapped one instead of
+    editing it (a detail card may be a photo, and should stay as it is).
 
     resume_kind/resume_payload (optional) stash what the user was doing so
     _finalize_link can pick it back up after the re-link succeeds. NEVER put
@@ -645,7 +648,9 @@ async def prompt_plex_relink(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *,
     )
     if resume_kind is not None:
         text += "\n\nI'll pick up where you left off once you're signed back in."
-    if update.callback_query:
+    if update.callback_query and reply:
+        sent = await update.callback_query.message.reply_text(text, reply_markup=kb)
+    elif update.callback_query:
         sent = await update.callback_query.edit_message_text(text, reply_markup=kb)
     else:
         sent = await update.effective_message.reply_text(text, reply_markup=kb)
@@ -688,8 +693,8 @@ async def run_relink_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> b
 
 
 _GATE_EXEMPT_PREFIXES: Final = frozenset({
-    RQ_INFO_DISMISS, DV_SIMILAR, SUBSCRIPTION_ADD, FOLLOW_ADD, FOLLOW_DEL,
-    DIGEST_INFO,
+    RQ_INFO_DISMISS, DV_SIMILAR, PLEX_WATCHLIST_ADD, SUBSCRIPTION_ADD,
+    FOLLOW_ADD, FOLLOW_DEL, DIGEST_INFO,
     RQ_REMAINING, RQ_ADMIN_APPROVE, RQ_ADMIN_DECLINE, RQ_ADMIN_RETRY,
     ACCESS_APPROVE, ACCESS_IGNORE, ASK_ADMIN,
 })
@@ -761,6 +766,8 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     #    on once (the ask's status is re-read before anything happens).
     #  - More like this sits on detail cards, which are not in the history. It
     #    is read-only: it only sends a new list.
+    #  - Plex watchlist sits on detail cards too. It only adds to the tapper's
+    #    own watchlist, with their own token.
     #  - Ask the Admin sits on a Reporter's repeat DM, which can be hours
     #    old when tapped and cannot be brought back. The handler checks the
     #    tapped message carries that button, and each Ticket is asked once.

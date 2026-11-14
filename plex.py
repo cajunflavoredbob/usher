@@ -13,11 +13,40 @@ import httpx
 
 from _version import __version__ as USHER_VERSION
 from fsutil import atomic_write_text
-from http_util import execute, json_or_raise
+from http_util import PermanentAPIError, execute, json_or_raise
 
 logger = logging.getLogger("usher." + __name__)
 
 _SERVICE = "Plex"
+
+# Plex Discover (the watchlist) and its metadata provider. The lookup below is
+# the one the TMDb to Discover spike checked against live Plex.
+PLEX_DISCOVER_BASE = "https://discover.provider.plex.tv"
+PLEX_METADATA_BASE = "https://metadata.provider.plex.tv"
+# Most Discover candidates one lookup checks for the tmdb guid. The search is
+# fuzzy (a live "Battlestar Galactica" search returned about 30 loosely
+# related shows), so candidates whose title matches exactly are tried first,
+# each group closest year first.
+WATCHLIST_LOOKUP_MAX_CANDIDATES = 10
+_SEARCH_TYPES = {"movie": "movies", "tv": "tv"}
+_PLEX_TYPES = {"movie": "movie", "tv": "show"}
+
+
+class PlexTokenRejectedError(PermanentAPIError):
+    """Plex refused the user's stored token (401 or 403): revoked or expired.
+    Retrying can't help; the user must sign in again."""
+    def __init__(self):
+        super().__init__("Plex no longer accepts your sign-in.",
+                         status_code=401, service=_SERVICE)
+
+
+def _year_gap(md: dict, year: str) -> int:
+    """How far a candidate's year is from the wanted one; unknown sorts last."""
+    try:
+        return abs(int(md.get("year")) - int(year))
+    except (TypeError, ValueError):
+        return 10_000
+
 
 PRODUCT_NAME = "Usher"
 DEVICE_NAME = "Telegram Bot"
@@ -240,6 +269,80 @@ class PlexClient:
             uuid=d.get("uuid", ""),
             username=d.get("username", "") or d.get("title", ""),
         )
+
+    # Watchlist (a Linked user's own, with their own token)
+
+    async def _with_user_token(self, method: str, url: str, token: str,
+                               params: dict):
+        """One call with the user's own token; a 401 or 403 raises
+        PlexTokenRejectedError."""
+        try:
+            return await execute(self._http, method, url, service=_SERVICE,
+                                 params=params, headers={"X-Plex-Token": token})
+        except PermanentAPIError as exc:
+            if exc.status_code in (401, 403):
+                raise PlexTokenRejectedError() from exc
+            raise
+
+    async def _watchlist_get(self, token: str, url: str, params: dict) -> dict:
+        r = await self._with_user_token("GET", url, token, params)
+        return json_or_raise(r, service=_SERVICE, what="Discover lookup")
+
+    async def find_discover_key(self, token: str, media_type: str,
+                                tmdb_id: int, title: str,
+                                year: str) -> Optional[str]:
+        """The Plex Discover ratingKey of a TMDb title, or None when none of
+        the candidates checked (exact title first, then closest year,
+        at most WATCHLIST_LOOKUP_MAX_CANDIDATES) carries its tmdb://
+        guid (or the title is empty or the media type unsupported). A Discover title search picks
+        the candidates; the guid alone decides, so a remake sharing a title
+        never matches. Candidates with no guids are skipped, and a candidate
+        whose metadata fails is skipped too, except that a refused token
+        raises PlexTokenRejectedError."""
+        kind = _PLEX_TYPES.get(media_type)
+        if kind is None or not title:
+            return None
+        data = await self._watchlist_get(
+            token, f"{PLEX_DISCOVER_BASE}/library/search",
+            {"query": title, "limit": 30, "includeMetadata": 1,
+             "searchTypes": _SEARCH_TYPES[media_type],
+             "searchProviders": "discover"})
+        cands = []
+        for group in (data.get("MediaContainer") or {}).get("SearchResults") or []:
+            for res in (group or {}).get("SearchResult") or []:
+                md = (res or {}).get("Metadata")
+                if isinstance(md, dict) and md.get("type") == kind:
+                    cands.append(md)
+        wanted_title = title.casefold()
+        cands.sort(key=lambda md: (
+            str(md.get("title") or "").casefold() != wanted_title,
+            _year_gap(md, year)))
+        wanted = f"tmdb://{tmdb_id}"
+        for md in cands[:WATCHLIST_LOOKUP_MAX_CANDIDATES]:
+            key = md.get("ratingKey") or (md.get("guid") or "").rsplit("/", 1)[-1]
+            if not key:
+                continue
+            guids = md.get("Guid")
+            if not guids:
+                try:
+                    meta = await self._watchlist_get(
+                        token, f"{PLEX_METADATA_BASE}/library/metadata/{key}", {})
+                except PlexTokenRejectedError:
+                    raise
+                except Exception:
+                    logger.debug("Discover metadata fetch failed", exc_info=True)
+                    continue
+                guids = [g for it in (meta.get("MediaContainer") or {})
+                         .get("Metadata") or [] for g in (it or {}).get("Guid") or []]
+            if any((g or {}).get("id") == wanted for g in guids):
+                return str(key)
+        return None
+
+    async def add_to_watchlist(self, token: str, rating_key: str) -> None:
+        """Put a Discover item on the token owner's Plex watchlist."""
+        await self._with_user_token(
+            "PUT", f"{PLEX_DISCOVER_BASE}/actions/addToWatchlist", token,
+            {"ratingKey": rating_key})
 
     async def get_account(self, auth_token: str) -> PlexAccount:
         """The account's username and email, for an Access ask."""

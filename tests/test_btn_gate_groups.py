@@ -139,7 +139,8 @@ async def test_admin_dm_buttons_still_pass(prefix):
 
 @pytest.mark.parametrize("data", [cp.RQ_INFO_DISMISS, f"{cp.SUBSCRIPTION_ADD}:movie:550",
                                   f"{cp.FOLLOW_ADD}:550", f"{cp.FOLLOW_DEL}:550",
-                                  f"{cp.RQ_REMAINING}:550", f"{cp.DV_SIMILAR}:tv:550"])
+                                  f"{cp.RQ_REMAINING}:550", f"{cp.DV_SIMILAR}:tv:550",
+                                  f"{cp.PLEX_WATCHLIST_ADD}:movie:550"])
 async def test_detail_card_owner_admitted_and_other_refused(data):
     from bot.shared import record_card_owner
     app = _app()
