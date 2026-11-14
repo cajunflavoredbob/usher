@@ -102,8 +102,31 @@ def safe_compare(a: str, b: str) -> bool:
     raises TypeError on non-ASCII str, and aiohttp hands headers and cookies
     over with undecodable bytes as surrogates, so a crafted value would
     otherwise turn a rejection into a 500 with a logged traceback."""
-    return hmac.compare_digest(a.encode("utf-8", "surrogateescape"),
-                               b.encode("utf-8", "surrogateescape"))
+    return hmac.compare_digest(_utf8_bytes(a), _utf8_bytes(b))
+
+
+def _utf8_bytes(value: str) -> bytes:
+    """Bytes for a str that may hold surrogates: surrogateescape covers
+    undecodable input bytes, surrogatepass covers the lone surrogates a
+    declared charset such as utf-7 can produce."""
+    try:
+        return value.encode("utf-8", "surrogateescape")
+    except UnicodeEncodeError:
+        return value.encode("utf-8", "surrogatepass")
+
+
+def is_utf8_encodable(value: str) -> bool:
+    """False for a str holding a lone surrogate (it cannot be hashed)."""
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+# Longest username the login and setup forms accept (after strip), and the
+# longest one an audit line carries.
+MAX_USERNAME_CHARS = 128
 
 
 # --- CSRF tokens ---
@@ -244,7 +267,8 @@ _AUDIT_UNSAFE = re.compile(r"[\x00-\x1f\x7f]")
 def _audit_safe(value) -> str:
     """Neutralize control characters (newlines above all) in values that can
     be attacker-controlled, so one login attempt can't forge audit lines."""
-    return _AUDIT_UNSAFE.sub("?", str(value))
+    text = str(value).encode("utf-8", "replace").decode("utf-8")
+    return _AUDIT_UNSAFE.sub("?", text)
 
 
 def audit(event: str, *, user: str = "-", ip: str = "-", **extra) -> None:
@@ -252,7 +276,8 @@ def audit(event: str, *, user: str = "-", ip: str = "-", **extra) -> None:
     fields = (" ".join(f"{k}={_audit_safe(v)}" for k, v in extra.items())
               if extra else "")
     audit_logger.warning("event=%s user=%s ip=%s %s",
-                         event, _audit_safe(user), _audit_safe(ip), fields)
+                         event, _audit_safe(str(user)[:MAX_USERNAME_CHARS]),
+                         _audit_safe(ip), fields)
 
 
 # --- Secure-cookie + IP detection ---

@@ -402,7 +402,11 @@ def verify_password(plaintext: str, stored: str) -> bool:
         expected = bytes.fromhex(hash_hex)
     except ValueError:
         return False
-    candidate = pbkdf2_hmac("sha256", plaintext.encode(), salt, iters)
+    try:
+        data = plaintext.encode()
+    except UnicodeEncodeError:
+        return False
+    candidate = pbkdf2_hmac("sha256", data, salt, iters)
     return compare_digest(candidate, expected)
 
 

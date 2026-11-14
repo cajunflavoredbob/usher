@@ -43,6 +43,7 @@ from aiohttp import web
 
 from auth_util import (
     CSRF_FORM_FIELD,
+    MAX_USERNAME_CHARS,
     THROTTLE_IP_MAX_FAILURES,
     _SETUP_TOKEN_UNREADABLE,
     LoginThrottle,
@@ -53,6 +54,7 @@ from auth_util import (
     clear_setup_token,
     csrf_for_request,
     generate_csrf_token,
+    is_utf8_encodable,
     load_or_create_setup_token,
     request_is_secure,
     validate_csrf,
@@ -1210,7 +1212,11 @@ async def setup_post(request: web.Request) -> web.Response:
     errors: list[str] = []
     if not username:
         errors.append("Username required.")
-    if len(password) < ADMIN_PASSWORD_MIN_CHARS or password != confirm:
+    elif len(username) > MAX_USERNAME_CHARS or not is_utf8_encodable(username):
+        errors.append(f"Username must be {MAX_USERNAME_CHARS} characters or fewer.")
+    if not is_utf8_encodable(password):
+        errors.append("Password has characters that cannot be stored.")
+    elif len(password) < ADMIN_PASSWORD_MIN_CHARS or password != confirm:
         errors.append(f"Password must be at least {ADMIN_PASSWORD_MIN_CHARS} chars and match confirm.")
     if not bot_token:
         errors.append("Telegram bot token required.")
@@ -1322,6 +1328,12 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
         secret, request.cookies.get(DEVICE_COOKIE),
         admin.username, admin.password_version) if admin.is_set() else None)
 
+    # An over-long or unencodable username, or an unencodable password, is a
+    # failed login that never reaches the per-(ip, username) map or PBKDF2.
+    bad_input = (len(username) > MAX_USERNAME_CHARS
+                 or not is_utf8_encodable(username)
+                 or not is_utf8_encodable(password))
+
     throttle_key = None
     if device_id is not None:
         dev_locked = _device_throttle.is_locked(device_id)
@@ -1339,24 +1351,28 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
             return _locked_response(ip_locked)
 
         # Then the tighter per-(ip, username) lockout.
-        throttle_key = f"{ip}|{username.lower()}"
-        locked = _throttle.is_locked(throttle_key)
+        throttle_key = None if bad_input else f"{ip}|{username.lower()}"
+        locked = (_throttle.is_locked(throttle_key)
+                  if throttle_key is not None else None)
         if locked is not None:
             audit("login_throttled", user=username or "-", ip=ip,
                   seconds_left=int(locked))
             return _locked_response(locked)
 
-    username_ok = admin.is_set() and username == admin.username
+    username_ok = (not bad_input and admin.is_set()
+                   and username == admin.username)
     # Constant-work verification: run PBKDF2 even on a wrong username so
     # response timing can't enumerate the admin username. Off the event loop
     # (600k iterations) so it can't stall the webhook receiver / bot HTTP.
     stored = admin.password_hash if username_ok else _TIMING_EQUALIZER_HASH
-    password_ok = await asyncio.to_thread(verify_password, password, stored)
+    password_ok = (False if bad_input else
+                   await asyncio.to_thread(verify_password, password, stored))
     if not (username_ok and password_ok):
         if device_id is not None:
             _device_throttle.record_failure(device_id)
         else:
-            _throttle.record_failure(throttle_key)
+            if throttle_key is not None:
+                _throttle.record_failure(throttle_key)
             _ip_throttle.record_failure(ip)
         audit("login_fail", user=username or "-", ip=ip)
         body = _page("Login", _flash(error="Invalid credentials.") +
