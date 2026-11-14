@@ -97,6 +97,9 @@ class Settings:
     # When True, the per-user daily cap is not enforced. The numeric limit
     # above is retained for when this is turned back off.
     daily_autofix_unlimited: bool = False
+    # When True, a Reporter's Auto-fix that comes back as a repeat makes the
+    # bot run Mark Failed once by itself. Off by default (it blocklists).
+    autofix_blocklist_on_repeat: bool = False
     webhook_secret: str = ""
     # Admin dismissed the "Seerr's New Plex Sign-In is enabled" banner.
     # Cleared automatically whenever a check observes the setting OFF, so
@@ -155,6 +158,7 @@ class Settings:
             autofix_allow_all=bool(data.get("autofix_allow_all")),
             daily_autofix_limit=daily_limit,
             daily_autofix_unlimited=bool(data.get("daily_autofix_unlimited")),
+            autofix_blocklist_on_repeat=bool(data.get("autofix_blocklist_on_repeat")),
             webhook_secret=data.get("webhook_secret", "") or "",
             seerr_new_plex_login_ack=bool(data.get("seerr_new_plex_login_ack")),
             admin=AdminAccount(

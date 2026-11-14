@@ -135,6 +135,9 @@ class PendingAutofix:
     before_fingerprint: ReleaseFingerprint = field(
         default_factory=ReleaseFingerprint)  # the release the Fix deleted
                                              # (empty = unknown)
+    auto_blocklisted: int = 0           # 1 = the bot's own Mark Failed on a
+                                        # repeat; its own repeat never
+                                        # triggers another
 
     async def is_complete(self, radarr, sonarr) -> tuple[bool, str]:
         """Returns (done, extra_suffix). Polymorphic dispatch over media_type
@@ -377,6 +380,7 @@ class UserStore:
             # Schema 4: the release the Fix deleted, as ReleaseFingerprint
             # JSON ('' = unknown, which is what every older row reads as).
             ("before_fingerprint",   "ALTER TABLE pending_autofixes ADD COLUMN before_fingerprint TEXT NOT NULL DEFAULT ''"),
+            ("auto_blocklisted",     "ALTER TABLE pending_autofixes ADD COLUMN auto_blocklisted INTEGER NOT NULL DEFAULT 0"),
         ],
     }
 
@@ -878,9 +882,12 @@ class UserStore:
         action_name: str = "",
         before_fingerprint: Optional[ReleaseFingerprint] = None,
         event_id: Optional[int] = None,
+        auto_blocklisted: bool = False,
     ) -> int:
         """event_id: the autofix_events row this Fix logged; it is tied to
-        the new pending row so the poller can record the outcome on it."""
+        the new pending row so the poller can record the outcome on it.
+        auto_blocklisted: the bot's own Mark Failed after a repeat (the
+        blocklist-on-repeat switch); a row so marked never triggers it."""
         fingerprint_json = before_fingerprint.to_json() if before_fingerprint else ""
 
         def _do() -> int:
@@ -891,14 +898,16 @@ class UserStore:
                         chat_id, user_id, media_type,
                         radarr_movie_id, sonarr_series_id, sonarr_episode_id, sonarr_season,
                         expected_episode_ids, label, issue_id, issue_url,
-                        message_id, action_name, before_fingerprint, timeout_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', ?))
+                        message_id, action_name, before_fingerprint, auto_blocklisted,
+                        timeout_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', ?))
                     """,
                     (
                         chat_id, user_id, media_type,
                         radarr_movie_id, sonarr_series_id, sonarr_episode_id, sonarr_season,
                         json.dumps(expected_episode_ids or []), label, ticket_id, ticket_url,
-                        message_id, action_name, fingerprint_json, f"+{timeout_hours} hours",
+                        message_id, action_name, fingerprint_json,
+                        1 if auto_blocklisted else 0, f"+{timeout_hours} hours",
                     ),
                 )
                 if event_id is not None:
@@ -914,7 +923,8 @@ class UserStore:
                            sonarr_series_id, sonarr_episode_id, sonarr_season,
                            expected_episode_ids, label, issue_id, issue_url,
                            started_at, timeout_at, message_id, last_progress,
-                           bumped, reply_markup, action_name, before_fingerprint"""
+                           bumped, reply_markup, action_name, before_fingerprint,
+                           auto_blocklisted"""
 
     @staticmethod
     def _pending_from_row(r) -> PendingAutofix:
@@ -933,6 +943,7 @@ class UserStore:
             reply_markup=r[17] or "",
             action_name=r[18] or "",
             before_fingerprint=ReleaseFingerprint.from_json(r[19]),
+            auto_blocklisted=r[20] or 0,
         )
 
     async def list_pending_autofixes(self) -> list[PendingAutofix]:

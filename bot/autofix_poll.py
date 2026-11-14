@@ -23,11 +23,15 @@ from radarr import RadarrClient
 from sonarr import SonarrClient
 from store import UserStore
 
-from bot.ask_admin import ask_admin_button, mark_failed_button
+from bot.ask_admin import (ask_admin_button, mark_failed_button,
+                           release_description)
 from bot.callback_prefixes import RESOLVE
 from bot.progress_card import (maybe_bump_priority, refresh_arr_downloads,
                                resolve_progress_line)
-from bot.shared import record_btn
+from bot.shared import (end_action, media_action_key, record_btn,
+                        try_begin_action)
+from bot.tickets import (_enqueue_fix_completion, _resolve_fix_context,
+                         _run_arr_action)
 from const import AUTOFIX_TIMEOUT_HOURS
 
 logger = logging.getLogger("usher")
@@ -101,18 +105,25 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                         # The Admin's own Fixes are never refunded (they
                         # are not counted against a limit). The DM only
                         # claims a refund that was actually recorded.
+                        # The bot's own Mark Failed (blocklist-on-repeat)
+                        # is not the Reporter's use either.
                         refunded = await _record_repeat(
                             store, fix,
-                            refund=fix.user_id != ctx.bot_data.get("admin_id"))
+                            refund=(fix.user_id != ctx.bot_data.get("admin_id")
+                                    and not fix.auto_blocklisted))
                         await _paint_progress(
                             ctx, store, fix,
                             final=f"🔁 {_repeat_sentence(repeat)}")
                     else:
                         await _paint_progress(ctx, store, fix,
                                               final="🎉 Replacement downloaded.")
+                    retrying = (repeat is not None
+                                and await _blocklist_on_repeat(
+                                    ctx, store, fix, repeat))
                     await _notify_complete(
                         ctx, fix, extra, repeat=repeat,
-                        refunded=refunded and _limit_enforced(ctx))
+                        refunded=refunded and _limit_enforced(ctx),
+                        retrying=retrying)
                 else:
                     await _paint_progress(ctx, store, fix)
             except NotFoundAPIError:
@@ -162,6 +173,85 @@ async def _record_repeat(store: UserStore, fix, *, refund: bool) -> bool:
         logger.exception("couldn't record the repeat for fix %d", fix.id)
         return False
     return refund
+
+
+async def _blocklist_on_repeat(ctx, store: UserStore, fix,
+                               repeat: ReleaseFingerprint) -> bool:
+    """With the "Auto-fix blocklists on a repeat" switch on, run Mark Failed
+    once for a Reporter's repeat: the same workflow and per-title
+    serialization as an Admin's Mark Failed, enqueued as a new Fix row marked
+    so its own repeat never comes back here. The Admin is DMed what was
+    blocklisted. Returns True when a search for a different release is
+    running (the Reporter is told). Never raises: the completion DM must go
+    out whatever happens here."""
+    cfg = ctx.bot_data["settings_store"].settings
+    admin_id = ctx.bot_data.get("admin_id")
+    if (not getattr(cfg, "autofix_blocklist_on_repeat", False)
+            or fix.user_id == admin_id or fix.auto_blocklisted):
+        return False
+    try:
+        fix_ctx, err = await _resolve_fix_context(
+            ctx.bot_data["seerr"], fix.ticket_id, action_name="Mark Failed")
+        if err is not None:
+            logger.info("blocklist on repeat skipped for #%d: %s", fix.ticket_id, err)
+            return False
+        assert fix_ctx is not None
+        key = media_action_key(fix_ctx.media)
+        if not try_begin_action(ctx, key):
+            logger.info("blocklist on repeat skipped for #%d: another fix is running",
+                        fix.ticket_id)
+            return False
+        try:
+            result = await _run_arr_action(
+                fix_ctx.media, fix_ctx.season, fix_ctx.episode,
+                ctx.bot_data.get("radarr"), ctx.bot_data.get("sonarr"),
+                action="mark_failed")
+            if result.status == "failed":
+                logger.warning("blocklist on repeat failed for #%d: %s",
+                               fix.ticket_id, result.message)
+                return False
+            # Logged as the Admin's Fix (not counted against anyone's limit,
+            # and the retry warning still sees it).
+            event_id = await store.log_autofix(
+                admin_id, fix_ctx.media["type"], fix_ctx.media["tmdb_id"],
+                season=fix_ctx.season, episode=fix_ctx.episode,
+                kind="mark failed")
+            searching = False
+            if result.should_poll:
+                try:
+                    await _enqueue_fix_completion(
+                        store, fix=fix_ctx, result=result, chat_id=fix.chat_id,
+                        user_id=fix.user_id, ticket_url=fix.ticket_url,
+                        event_id=event_id, auto_blocklisted=True)
+                    searching = True
+                except Exception:
+                    logger.exception("couldn't enqueue the blocklist-on-repeat "
+                                     "fix for #%d", fix.ticket_id)
+        finally:
+            end_action(ctx, key)
+        await _notify_admin_blocklisted(ctx, fix, repeat, result.message)
+        return searching
+    except Exception:
+        logger.exception("blocklist on repeat failed for #%d", fix.ticket_id)
+        return False
+
+
+async def _notify_admin_blocklisted(ctx, fix, repeat: ReleaseFingerprint,
+                                    message: str) -> None:
+    lines = [
+        f"🚫 Auto-fix blocklisted a release on its own: <b>{html.escape(fix.label)}</b>",
+        f"A Reporter's Auto-fix brought back the same release: "
+        f"{html.escape(release_description(repeat))}.",
+        html.escape(message),
+        *_ticket_line(fix),
+        "If it was a good release, remove it from the blocklist in Sonarr or Radarr.",
+    ]
+    try:
+        await ctx.bot.send_message(chat_id=ctx.bot_data["admin_id"],
+                                   text="\n".join(lines), parse_mode="HTML")
+    except Exception as exc:
+        logger.exception("notify admin of blocklist failed for fix %d", fix.id,
+                         exc_info=exc)
 
 
 def _limit_enforced(ctx) -> bool:
@@ -270,13 +360,17 @@ async def _notify_media_gone(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:
 
 async def _notify_complete(ctx: ContextTypes.DEFAULT_TYPE, fix, extra: str = "",
                            repeat: Optional[ReleaseFingerprint] = None,
-                           refunded: bool = False) -> None:
+                           refunded: bool = False,
+                           retrying: bool = False) -> None:
     if repeat is not None:
         head = [f"🔁 {_fix_name(fix)} complete: <b>{html.escape(fix.label)}</b> "
                 f"downloaded{extra}.", _repeat_sentence(repeat)]
         if refunded:
             head.append("That use was given back, so it doesn't count "
                         "against your daily limit.")
+        if retrying:
+            head.append("I'm trying a different release now and will DM you "
+                        "when it lands.")
     else:
         head = [f"🎉 {_fix_name(fix)} complete: <b>{html.escape(fix.label)}</b> downloaded{extra}."]
     lines = [
@@ -289,8 +383,9 @@ async def _notify_complete(ctx: ContextTypes.DEFAULT_TYPE, fix, extra: str = "",
         InlineKeyboardButton("✅ Yes, close it", callback_data=f"{RESOLVE}:{fix.ticket_id}:yes"),
         InlineKeyboardButton("💬 No, add a comment", callback_data=f"{RESOLVE}:{fix.ticket_id}:no"),
     ]]
-    if repeat is not None:
-        # The Admin's own repeat offers Mark Failed; a Reporter asks the Admin.
+    if repeat is not None and not retrying:
+        # The Admin's own repeat offers Mark Failed; a Reporter asks the Admin
+        # (not while the bot is already trying a different release).
         is_admin = fix.user_id == ctx.bot_data.get("admin_id")
         keyboard.append([mark_failed_button(fix.ticket_id) if is_admin
                          else ask_admin_button(fix.ticket_id)])

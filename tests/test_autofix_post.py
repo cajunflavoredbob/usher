@@ -97,3 +97,29 @@ async def test_invalid_limit_without_unlimited_is_400(client):
     r = await _post(client, {"daily_autofix_limit": "abc"})
     assert r.status == 400
     assert client.store.settings.daily_autofix_unlimited is False
+
+
+async def test_blocklist_on_repeat_is_off_by_default_and_saves_when_checked(client):
+    assert client.store.settings.autofix_blocklist_on_repeat is False
+    r = await _post(client, {"autofix_blocklist_on_repeat": "on"})
+    assert r.status == 200
+    assert client.store.settings.autofix_blocklist_on_repeat is True
+    r = await _post(client, {})
+    assert client.store.settings.autofix_blocklist_on_repeat is False
+
+
+async def test_the_tab_renders_the_switch_with_its_three_risks(client):
+    client.store.settings.autofix_blocklist_on_repeat = True
+    r = await client.get("/admin?tab=autofix", cookies=_cookies())
+    body = await r.text()
+    import re
+    box = re.search(r'<input[^>]*name="autofix_blocklist_on_repeat"[^>]*>', body)
+    assert box and "checked" in box.group(0)
+    client.store.settings.autofix_blocklist_on_repeat = False
+    off = await (await client.get("/admin?tab=autofix", cookies=_cookies())).text()
+    box = re.search(r'<input[^>]*name="autofix_blocklist_on_repeat"[^>]*>', off)
+    assert box and "checked" not in box.group(0)
+    assert "Auto-fix blocklists on a repeat" in body
+    assert "good release can be blocklisted when the download client was at fault" in body
+    assert "only available release can be removed" in body
+    assert "blocklist grows" in body

@@ -603,7 +603,7 @@ async def _resolve_fix_context(
 async def _enqueue_fix_completion(
     store: UserStore, *, fix: _FixContext, result: FixResult,
     chat_id: int, user_id: int, ticket_url: str, action_name: str = "",
-    event_id: Optional[int] = None,
+    event_id: Optional[int] = None, auto_blocklisted: bool = False,
 ) -> int:
     """Build the pending_autofix row from result.poll_info; returns the row
     id so the caller can attach the Fix's Progress card to it. Raises on
@@ -619,6 +619,7 @@ async def _enqueue_fix_completion(
         "action_name": action_name,
         "before_fingerprint": result.before,
         "event_id": event_id,
+        "auto_blocklisted": auto_blocklisted,
     }
     if fix.media["type"] == "movie":
         kwargs["radarr_movie_id"] = poll_info.get("movie_id")

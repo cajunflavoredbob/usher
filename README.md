@@ -193,6 +193,10 @@ Because users sign in with Plex, Usher authenticates to Seerr **as the user** (v
 - Usher polls the *arr after triggering and DMs the user when the new file lands (or on timeout).
 - If the media isn't managed by Radarr/Sonarr, Usher reports "not in Radarr/Sonarr" without touching the Ticket.
 - All auto-fix events are recorded in the `autofix_events` SQLite table.
+- **Auto-fix blocklists on a repeat** (Auto-fix tab, off by default). When a Reporter's Auto-fix brings back what looks like the same release, Usher runs Mark Failed once on its own: it blocklists the release it can identify, deletes the file and searches again. It tells the Reporter a different release is being tried and DMs the Admin what it blocklisted. It runs once per Auto-fix, so the retry's own repeat does nothing more, and an Admin's Fix never triggers it. Turn it on knowing the risks:
+  - A good release can be blocklisted when the download client was at fault.
+  - The only available release can be removed.
+  - The blocklist grows.
 
 ## Files
 

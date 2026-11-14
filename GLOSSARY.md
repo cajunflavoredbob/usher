@@ -80,6 +80,9 @@ An Auto-fix or Redownload whose replacement looks like the same release as the f
 **Ask the Admin**:
 A Reporter's one-tap request, after a Repeat or a comment, that the Admin try a different release. The bot sends the Admin a DM with Mark Failed first, once per Ticket.
 
+**Auto-fix blocklists on a repeat**:
+An Admin setting, off by default, that makes the bot run Mark Failed once by itself when a Reporter's Auto-fix is a Repeat. The retry is marked so its own Repeat never triggers it again.
+
 ## Requests and notifications
 
 **Request**:

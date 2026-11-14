@@ -649,6 +649,7 @@ def _settings_page(
     # retained list/number still posts and survives a later un-check.
     allow_all_chk = " checked" if s.autofix_allow_all else ""
     unlimited_chk = " checked" if s.daily_autofix_unlimited else ""
+    blocklist_chk = " checked" if s.autofix_blocklist_on_repeat else ""
     ids_lock = ' readonly class="locked"' if s.autofix_allow_all else ""
     limit_lock = ' readonly class="locked"' if s.daily_autofix_unlimited else ""
 
@@ -758,6 +759,13 @@ def _settings_page(
   </label>
   <input type="text" id="daily-limit" name="daily_autofix_limit" value="{_esc(s.daily_autofix_limit)}" inputmode="numeric" pattern="[0-9]+" required{limit_lock}>
   <div class="note">Per non-admin user per 24 hours. Default {DEFAULT_DAILY_AUTOFIX_LIMIT}. Admin is exempt.</div>
+
+  <label>Repeats</label>
+  <label class="inline-check" for="autofix-blocklist-on-repeat">
+    <input type="checkbox" id="autofix-blocklist-on-repeat" name="autofix_blocklist_on_repeat"{blocklist_chk}>
+    Auto-fix blocklists on a repeat
+  </label>
+  <div class="note">When a Reporter's Auto-fix brings back what looks like the same release, Usher runs Mark Failed once by itself: it blocklists that release and searches again. Off by default. Risks: a good release can be blocklisted when the download client was at fault; the only available release can be removed; and the blocklist grows. Admin Fixes never trigger it.</div>
 
   <div class="btn-row divided">
     <button type="button" class="test-btn" data-test="autofix" data-form="autofix-form">Test</button>
@@ -1370,6 +1378,8 @@ async def autofix_post(request: web.Request) -> web.Response:
     s.autofix_allow_all = form.get("autofix_allow_all") is not None
     unlimited = form.get("daily_autofix_unlimited") is not None
     s.daily_autofix_unlimited = unlimited
+    s.autofix_blocklist_on_repeat = (
+        form.get("autofix_blocklist_on_repeat") is not None)
     limit_raw = (form.get("daily_autofix_limit") or "").strip()
     try:
         limit = int(limit_raw)
