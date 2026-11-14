@@ -1147,6 +1147,8 @@ async def setup_post(request: web.Request) -> web.Response:
         admin_tg = 0
     if not seerr_url:
         errors.append("Seerr URL required.")
+    elif (url_err := validate_public_url(seerr_url)):
+        errors.append(f"Seerr URL: {url_err}")
     if not seerr_api_key:
         errors.append("Seerr API Key required.")
 
@@ -2045,6 +2047,8 @@ async def test_seerr(request: web.Request) -> web.Response:
     key = _form_secret(form, "seerr_api_key", saved.seerr_api_key)
     if not url or not key:
         return _test_json(False, "Seerr URL and API key are required.")
+    if (url_err := validate_public_url(url)):
+        return _test_json(False, url_err)
     client = SeerrClient(url, key)
     try:
         version = await client.ping()
@@ -2078,6 +2082,10 @@ async def test_autofix(request: web.Request) -> web.Response:
         if not url:
             continue
         any_configured = True
+        if (url_err := validate_public_url(url)):
+            ok_all = False
+            results.append(f"{name}: {url_err}")
+            continue
         key_field = f"{name.lower()}_api_key"
         if _reuses_stored_key_for_new_url(
                 form, key_field, getattr(saved, key_field), url,
@@ -2118,6 +2126,8 @@ async def test_tautulli(request: web.Request) -> web.Response:
     key = _form_secret(form, "tautulli_api_key", saved.tautulli_api_key)
     if not url or not key:
         return _test_json(False, "Tautulli URL and API key are required.")
+    if (url_err := validate_public_url(url)):
+        return _test_json(False, url_err)
     from tautulli import TautulliClient
     client = TautulliClient(url, key)
     try:
@@ -2144,6 +2154,8 @@ async def test_sabnzbd(request: web.Request) -> web.Response:
     key = _form_secret(form, "sabnzbd_api_key", saved.sabnzbd_api_key)
     if not url or not key:
         return _test_json(False, "SABnzbd URL and API key are required.")
+    if (url_err := validate_public_url(url)):
+        return _test_json(False, url_err)
     from sabnzbd import SabnzbdClient
     client = SabnzbdClient(url, key)
     try:

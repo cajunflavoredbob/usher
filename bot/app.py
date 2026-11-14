@@ -243,14 +243,29 @@ def _build_clients_from_settings(app: Application) -> None:
         if c is not None and hasattr(c, "close"):
             old_clients.append((key, c))
 
-    seerr = SeerrClient(
-        s.seerr_url, s.seerr_api_key,
-        public_url=s.seerr_public_url or None,
-    ) if (s.seerr_url and s.seerr_api_key) else None
-    radarr = RadarrClient(s.radarr_url, s.radarr_api_key) if (s.radarr_url and s.radarr_api_key) else None
-    sonarr = SonarrClient(s.sonarr_url, s.sonarr_api_key) if (s.sonarr_url and s.sonarr_api_key) else None
-    sabnzbd = SabnzbdClient(s.sabnzbd_url, s.sabnzbd_api_key) if (s.sabnzbd_url and s.sabnzbd_api_key) else None
-    tautulli = TautulliClient(s.tautulli_url, s.tautulli_api_key) if (s.tautulli_url and s.tautulli_api_key) else None
+    # One bad saved URL must not stop the others, or the whole start (the
+    # panel that could fix it included): log it and leave that service off.
+    def _client(name, factory, url, key):
+        if not (url and key):
+            return None
+        try:
+            return factory()
+        except Exception:
+            logger.error("%s URL in settings is not usable; %s stays off "
+                         "until it is fixed in the Admin page", name, name)
+            return None
+
+    seerr = _client("Seerr", lambda: SeerrClient(
+        s.seerr_url, s.seerr_api_key, public_url=s.seerr_public_url or None),
+        s.seerr_url, s.seerr_api_key)
+    radarr = _client("Radarr", lambda: RadarrClient(s.radarr_url, s.radarr_api_key),
+                     s.radarr_url, s.radarr_api_key)
+    sonarr = _client("Sonarr", lambda: SonarrClient(s.sonarr_url, s.sonarr_api_key),
+                     s.sonarr_url, s.sonarr_api_key)
+    sabnzbd = _client("SABnzbd", lambda: SabnzbdClient(s.sabnzbd_url, s.sabnzbd_api_key),
+                      s.sabnzbd_url, s.sabnzbd_api_key)
+    tautulli = _client("Tautulli", lambda: TautulliClient(s.tautulli_url, s.tautulli_api_key),
+                       s.tautulli_url, s.tautulli_api_key)
 
     allowlist = set(s.allowed_autofix_telegram_ids)
     if not allowlist:

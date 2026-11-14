@@ -24,6 +24,8 @@ from hmac import compare_digest
 from pathlib import Path
 from typing import Optional
 
+import httpx
+
 from former_name import legacy_env, legacy_key
 from fsutil import atomic_write_bytes
 
@@ -415,6 +417,16 @@ def validate_public_url(url: str) -> Optional[str]:
         return None
     if not (url.startswith("http://") or url.startswith("https://")):
         return "URL must start with http:// or https://"
+    # Parse it the way the service clients will: a URL httpx refuses (a
+    # port that isn't a number, an unclosed IPv6 bracket) would otherwise
+    # be saved and then stop the clients from being built at startup.
+    try:
+        parsed = httpx.URL(url)
+        _ = parsed.port
+    except Exception:
+        return "That URL isn't valid. Check the host and port."
+    if not parsed.host:
+        return "That URL has no host name."
     return None
 
 
