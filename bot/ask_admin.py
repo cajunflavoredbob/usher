@@ -13,6 +13,7 @@ import logging
 from typing import Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 from fix_result import ReleaseFingerprint
@@ -131,8 +132,12 @@ async def ask_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await q.answer(ALREADY_SENT)
             return
         # Answer BEFORE building the DM: the Seerr and Arr lookups behind it
-        # can outlive the callback query, and a late answer raises.
-        await q.answer()
+        # can outlive the callback query, and a late answer raises. A failed
+        # answer must not strand the claim with no DM sent.
+        try:
+            await q.answer()
+        except TelegramError as exc:
+            logger.debug("callback answer failed", exc_info=exc)
         try:
             text, kb = await _build_admin_dm(ctx, ticket_id)
             sent = await ctx.bot.send_message(

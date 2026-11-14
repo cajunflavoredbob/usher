@@ -40,10 +40,9 @@ async def test_non_admin_blocked_with_toast_and_audit(caplog):
     ctx = make_ctx(admin_id=999)
     caplog.set_level(logging.WARNING, logger="usher.audit")
     await apply_fix(upd, ctx, strategy="redownload")
-    # Two answer() calls happen: first the empty ack at handler entry,
-    # second the "Admin only." toast from require_admin.
-    toast_texts = [text for text, _alert in upd.callback_query.answers]
-    assert "Admin only." in toast_texts
+    # The admin check runs before the handler's own ack, so the
+    # "Admin only." toast is the query's one and only answer.
+    assert upd.callback_query.answers == [("Admin only.", False)]
     # Audit event
     audit_msgs = [r.getMessage() for r in caplog.records if r.name == "usher.audit"]
     assert any("admin_callback_blocked" in m for m in audit_msgs)

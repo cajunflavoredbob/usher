@@ -636,6 +636,20 @@ class UserStore:
 
         return await self._run(_do)
 
+    async def restart_progress_card_timeout(self, card_id: int,
+                                            hours: int) -> None:
+        """Start a card's download timeout now. Called when a waiting card
+        flips to grabbing: its timeout_at was set at creation, and a Request
+        approved a day later would otherwise time out on the next poll."""
+
+        def _do() -> None:
+            with self._conn() as c:
+                c.execute(
+                    "UPDATE request_watches SET timeout_at = datetime('now', ?) "
+                    "WHERE id = ?", (f"+{int(hours)} hours", card_id))
+
+        await self._run(_do)
+
     async def delete_progress_card(self, card_id: int) -> None:
         def _do():
             with self._conn() as c:
@@ -1099,7 +1113,9 @@ class UserStore:
         life of the install: pending_autofixes rows in a terminal state
         (only 'pending' is ever polled) older than 7 days, and
         autofix_events older than 30 days (count_autofix_24h looks back 24h;
-        the rest is kept for later lookups by item). Returns (pending_deleted, events_deleted).
+        the rest is kept for later lookups by item), and "Ask the Admin"
+        claims older than TICKET_ESCALATION_KEEP_DAYS. Returns
+        (pending_deleted, events_deleted).
         Called at startup and daily by the bot's job queue."""
         def _do() -> tuple[int, int]:
             with self._conn() as c:

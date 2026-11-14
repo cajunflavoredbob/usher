@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
+from const import PROGRESS_CARD_TIMEOUT_HOURS
 from fix_result import QueueProgress, parse_queue_records
 from bot.progress_card import (
     apply_webhook_event,
@@ -358,9 +359,13 @@ async def test_webhook_final_deletes_row_before_painting():
 
 
 async def test_pending_card_survives_the_download_timeout():
+    import datetime as _dt
+    # Past its 24h timeout, well inside the waiting backstop.
+    past = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=2)
+            ).strftime("%Y-%m-%d %H:%M:%S")
     ctx = make_ctx()
     ctx.bot_data["store"].list_progress_cards.return_value = [
-        _card_row(status="waiting", timeout_at="2020-01-01 00:00:00")]
+        _card_row(status="waiting", timeout_at=past)]
     await poll_progress_cards(ctx)
     ctx.bot.edit_message_text.assert_not_awaited()
     ctx.bot_data["store"].delete_progress_card.assert_not_awaited()
@@ -396,3 +401,35 @@ async def test_available_reaches_every_card_for_the_title():
     await apply_webhook_event(app, "MEDIA_AVAILABLE", "movie", 550,
                               requester_id=111)
     assert app.bot_data["store"].delete_progress_card.await_count == 2
+
+
+async def test_approval_restarts_the_download_timeout():
+    ctx = make_ctx()
+    app = ctx.application
+    app.bot_data["store"].find_progress_cards = AsyncMock(
+        return_value=[_card_row(status="waiting")])
+    await apply_webhook_event(app, "MEDIA_APPROVED", "movie", 550)
+    app.bot_data["store"].restart_progress_card_timeout.assert_awaited_once_with(
+        1, PROGRESS_CARD_TIMEOUT_HOURS)
+
+
+async def test_waiting_card_closes_after_the_long_backstop():
+    ctx = make_ctx()
+    ctx.bot_data["store"].list_progress_cards.return_value = [
+        _card_row(status="waiting", timeout_at="2020-01-01 00:00:00")]
+    # 2020 is years past creation + 14 days.
+    await poll_progress_cards(ctx)
+    assert "Still waiting for approval" in \
+        ctx.bot.edit_message_text.call_args.kwargs["text"]
+    ctx.bot_data["store"].delete_progress_card.assert_awaited_with(1)
+
+
+async def test_restart_progress_card_timeout_moves_it_forward(fresh_store):
+    card_id = await fresh_store.add_progress_card(
+        chat_id=1, message_id=2, user_id=3, media_type="movie", tmdb_id=550,
+        label="M", is4k=False, status="waiting", timeout_hours=1)
+    await fresh_store.restart_progress_card_timeout(card_id, 24)
+    (row,) = await fresh_store.find_progress_cards("movie", 550)
+    import datetime as _dt
+    ts = _dt.datetime.fromisoformat(row["timeout_at"].replace(" ", "T"))
+    assert ts > _dt.datetime.utcnow() + _dt.timedelta(hours=23)

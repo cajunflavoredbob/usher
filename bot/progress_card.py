@@ -14,7 +14,7 @@ from __future__ import annotations
 import html
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from telegram.ext import ContextTypes
@@ -235,6 +235,23 @@ async def poll_progress_cards(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             _inflight.discard(card["id"])
 
 
+# A Request card still waiting for approval closes after this many days.
+WAITING_CARD_MAX_DAYS = 14
+
+
+def _past_waiting_backstop(card: dict) -> bool:
+    """timeout_at is creation + PROGRESS_CARD_TIMEOUT_HOURS for a card that
+    never left waiting."""
+    try:
+        timeout_at = datetime.fromisoformat(
+            card["timeout_at"].replace(" ", "T")).replace(tzinfo=timezone.utc)
+    except Exception:
+        return True
+    created = timeout_at - timedelta(hours=PROGRESS_CARD_TIMEOUT_HOURS)
+    return datetime.now(timezone.utc) >= created + timedelta(
+        days=WAITING_CARD_MAX_DAYS)
+
+
 async def _poll_one(ctx, store: UserStore, card: dict) -> None:
     # Timeout: one final honest edit, then drop the row.
     try:
@@ -244,10 +261,18 @@ async def _poll_one(ctx, store: UserStore, card: dict) -> None:
     except Exception:
         timed_out = True
     # Pending-approval cards have nothing to poll; the MEDIA_APPROVED
-    # webhook flips them to grabbing. The download timeout is for grabbing
-    # cards only: a Request can wait days for the Admin, and closing its
-    # card at 24h would hide the Approved or Declined line that follows.
+    # webhook flips them to grabbing (and restarts the timeout). The 24h
+    # download timeout is for grabbing cards: a Request can wait days for
+    # the Admin. Waiting cards get a long backstop instead, since Seerr sends
+    # no event when a Request is deleted and the card would wait forever.
     if card["status"] != "grabbing":
+        if timed_out and _past_waiting_backstop(card):
+            await _edit_card(
+                ctx, card,
+                f"⏳ Still waiting for approval after {WAITING_CARD_MAX_DAYS} "
+                "days. This card stops updating now; /requests shows the "
+                "latest.")
+            await store.delete_progress_card(card["id"])
         return
     if timed_out:
         await _edit_card(
@@ -351,6 +376,8 @@ async def apply_webhook_event(app, nt: str, media_type: str,
         for card in cards:
             if card["status"] != "grabbing":
                 await store.update_progress_card(card["id"], status="grabbing")
+                await store.restart_progress_card_timeout(
+                    card["id"], PROGRESS_CARD_TIMEOUT_HOURS)
                 await _edit_card(ctx, card, APPROVED_LINE)
         return
     final = _FINAL_LINES.get(nt)
