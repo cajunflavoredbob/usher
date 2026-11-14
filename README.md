@@ -255,8 +255,14 @@ segment, and Usher logs a startup warning saying so. Recommended setups:
   Usher then trusts `X-Forwarded-For`/`X-Forwarded-Proto` from that proxy, so
   login throttling keys on the real client IP and cookies get the `Secure`
   flag. Without `TRUSTED_PROXIES`, those headers are ignored (they're
-  client-forgeable) and every request behind the proxy shares one throttle
-  bucket: fail-safe, but set the variable for correct behavior.
+  client-forgeable) and every client behind the proxy looks like one address
+  to the login limits. Failed logins under other usernames then use up the
+  shared allowance (20 failures per 5 minutes) and block further attempts
+  from that address, though the Admin's own username is not blocked by them.
+  The Admin username's own limit (5 failures per 5 minutes) still applies.
+  Usher logs a warning once when it sees `X-Forwarded-For` from an address
+  that is not in `TRUSTED_PROXIES`; set the variable to the proxy's IP or
+  CIDR to fix it.
 - **Loopback-only**: set `WEBHOOK_BIND=127.0.0.1` and reach the admin UI via
   an SSH tunnel; point Seerr's webhook at the same loopback address. In Docker
   with published ports this makes the port unreachable, so use it only with

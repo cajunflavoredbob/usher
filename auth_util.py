@@ -305,6 +305,27 @@ def request_is_secure(request) -> bool:
     return xfp.lower() == "https"
 
 
+_warned_untrusted_forwarded = False
+
+
+def _warn_untrusted_forwarded(request, peer: str) -> None:
+    """Log once per process when a peer that is not a trusted proxy sends
+    X-Forwarded-For: the usual sign of a reverse proxy with TRUSTED_PROXIES
+    unset, where every client then shares the proxy's address."""
+    global _warned_untrusted_forwarded
+    if _warned_untrusted_forwarded:
+        return
+    headers = getattr(request, "headers", None)
+    if headers is None or not headers.get("X-Forwarded-For"):
+        return
+    _warned_untrusted_forwarded = True
+    logger.warning(
+        "Request from %s carries X-Forwarded-For but that address is not in "
+        "TRUSTED_PROXIES, so the header is ignored and every client behind it "
+        "shares one login-throttle address. If %s is your reverse proxy, set "
+        "TRUSTED_PROXIES to its IP or CIDR.", peer, peer)
+
+
 def client_ip(request) -> str:
     """Client IP for throttling/audit. The socket peer is the only value an
     attacker can't choose, so X-Forwarded-For is honored ONLY when the peer
@@ -316,6 +337,7 @@ def client_ip(request) -> str:
     peer = request.remote or "-"
     networks = _trusted_networks(request)
     if not (networks and peer != "-" and _in_networks(peer, networks)):
+        _warn_untrusted_forwarded(request, peer)
         return peer
     xff = request.headers.get("X-Forwarded-For", "")
     hops = [h.strip() for h in xff.split(",") if h.strip()]

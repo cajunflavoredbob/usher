@@ -1248,15 +1248,23 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
 
     # Per-IP aggregate gate FIRST, before any password hashing: a
     # username-rotating flood would otherwise dodge the per-(ip,username)
-    # lockout and drive unbounded PBKDF2 work on the event loop.
-    ip_locked = _ip_throttle.is_locked(ip)
-    if ip_locked is not None:
-        audit("login_throttled_ip", ip=ip, seconds_left=int(ip_locked))
-        return _locked_response(ip_locked)
+    # lockout and drive unbounded PBKDF2 work on the event loop. A login for
+    # the configured admin username skips it and goes to the per-(ip,
+    # username) lockout below, so clients that share a peer IP (a reverse
+    # proxy without TRUSTED_PROXIES, CGNAT) cannot lock the Admin out with
+    # failures under other usernames. Every other username still hits this
+    # gate, so rotating usernames still gets 429 before any hashing.
+    admin = store.settings.admin
+    username_ok = admin.is_set() and username == admin.username
+    if not username_ok:
+        ip_locked = _ip_throttle.is_locked(ip)
+        if ip_locked is not None:
+            audit("login_throttled_ip", ip=ip, seconds_left=int(ip_locked))
+            return _locked_response(ip_locked)
 
-    # Then the tighter per-(ip, username) lockout: with a misconfigured
-    # reverse proxy every client shares the proxy's IP, so an ip-only key
-    # would let anyone lock the admin out of the login page entirely.
+    # The tighter per-(ip, username) lockout, which applies to every login
+    # including the admin's (an ip-only key would let anyone sharing the
+    # peer IP lock the admin out of the login page entirely).
     throttle_key = f"{ip}|{username.lower()}"
     locked = _throttle.is_locked(throttle_key)
     if locked is not None:
@@ -1264,8 +1272,6 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
               seconds_left=int(locked))
         return _locked_response(locked)
 
-    admin = store.settings.admin
-    username_ok = admin.is_set() and username == admin.username
     # Constant-work verification: run PBKDF2 even on a wrong username so
     # response timing can't enumerate the admin username. Off the event loop
     # (600k iterations) so it can't stall the webhook receiver / bot HTTP.
