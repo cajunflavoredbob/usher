@@ -31,8 +31,10 @@ from bot.callback_prefixes import (
     DIGEST_INFO,
     RELINK,
     SHARE_EXTEND,
+    SHARE_KEEP,
     SHARE_LET_END,
     SHARE_REMOVE_NOW,
+    SHARE_REMOVE_YES,
     SHARE_RETRY,
     RQ_ADMIN_APPROVE,
     RQ_ADMIN_DECLINE,
@@ -702,6 +704,7 @@ _GATE_EXEMPT_PREFIXES: Final = frozenset({
     RQ_REMAINING, RQ_ADMIN_APPROVE, RQ_ADMIN_DECLINE, RQ_ADMIN_RETRY,
     ACCESS_APPROVE, ACCESS_IGNORE, ASK_ADMIN,
     SHARE_EXTEND, SHARE_LET_END, SHARE_REMOVE_NOW, SHARE_RETRY,
+    SHARE_REMOVE_YES, SHARE_KEEP,
     TK_OPEN, TK_REPLY, TK_FIX, TK_CLOSE,
 })
 
@@ -781,7 +784,7 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     #    expiry DMs, which are not recorded (a reminder goes out three days
     #    ahead, so the 6 hour window would always have closed). The handler is
     #    Admin-only and DM-only, and re-reads the Share's expiry row; Remove now
-    #    only opens a confirm.
+    #    only opens a confirm (its Remove and Keep are exempt too).
     #  - History, Reply, Fix and Close sit on Ticket DMs and cards. History is
     #    read-only and Reply only opens a prompt (Seerr decides with the
     #    tapper's own token whether the comment lands); Fix and Close are

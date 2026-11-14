@@ -22,9 +22,10 @@ from http_util import user_friendly_message
 from store import ShareExpiry, UserStore
 
 from bot.admin_hub import refuse_outside_admin_dm
-from bot.callback_prefixes import (SHARE_EXTEND, SHARE_LET_END,
-                                   SHARE_REMOVE_NOW, SHARE_RETRY)
-from bot.invite_flow import remove_share_and_forget
+from bot.callback_prefixes import (SHARE_EXTEND, SHARE_KEEP, SHARE_LET_END,
+                                   SHARE_REMOVE_NOW, SHARE_REMOVE_YES,
+                                   SHARE_RETRY)
+from bot.invite_flow import remove_share_and_forget, removal_prompt
 from bot.share_expiry import _DB_TIME, expires_at_text, expiry_date_text
 from bot.shared import edit_or_send
 
@@ -66,23 +67,28 @@ async def _dm(app, chat_id: int, text: str,
         return False
 
 
+def _reminder_card(row: ShareExpiry) -> tuple[str, InlineKeyboardMarkup]:
+    """The Admin's reminder: text and Extend / Let it end / Remove now."""
+    sid = row.share_id
+    markup = InlineKeyboardMarkup([[
+        InlineKeyboardButton(f"➕ Extend {EXTEND_DAYS} days",
+                             callback_data=f"{SHARE_EXTEND}:{sid}"),
+        InlineKeyboardButton("👍 Let it end",
+                             callback_data=f"{SHARE_LET_END}:{sid}"),
+        InlineKeyboardButton("🗑 Remove now",
+                             callback_data=f"{SHARE_REMOVE_NOW}:{sid}"),
+    ]])
+    return (f"⏳ <b>{html.escape(_who(row))}</b>'s access ends on "
+            f"{expiry_date_text(row.expires_at)}, in about 3 days."), markup
+
+
 async def _remind(app, store: UserStore, row: ShareExpiry,
                   admin_id: int) -> None:
     date = expiry_date_text(row.expires_at)
     if not row.admin_reminded:
-        sid = row.share_id
-        markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton(f"➕ Extend {EXTEND_DAYS} days",
-                                 callback_data=f"{SHARE_EXTEND}:{sid}"),
-            InlineKeyboardButton("👍 Let it end",
-                                 callback_data=f"{SHARE_LET_END}:{sid}"),
-            InlineKeyboardButton("🗑 Remove now",
-                                 callback_data=f"{SHARE_REMOVE_NOW}:{sid}"),
-        ]])
-        if await _dm(app, admin_id,
-                     f"⏳ <b>{html.escape(_who(row))}</b>'s access ends on "
-                     f"{date}, in about 3 days.", markup):
-            await store.mark_share_expiry_reminded(sid, admin=True)
+        text, markup = _reminder_card(row)
+        if await _dm(app, admin_id, text, markup):
+            await store.mark_share_expiry_reminded(row.share_id, admin=True)
     if not row.holder_reminded and row.username:
         link = await store.find_by_plex_username(row.username)
         if link is not None and await _dm(
@@ -174,8 +180,11 @@ async def share_expiry_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def share_expiry_action(update: Update,
                               ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Extend 30 days (shext:<id>), Let it end (shend:<id>), Remove now
-    (shnow:<id>) and Retry (shrty:<id>). Admin only; each edits its DM to say
-    what happened."""
+    (shnow:<id>, which asks to confirm: Remove shnoy:<id>, Keep shnok:<id>)
+    and Retry (shrty:<id>). Admin only; each edits its DM to say what
+    happened. The DMs are not recorded buttons (a reminder can sit for days),
+    so these prefixes are exempt from the button gate (bot.shared); this
+    handler is the check: Admin and DM only, and it re-reads the row."""
     if await refuse_outside_admin_dm(update, ctx):
         return
     q = update.callback_query
@@ -204,8 +213,50 @@ async def share_expiry_action(update: Update,
         await edit_or_send(
             q, f"➕ <b>{who}</b> now ends on {expiry_date_text(new_at)}.",
             parse_mode="HTML")
+    elif action == SHARE_REMOVE_NOW:
+        await _confirm_removal(q, ctx, store, row)
+    elif action == SHARE_KEEP:
+        text, markup = _reminder_card(row)
+        await edit_or_send(q, text, reply_markup=markup, parse_mode="HTML")
     else:
         await _remove_from_button(q, ctx, store, row, who)
+
+
+async def _confirm_removal(q, ctx, store: UserStore, row: ShareExpiry) -> None:
+    """Remove now: look the Share up live and ask, on the same DM, with the
+    Share view's confirm text (Remove / Keep)."""
+    sid = row.share_id
+    link = await store.get(ctx.bot_data["admin_id"])
+    if link is None or not link.plex_token:
+        await edit_or_send(q, "Your /link is no longer usable; /link first.")
+        return
+    plex = ctx.bot_data["plex"]
+    try:
+        machine_id, _ = await plex.get_owned_server(link.plex_token)
+        shares = await plex.list_shares(link.plex_token, machine_id)
+    except Exception as exc:
+        logger.exception("share listing failed for Remove now")
+        await edit_or_send(
+            q, f"⚠️ Couldn't check the Share. "
+               f"{html.escape(user_friendly_message(exc))}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+                "🔁 Try again", callback_data=f"{SHARE_REMOVE_NOW}:{sid}")]]),
+            parse_mode="HTML")
+        return
+    share = next((s for s in shares if s.id == sid), None)
+    if share is None:
+        await store.clear_share_expiry(sid)
+        await edit_or_send(q, "✅ Already removed.")
+        return
+    text, flag = removal_prompt(share)
+    await edit_or_send(
+        q, text, parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "✅ Remove", callback_data=f"{SHARE_REMOVE_YES}:{sid}"),
+            InlineKeyboardButton(
+                "🛑 Keep", callback_data=f"{SHARE_KEEP}:{sid}"),
+        ]]))
 
 
 async def _remove_from_button(q, ctx, store: UserStore, row: ShareExpiry,

@@ -201,6 +201,7 @@ async def test_gate_admits_admin_request_dm_when_old_and_buried(prefix):
 
 
 @pytest.mark.parametrize("prefix", ["shext", "shend", "shnow", "shrty",
+                                    "shnoy", "shnok",
                                     "tkopen", "tkr", "tkf", "tkc"])
 async def test_gate_admits_unrecorded_dm_buttons_when_old_and_buried(prefix):
     """Share expiry and Ticket DM buttons are tapped days later, after more

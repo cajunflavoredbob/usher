@@ -101,6 +101,10 @@ SHARE_EXPIRY: Final = "shex"          # shex:<share_id>[:<days>] Set expiry pick
 SHARE_EXTEND: Final = "shext"         # shext:<share_id> Extend 30 days (expiry reminder)
 SHARE_LET_END: Final = "shend"        # shend:<share_id> Let it end (expiry reminder)
 SHARE_REMOVE_NOW: Final = "shnow"     # shnow:<share_id> Remove now (expiry reminder)
+                                      # -> confirm on the same DM
+SHARE_REMOVE_YES: Final = "shnoy"     # shnoy:<share_id> the confirm's Remove
+SHARE_KEEP: Final = "shnok"           # shnok:<share_id> the confirm's Keep (puts
+                                      # the reminder back)
 SHARE_RETRY: Final = "shrty"          # shrty:<share_id> Retry a failed expiry removal
 SHARE_MATCHES: Final = "shq"          # shq:<page> Prev/Next of typed /uninvite
                                       # matches (search text in user_data)

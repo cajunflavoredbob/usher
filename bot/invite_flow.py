@@ -682,7 +682,10 @@ def _share_view(share: PlexShare,
     ])
 
 
-def _confirm_card(share: PlexShare) -> tuple[str, InlineKeyboardMarkup]:
+def removal_prompt(share: PlexShare) -> tuple[str, str]:
+    """The confirm question for removing a Share, and the flag (a accepted,
+    p pending) the confirm's Remove button carries. The Share view's confirm
+    and the expiry reminder's Remove now share this text."""
     who = _who(share)
     if share.accepted:
         state = "accepted share"
@@ -692,8 +695,14 @@ def _confirm_card(share: PlexShare) -> tuple[str, InlineKeyboardMarkup]:
         state = "PENDING invite"
         consequence = "The invite will be cancelled before they accept it."
     flag = "a" if share.accepted else "p"
+    return (f"Remove <b>{html.escape(who)}</b>'s access ({state})?\n"
+            f"{consequence}"), flag
+
+
+def _confirm_card(share: PlexShare) -> tuple[str, InlineKeyboardMarkup]:
+    text, flag = removal_prompt(share)
     return (
-        f"Remove <b>{html.escape(who)}</b>'s access ({state})?\n{consequence}",
+        text,
         InlineKeyboardMarkup([[
             InlineKeyboardButton("✅ Remove",
                                  callback_data=f"{UNINV_GO}:{share.id}:{flag}"),
