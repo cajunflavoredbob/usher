@@ -8,6 +8,12 @@ each that cleared. This module's checks are Radarr and Sonarr health
 (warning and error only) and a disk below the percent or GB threshold
 (whichever is hit first), listed once per path even when both apps report it.
 
+The Plex server check is the third kind: plex.tv's resources listing for
+the Admin's owned server, plus Tautulli's `server_status` when linked, and
+either one saying offline counts. It alarms only after two checks in a row
+say offline; the strike count is held in `bot_data["plex_strikes"]`, so a
+restart forgets it (the alarm then comes one check later).
+
 A problem whose check could not run (an app is down) is left alone, so an
 outage never reads as "cleared"."""
 from __future__ import annotations
@@ -16,7 +22,7 @@ import asyncio
 import html
 import logging
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, Optional
 
 from http_util import user_friendly_message
 from settings import DEFAULT_LOW_DISK_GB, DEFAULT_LOW_DISK_PERCENT
@@ -28,6 +34,10 @@ ALARM_FIRST_DELAY_S = 60
 HEALTH_LEVELS = ("warning", "error")
 KIND_HEALTH = "health"
 KIND_DISK = "disk"
+KIND_PLEX = "plex"
+PLEX_KEY = "plex:offline"
+PLEX_OFFLINE_STRIKES = 2
+PLEX_OFFLINE_TEXT = "<b>Plex</b> server is offline"
 GB = 1024 ** 3
 _APPS = (("radarr", "Radarr"), ("sonarr", "Sonarr"))
 _SLASHES = "/" + chr(92)
@@ -196,16 +206,82 @@ def disk_problems(disks: list[Disk], pct: int, gb: int) -> dict[str, str]:
             for d in disks if d.is_low(pct, gb)}
 
 
+# --- Plex server -------------------------------------------------------------
+
+async def plex_state(ctx) -> tuple[Optional[bool], str]:
+    """(online, note). online is True, False, or None when it could not be
+    told; note says why in plain words ("" when online is known). Offline
+    wins: either plex.tv or Tautulli saying so is enough. None, with a
+    "skipped" note, when the Admin has no usable Plex token."""
+    bd = ctx.bot_data
+    plex = bd.get("plex")
+    link = await bd["store"].get(bd["admin_id"])
+    token = getattr(link, "plex_token", None) if link else None
+    if plex is None or not token:
+        return None, "skipped, the Admin has no Plex token (link Plex with /link)"
+    answers: list[bool] = []
+    errors: list[str] = []
+    try:
+        seen = await plex.get_owned_server_online(token)
+        if seen is not None:
+            answers.append(seen)
+    except Exception as exc:
+        logger.warning("Plex presence check failed: %s", exc)
+        errors.append(user_friendly_message(exc))
+    tautulli = bd.get("tautulli")
+    if tautulli is not None:
+        try:
+            conn = await tautulli.get_server_status()
+            if conn is not None:
+                answers.append(conn)
+        except Exception as exc:
+            logger.warning("Tautulli server_status check failed: %s", exc)
+            errors.append(user_friendly_message(exc))
+    if False in answers:
+        return False, ""
+    if True in answers:
+        return True, ""
+    if errors:
+        return None, "couldn't ask. " + "; ".join(errors)
+    return None, "couldn't tell, plex.tv gave no presence"
+
+
+async def _check_plex(ctx) -> None:
+    online, _note = await plex_state(ctx)
+    bd = ctx.bot_data
+    if online is None:
+        # Could not ask (or skipped): neither a strike nor a recovery.
+        return
+    if online:
+        bd["plex_strikes"] = 0
+        await reconcile(ctx, {}, lambda k: k == PLEX_KEY)
+        return
+    strikes = bd.get("plex_strikes", 0) + 1
+    bd["plex_strikes"] = strikes
+    if strikes >= PLEX_OFFLINE_STRIKES:
+        await reconcile(ctx, {PLEX_KEY: PLEX_OFFLINE_TEXT},
+                        lambda k: k == PLEX_KEY)
+
+
 async def check_alarms(ctx) -> None:
     """The 5-minute job."""
     cfg = ctx.bot_data["settings_store"].settings
     want_health = bool(getattr(cfg, "alarm_health", True))
     want_disk = bool(getattr(cfg, "alarm_disk", True))
+    want_plex = bool(getattr(cfg, "alarm_plex", True))
     try:
         if not want_health:
             await drop_kind(ctx, KIND_HEALTH)
         if not want_disk:
             await drop_kind(ctx, KIND_DISK)
+        if not want_plex:
+            await drop_kind(ctx, KIND_PLEX)
+            ctx.bot_data.pop("plex_strikes", None)
+        else:
+            try:
+                await _check_plex(ctx)
+            except Exception:
+                logger.exception("Plex alarm check failed")
         if not (want_health or want_disk):
             return
         checks = await gather_checks(ctx.bot_data)
@@ -240,9 +316,11 @@ async def check_alarms(ctx) -> None:
 
 async def status_section(ctx) -> str:
     """HTML starting with a blank line: Radarr and Sonarr health, then free
-    space per disk. "" when neither app is configured."""
+    space per disk, then the Plex server line. "" when neither app and no
+    Plex client is configured."""
+    plex_line = await _plex_status_line(ctx)
     if not any(ctx.bot_data.get(k) for k, _ in _APPS):
-        return ""
+        return "\n\n" + plex_line if plex_line else ""
     checks = await gather_checks(ctx.bot_data)
     lines = ["\n\n<b>Health:</b>"]
     for svc, items in checks.health.items():
@@ -271,4 +349,15 @@ async def status_section(ctx) -> str:
     for s in failed:
         lines.append(f"  • <b>{s}</b>: couldn't ask. "
                      f"{html.escape(user_friendly_message(checks.disks[s]))}")
+    if plex_line:
+        lines.append("\n" + plex_line)
     return "\n".join(lines)
+
+
+async def _plex_status_line(ctx) -> str:
+    if ctx.bot_data.get("plex") is None:
+        return ""
+    online, note = await plex_state(ctx)
+    if online is None:
+        return f"<b>Plex server:</b> {html.escape(note)}"
+    return f"<b>Plex server:</b> {'online' if online else 'offline'}"

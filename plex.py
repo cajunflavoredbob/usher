@@ -127,8 +127,8 @@ class PlexClient:
 
     # Server sharing (admin /invite, /uninvite)
 
-    async def get_owned_server(self, token: str) -> tuple[str, str]:
-        """(machine_identifier, name) of the account's owned server. Raises
+    async def _owned_server_resource(self, token: str) -> dict:
+        """plex.tv's resources entry of the account's owned server. Raises
         LookupError when the token owns no server."""
         r = await execute(self._http, "GET", f"{PLEX_API_BASE}/resources",
                           service=_SERVICE,
@@ -139,8 +139,21 @@ class PlexClient:
         for res in resources or []:
             res = res or {}
             if "server" in (res.get("provides") or "") and res.get("owned"):
-                return res.get("clientIdentifier"), res.get("name") or "Plex"
+                return res
         raise LookupError("this Plex account owns no server")
+
+    async def get_owned_server(self, token: str) -> tuple[str, str]:
+        """(machine_identifier, name) of the account's owned server. Raises
+        LookupError when the token owns no server."""
+        res = await self._owned_server_resource(token)
+        return res.get("clientIdentifier"), res.get("name") or "Plex"
+
+    async def get_owned_server_online(self, token: str) -> Optional[bool]:
+        """Whether plex.tv sees the owned server (the one Shares use)
+        connected: its `presence`. None when plex.tv gives no presence.
+        Raises LookupError when the token owns no server."""
+        presence = (await self._owned_server_resource(token)).get("presence")
+        return presence if isinstance(presence, bool) else None
 
     async def get_library_sections(self, token: str,
                                    machine_id: str) -> list[PlexLibrarySection]:

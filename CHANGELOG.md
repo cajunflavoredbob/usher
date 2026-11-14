@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Now playing**: with Tautulli linked, the Admin's Status lists who is playing now, with a Stop button on each stream (confirm first, with or without a message to the viewer).
 - **Inactive Shares**: with Tautulli linked, the Admin Hub's Shares list gains a 💤 Inactive button listing Shares that haven't watched for 60 days or more (changeable in the panel's Tautulli tab), or never, each opening the usual Share view with Remove.
 - **Service alarms**: the Admin gets a DM when Radarr or Sonarr reports a new warning or error (with its wiki link), and when a disk drops below a free-space limit (percent or GB, whichever is hit first, set in the panel's Telegram tab). One DM per problem, one more when it clears. Notices are left out, and a disk both apps report counts once. Each alarm has a panel switch, and /status gains Health and Free space lines.
+- **Plex offline alarm**: the Admin gets a DM when the Plex server goes offline (plex.tv says so, or Tautulli if linked) after two checks in a row, and one more when it is back. It needs the Admin's Plex link; without it the check is skipped and /status says so. Panel switch in the Telegram tab, and /status shows Plex online or offline.
 
 ### Fixed
 - The admin login lockout now holds against a burst of parallel attempts, and the login and first-run setup pages refuse oversized or compressed form bodies.

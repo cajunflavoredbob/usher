@@ -62,7 +62,8 @@ def _arr(health=None, disks=None):
 
 def _ctx(fresh_store, radarr=None, sonarr=None, **settings):
     ctx = make_ctx(admin_id=ADMIN, bot_data_overrides={
-        "store": fresh_store, "radarr": radarr, "sonarr": sonarr})
+        "store": fresh_store, "radarr": radarr, "sonarr": sonarr,
+        "plex": None})
     cfg = ctx.bot_data["settings_store"].settings
     cfg.alarm_health = settings.get("alarm_health", True)
     cfg.alarm_disk = settings.get("alarm_disk", True)

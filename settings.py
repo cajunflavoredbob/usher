@@ -102,6 +102,7 @@ class Settings:
     # below either threshold (whichever is hit first).
     alarm_health: bool = True
     alarm_disk: bool = True
+    alarm_plex: bool = True                # the Plex server going offline
     low_disk_percent: int = DEFAULT_LOW_DISK_PERCENT
     low_disk_gb: int = DEFAULT_LOW_DISK_GB
     allowed_autofix_telegram_ids: list[int] = field(default_factory=list)
@@ -176,6 +177,7 @@ class Settings:
             inactive_share_days=inactive_days,
             alarm_health=bool(data.get("alarm_health", True)),
             alarm_disk=bool(data.get("alarm_disk", True)),
+            alarm_plex=bool(data.get("alarm_plex", True)),
             low_disk_percent=_threshold("low_disk_percent", DEFAULT_LOW_DISK_PERCENT),
             low_disk_gb=_threshold("low_disk_gb", DEFAULT_LOW_DISK_GB),
             tg_notify_requester=bool(data.get("tg_notify_requester", True)),

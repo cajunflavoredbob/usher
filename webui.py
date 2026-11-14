@@ -717,6 +717,7 @@ def _settings_page(
     fail_chk = " checked" if s.tg_notify_admin_failed else ""
     alarm_health_chk = " checked" if s.alarm_health else ""
     alarm_disk_chk = " checked" if s.alarm_disk else ""
+    alarm_plex_chk = " checked" if s.alarm_plex else ""
     iss_chk = " checked" if s.tg_notify_issues else ""
     subscriptions_chk = " checked" if s.tg_notify_subscriptions else ""
     token_rejected_note = (
@@ -749,6 +750,7 @@ def _settings_page(
   <div class="note">DMs to the admin when something needs attention, checked every 5 minutes, once for each new problem and once when it clears.</div>
   <label class="inline-check"><input type="checkbox" name="alarm_health"{alarm_health_chk}> Radarr and Sonarr health warnings and errors</label>
   <label class="inline-check"><input type="checkbox" name="alarm_disk"{alarm_disk_chk}> Low disk space</label>
+  <label class="inline-check"><input type="checkbox" name="alarm_plex"{alarm_plex_chk}> Plex server offline (after two failed checks in a row)</label>
   <label>Alarm when a disk has less free space than <span class="note">percent, whichever is hit first</span></label>
   <input type="text" name="low_disk_percent" value="{_esc(s.low_disk_percent)}" inputmode="numeric" pattern="[0-9]+" required>
   <label>or less than <span class="note">GB</span></label>
@@ -1420,7 +1422,7 @@ async def telegram_post(request: web.Request) -> web.Response:
     s.usher_public_url = public_url
     s.low_disk_percent = thresholds["low_disk_percent"]
     s.low_disk_gb = thresholds["low_disk_gb"]
-    for flag in ("alarm_health", "alarm_disk"):
+    for flag in ("alarm_health", "alarm_disk", "alarm_plex"):
         setattr(s, flag, form.get(flag) is not None)
     for flag in ("tg_notify_requester", "tg_notify_admin_requests",
                  "tg_notify_admin_failed", "tg_notify_issues",

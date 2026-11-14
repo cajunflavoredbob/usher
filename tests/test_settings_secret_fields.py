@@ -387,3 +387,17 @@ def test_alarm_settings_default_on_with_10_percent_and_50_gb():
     s = Settings.from_dict({})
     assert (s.alarm_health, s.alarm_disk, s.low_disk_percent, s.low_disk_gb) \
         == (True, True, 10, 50)
+
+
+async def test_telegram_save_stores_the_plex_alarm_switch(client):
+    r = await _post(client, "/admin/telegram",
+                    {"admin_telegram_id": "4242", "alarm_plex": "on"})
+    assert r.status == 200
+    assert client.store.settings.alarm_plex is True
+    r = await _post(client, "/admin/telegram", {"admin_telegram_id": "4242"})
+    assert client.store.settings.alarm_plex is False
+
+
+def test_plex_alarm_defaults_on():
+    from settings import Settings
+    assert Settings.from_dict({}).alarm_plex is True

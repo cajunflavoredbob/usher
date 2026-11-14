@@ -131,6 +131,13 @@ class TautulliClient:
         data = await self.call("get_activity")
         return data if isinstance(data, dict) else {}
 
+    async def get_server_status(self) -> Optional[bool]:
+        """Whether Tautulli can reach its Plex server (`connected`); None
+        when the reply has no boolean."""
+        data = await self.call("server_status")
+        conn = data.get("connected") if isinstance(data, dict) else None
+        return conn if isinstance(conn, bool) else None
+
     async def terminate_session(self, session_id, message=None) -> None:
         """Stop one stream, optionally showing the viewer `message`. Tautulli
         accepts this command by POST only, and it is sent once."""
