@@ -5,12 +5,14 @@ back row (trending_hub). Every result is
 immediately requestable via the request conversation's jump entry point,
 and the 🖼 detail cards are the same ones /request search shows.
 
-Deliberately TMDB-only lists: nothing here surfaces other users' requests
-or activity. Browse state lives in user_data (dv_* keys) with its own
-version counter so superseded browse messages toast instead of acting on a
-newer browse."""
+The rule for these lists: no other user's identifiable activity. The TMDB
+lists show none; "Popular here this week" (only with Tautulli linked) shows
+titles only, never who watched or how many plays. Browse state lives in
+user_data (dv_* keys) with its own version counter so superseded browse
+messages toast instead of acting on a newer browse."""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -18,6 +20,7 @@ from telegram.ext import ContextTypes
 
 from http_util import user_friendly_message
 from seerr import MediaResult, SeerrClient
+from tautulli import tmdb_id_from_metadata
 
 from bot.callback_prefixes import (
     DV_CATEGORY,
@@ -54,7 +57,54 @@ CATEGORY_LABELS = {
     "uptv": "🗓 Soon (Shows)",
 }
 
+POPULAR_CATEGORY = "popular"
+POPULAR_LABEL = "🏆 Popular here this week"
+POPULAR_PER_STAT = 10
+
 _STALE_BROWSE_TOAST = "That browse list is stale: run /trending again."
+
+
+def _labels(ctx: ContextTypes.DEFAULT_TYPE) -> dict:
+    """The categories on offer: Popular here this week only with Tautulli."""
+    if ctx.bot_data.get("tautulli"):
+        return {**CATEGORY_LABELS, POPULAR_CATEGORY: POPULAR_LABEL}
+    return CATEGORY_LABELS
+
+
+async def _popular_results(client) -> list[MediaResult]:
+    """The server's most watched movies then shows over 7 days, as titles
+    only. Each is matched to a TMDb id through its Plex guids; one with no
+    TMDb guid (or whose lookup fails) gets tmdb_id 0 and so no buttons. Only
+    the title and year are kept from Tautulli's rows: no user names, no
+    `users_watched`, no play counts."""
+    out: list[MediaResult] = []
+    for stat_id, media_type in (("popular_movies", "movie"),
+                                ("popular_tv", "tv")):
+        blocks = await client.get_home_stats(
+            stat_id=stat_id, time_range=7, stats_count=POPULAR_PER_STAT)
+        rows = []
+        for b in blocks:
+            if b.get("stat_id") == stat_id:
+                rows = [r for r in (b.get("rows") or [])
+                        if isinstance(r, dict) and r.get("title")]
+                break
+        rows = rows[:POPULAR_PER_STAT]
+
+        async def tmdb_for(row) -> int:
+            if row.get("rating_key") is None:
+                return 0
+            try:
+                meta = await client.get_metadata(row["rating_key"])
+            except Exception:
+                logger.warning("Tautulli get_metadata failed", exc_info=True)
+                return 0
+            return tmdb_id_from_metadata(meta) or 0
+
+        ids = await asyncio.gather(*(tmdb_for(r) for r in rows))
+        for row, tmdb_id in zip(rows, ids):
+            out.append(MediaResult(media_type, tmdb_id, str(row["title"]),
+                                   str(row.get("year") or ""), None))
+    return out
 
 
 def _current_version(ctx: ContextTypes.DEFAULT_TYPE) -> int:
@@ -83,7 +133,7 @@ def _render(ctx: ContextTypes.DEFAULT_TYPE,
     start = screen * REQUEST_RESULTS_PER_PAGE
     chunk = results[start:start + REQUEST_RESULTS_PER_PAGE]
 
-    lines = [f"{CATEGORY_LABELS[category]} - tap a number to request:", ""]
+    lines = [f"{_labels(ctx).get(category, POPULAR_LABEL)} - tap a number to request:", ""]
     for offset, r in enumerate(chunk):
         lines.append(_result_line(start + offset + 1, r))
     lines.append("")
@@ -92,6 +142,8 @@ def _render(ctx: ContextTypes.DEFAULT_TYPE,
     rows: list[list[InlineKeyboardButton]] = []
     btn_row: list[InlineKeyboardButton] = []
     for offset, r in enumerate(chunk):
+        if not r.tmdb_id:
+            continue  # a Popular title with no TMDb guid: listed, no buttons
         n = start + offset
         keycap = KEYCAP_DIGITS[n] if n < len(KEYCAP_DIGITS) else str(n + 1)
         # Picking enters the request conversation via its jump entry point
@@ -105,12 +157,14 @@ def _render(ctx: ContextTypes.DEFAULT_TYPE,
             btn_row = []
     if btn_row:
         rows.append(btn_row)
-    rows.append([
+    info_row = [
         InlineKeyboardButton(
             f"🖼 {start + offset + 1}",
             callback_data=f"{DV_INFO}:{version}:{r.media_type}:{r.tmdb_id}")
-        for offset, r in enumerate(chunk)
-    ])
+        for offset, r in enumerate(chunk) if r.tmdb_id
+    ]
+    if info_row:
+        rows.append(info_row)
     if last_screen > 0:
         nav: list[InlineKeyboardButton] = []
         if screen > 0:
@@ -124,7 +178,7 @@ def _render(ctx: ContextTypes.DEFAULT_TYPE,
         rows.append(nav)
     # Category switcher: every list is one tap away.
     cat_row = [InlineKeyboardButton(label, callback_data=f"{DV_CATEGORY}:{key}")
-               for key, label in CATEGORY_LABELS.items() if key != category]
+               for key, label in _labels(ctx).items() if key != category]
     rows.append(cat_row[:3])
     if cat_row[3:]:
         rows.append(cat_row[3:])
@@ -141,8 +195,11 @@ async def _load_and_render(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                            user_id: int, hub=None) -> None:
     seerr: SeerrClient = ctx.bot_data["seerr"]
     try:
-        results = await seerr.discover(category,
-                                       limit=REQUEST_SEARCH_FETCH_LIMIT)
+        if category == POPULAR_CATEGORY:
+            results = await _popular_results(ctx.bot_data["tautulli"])
+        else:
+            results = await seerr.discover(category,
+                                           limit=REQUEST_SEARCH_FETCH_LIMIT)
     except Exception as exc:
         logger.exception("discover fetch failed")
         text = f"Couldn't fetch the list. {user_friendly_message(exc)}"
@@ -199,7 +256,7 @@ async def dv_category(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     except IndexError:
         await q.answer()
         return
-    if category not in CATEGORY_LABELS:
+    if category not in _labels(ctx):
         await q.answer()
         return
     await q.answer()

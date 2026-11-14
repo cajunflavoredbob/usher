@@ -8,6 +8,7 @@ use it for their own commands) only see `data`.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Optional
 
@@ -96,6 +97,28 @@ class TautulliClient:
         """Tautulli's home stats: a list of `{stat_id, rows}` blocks."""
         data = await self.call("get_home_stats", **params)
         return [b for b in (data or []) if isinstance(b, dict)]
+
+    async def get_metadata(self, rating_key) -> dict:
+        """One Plex item's metadata (its `guids` hold the TMDb id)."""
+        data = await self.call("get_metadata", rating_key=rating_key)
+        return data if isinstance(data, dict) else {}
+
+
+_TMDB_GUID = re.compile(
+    r"^(?:tmdb://|com\.plexapp\.agents\.themoviedb://)(\d+)")
+
+
+def tmdb_id_from_metadata(meta: dict) -> Optional[int]:
+    """The TMDb id in a get_metadata answer's guids (new `tmdb://123` form
+    or the legacy agent form), or None when it has none."""
+    guids = list(meta.get("guids") or [])
+    if meta.get("guid"):
+        guids.append(meta["guid"])
+    for g in guids:
+        m = _TMDB_GUID.match(str(g))
+        if m:
+            return int(m.group(1))
+    return None
 
 
 def _same(a, b) -> bool:

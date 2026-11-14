@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Tautulli**: link Tautulli in the web admin panel (URL, API key, Test, Save, Remove the saved key) and see its version or error in /status. Nothing else changes until later releases use the link.
+- **Popular here this week**: with Tautulli linked, the Trending list gains a category of the server's most watched movies and shows over 7 days, as titles only (no names, no play counts). Titles Tautulli can match to TMDb open detail cards and Requests as usual.
 
 ## [0.19.1] - 2026-11-12
 
