@@ -467,3 +467,76 @@ async def test_first_link_starts_from_the_arr_mark_without_repeats(
     assert sorted(await _rows(fresh_store)) == [
         ("movie", 550, "Fight Club", None, None),
         ("movie", 680, "Pulp Fiction", None, None)]
+
+
+async def test_a_library_imported_upgrade_deleting_in_the_import_second_is_skipped(
+        fresh_store):
+    # An atomic move writes the Upgrade delete in the same second as the
+    # import; with no earlier import it must not count as a quick upgrade.
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    tau = _tautulli([_movie(1, 1700000500, ["tmdb://550"])])
+    radarr = SimpleNamespace(
+        get_movie_by_tmdb=AsyncMock(return_value=SimpleNamespace(id=4)),
+        get_import_records=AsyncMock(return_value=[
+            {"id": 3, "eventType": "downloadFolderImported",
+             "date": _iso(1700000500 - 20)},
+            {"id": 2, "eventType": "movieFileDeleted",
+             "data": {"reason": "Upgrade"},
+             "date": _iso(1700000500 - 20)}]))
+    await poll_new_content(_ctx(fresh_store, tautulli=tau, radarr=radarr))
+    assert await _rows(fresh_store) == []
+
+
+def _paged_records(pages, read):
+    """A get_import_records that pages like the Sonarr client: it reads one
+    page at a time and stops once `stop` is true for a record on it."""
+    async def get(item_id, stop=None):
+        out = []
+        for page in pages:
+            read.append(page)
+            out.extend(page)
+            if stop is not None and any(stop(r) for r in page):
+                break
+        return out
+    return get
+
+
+async def test_a_manual_delete_stops_the_history_paging_early(fresh_store):
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    tau = _tautulli([_movie(1, 1700000500, ["tmdb://550"])])
+    t = 1700000500
+    pages = [
+        [{"id": 3, "eventType": "downloadFolderImported", "date": _iso(t - 20)},
+         {"id": 2, "eventType": "movieFileDeleted",
+          "data": {"reason": "Manual"}, "date": _iso(t - 300)}],
+        [{"id": 1, "eventType": "downloadFolderImported",
+          "date": _iso(t - 400)}]]
+    read: list = []
+    radarr = SimpleNamespace(
+        get_movie_by_tmdb=AsyncMock(return_value=SimpleNamespace(id=4)),
+        get_import_records=_paged_records(pages, read))
+    await poll_new_content(_ctx(fresh_store, tautulli=tau, radarr=radarr))
+    assert await _rows(fresh_store) == []
+    assert len(read) == 1
+
+
+async def test_an_upgrade_delete_does_not_stop_the_history_paging(fresh_store):
+    # The quick-upgrade delete is exempt only once the first import is seen,
+    # so paging must carry on past it to the page that holds that import.
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    tau = _tautulli([_movie(1, 1700000500, ["tmdb://550"])])
+    first = 1700000500 - 7200
+    pages = [
+        [{"id": 3, "eventType": "downloadFolderImported",
+          "date": _iso(first + 300)},
+         {"id": 2, "eventType": "movieFileDeleted",
+          "data": {"reason": "Upgrade"}, "date": _iso(first + 290)}],
+        [{"id": 1, "eventType": "downloadFolderImported",
+          "date": _iso(first)}]]
+    read: list = []
+    radarr = SimpleNamespace(
+        get_movie_by_tmdb=AsyncMock(return_value=SimpleNamespace(id=4)),
+        get_import_records=_paged_records(pages, read))
+    await poll_new_content(_ctx(fresh_store, tautulli=tau, radarr=radarr))
+    assert [r[1] for r in await _rows(fresh_store)] == [550]
+    assert len(read) == 2

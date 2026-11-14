@@ -33,10 +33,12 @@ TAUTULLI_PAGE = 50
 TAUTULLI_READ_PAGES = 40
 TAUTULLI_MAX_ITEMS = 250
 TAUTULLI_RETRY_S = 6 * 3600
-# On the Tautulli path, an arr import or delete record counts as an earlier
-# file only when it is dated this much before the item's newest import: a
-# record closer than that is part of the same arrival (a quick upgrade). Plex's
-# own added_at, which can trail the import by hours, plays no part.
+# On the Tautulli path, an arr import counts as an earlier file only when it is
+# dated this much before the item's newest import: closer than that is part of
+# the same arrival (a quick upgrade). An Upgrade delete is exempt only when it
+# falls after the item's first import and within this gap of it; one in the
+# same second as the first import (an atomic move) counts. Plex's own
+# added_at, which can trail the import by hours, plays no part.
 TAUTULLI_PRIOR_GAP_S = 10 * 60
 
 
@@ -284,8 +286,10 @@ async def _was_imported_before(arr, find_id,
     any file-deleted record whatever its age (a Library-Imported title has no
     earlier import, so the delete written by its upgrade or Fix is the only
     evidence). The one exception is a file-deleted record with reason
-    "Upgrade" dated at or after the item's FIRST import and within the gap of
-    it: a brand new title upgraded in its first minutes is still new. A first
+    "Upgrade" dated after the item's FIRST import and within the gap of
+    it: a brand new title upgraded in its first minutes is still new. A delete
+    in the same second as the first import is not exempt: a Library-Imported
+    title upgraded by an atomic move writes both in one second. A first
     import (however late Plex lists it) does not count. A delete with no
     reason counts. False when there is no such client, or it does not know
     the item. A lookup error propagates so the caller reads the item again;
@@ -339,7 +343,7 @@ async def _was_imported_before(arr, find_id,
         when = when_of(r)
         if when is None or is_import(r):
             continue
-        if (first is not None and first <= when <= first + TAUTULLI_PRIOR_GAP_S):
+        if (first is not None and first < when <= first + TAUTULLI_PRIOR_GAP_S):
             continue
         return True
     return False
