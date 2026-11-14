@@ -259,7 +259,7 @@ segment, and Usher logs a startup warning saying so. Recommended setups:
   to the login limits. Failed logins from anyone then use up the shared
   allowance (20 failures per 5 minutes) and block further attempts from that
   address. A browser that has signed in before carries a signed known-device
-  cookie (180 days, cleared by a password change, kept across logout) and
+  cookie (180 days, kept across logout, no longer counted after a password change) and
   keeps working during such a flood, with its own limit of 5 failures per
   5 minutes. A new browser can be locked out until the flood stops, so set
   `TRUSTED_PROXIES`.

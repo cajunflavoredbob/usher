@@ -99,6 +99,68 @@ async def test_password_change_kills_old_session(client):
     assert resp3.status == 200
 
 
+# --- the known-device cookie is not a session ---------------------------------
+
+
+def _device_as_session_cookies():
+    device = webui._make_device_cookie(SECRET, "admin", 0, "dev-1")
+    return {webui.SESSION_COOKIE: device, "usher_csrf": CSRF}
+
+
+def test_session_verifier_refuses_device_cookie():
+    device = webui._make_device_cookie(SECRET, "admin", 0, "dev-1")
+    assert webui._verify_session_cookie(SECRET, device, 0) is None
+
+
+def test_session_verifier_refuses_any_signed_payload_carrying_d():
+    """Even a payload signed the session way is refused when it has a "d"."""
+    import json as _json
+    import time as _time
+    payload = _json.dumps({"d": "dev-1", "u": "admin", "v": 0,
+                           "exp": int(_time.time()) + 3600}).encode()
+    body = webui._b64(payload)
+    cookie = f"{body}.{webui._b64(webui._sign(SECRET, body.encode()))}"
+    assert webui._verify_session_cookie(SECRET, cookie, 0) is None
+
+
+def test_device_verifier_refuses_session_cookie():
+    session = webui._make_session_cookie(SECRET, "admin", 0)
+    assert webui._verify_device_cookie(SECRET, session, "admin", 0) is None
+
+
+def test_device_mac_does_not_verify_as_session_mac():
+    device = webui._make_device_cookie(SECRET, "admin", 0, "dev-1")
+    body, sig = device.split(".")
+    assert sig != webui._b64(webui._sign(SECRET, body.encode()))
+
+
+def test_device_verifier_refuses_session_style_signature():
+    """A payload with "d" signed the session way is not a device cookie."""
+    import json as _json
+    import time as _time
+    payload = _json.dumps({"d": "dev-1", "u": "admin", "v": 0,
+                           "exp": int(_time.time()) + 3600}).encode()
+    body = webui._b64(payload)
+    cookie = f"{body}.{webui._b64(webui._sign(SECRET, body.encode()))}"
+    assert webui._verify_device_cookie(SECRET, cookie, "admin", 0) is None
+
+
+async def test_device_cookie_in_session_slot_does_not_open_admin(client):
+    resp = await client.get("/admin", cookies=_device_as_session_cookies(),
+                            allow_redirects=False)
+    assert resp.status == 302
+    assert "/admin/login" in resp.headers["Location"]
+
+
+async def test_device_cookie_in_session_slot_cannot_fetch_backup(client):
+    resp = await client.post(
+        "/admin/backup", data={"csrf_token": CSRF, "passphrase": "",
+                               "allow_unencrypted": "1"},
+        cookies=_device_as_session_cookies(), allow_redirects=False)
+    assert resp.status == 302
+    assert "/admin/login" in resp.headers["Location"]
+
+
 # --- webhook self-test hits loopback only -------------------------------------
 
 

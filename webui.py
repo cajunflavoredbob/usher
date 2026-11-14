@@ -181,6 +181,15 @@ def _sign(secret: bytes, data: bytes) -> bytes:
     return hmac.new(secret, data, sha256).digest()
 
 
+# The device cookie's MAC covers this label plus the body, so it can never
+# verify as a session cookie (same key, same body.sig shape) and vice versa.
+_DEVICE_SIGN_LABEL = b"usher-device-v1|"
+
+
+def _sign_device(secret: bytes, body: bytes) -> bytes:
+    return _sign(secret, _DEVICE_SIGN_LABEL + body)
+
+
 def _b64(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
@@ -201,12 +210,13 @@ def _make_session_cookie(secret: bytes, username: str, pwd_ver: int = 0) -> str:
 def _make_device_cookie(secret: bytes, username: str, pwd_ver: int,
                         device_id: Optional[str] = None) -> str:
     """Signed known-device marker: random device id, admin username and
-    password_version. Marks the browser, not the session."""
+    password_version. Marks the browser, not the session. It carries no
+    login: signed over its own label, so it never verifies as a session."""
     payload = json.dumps({
         "d": device_id or uuid.uuid4().hex, "u": username, "v": pwd_ver,
         "exp": int(time.time()) + DEVICE_TTL_SECONDS}).encode()
     body = _b64(payload)
-    return f"{body}.{_b64(_sign(secret, body.encode()))}"
+    return f"{body}.{_b64(_sign_device(secret, body.encode()))}"
 
 
 def _verify_device_cookie(secret: bytes, cookie: Optional[str],
@@ -219,7 +229,8 @@ def _verify_device_cookie(secret: bytes, cookie: Optional[str],
         body, sig = cookie.split(".")
     except ValueError:
         return None
-    expected = _b64(_sign(secret, body.encode("utf-8", "surrogateescape")))
+    expected = _b64(_sign_device(
+        secret, body.encode("utf-8", "surrogateescape")))
     if not safe_compare(sig, expected):
         return None
     try:
@@ -248,6 +259,8 @@ def _verify_session_cookie(secret: bytes, cookie: str,
         payload = json.loads(_b64d(body))
     except Exception:
         return None
+    if not isinstance(payload, dict) or "d" in payload:
+        return None  # a device-cookie payload is never a session
     if payload.get("exp", 0) < time.time():
         return None
     # Sessions minted before a password change carry an older version and
@@ -1377,7 +1390,8 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
     resp = web.HTTPFound("/admin")
     _set_session_cookie(resp, cookie, secure=secure)
     # Known-device marker: kept across logout (it marks the browser, not the
-    # session) and refreshed on every successful login.
+    # session), refreshed on every successful login, and stops counting after
+    # a password change (the password_version it carries no longer matches).
     _set_device_cookie(resp, _make_device_cookie(
         request.app["session_secret"], username,
         store.settings.admin.password_version, device_id), secure=secure)

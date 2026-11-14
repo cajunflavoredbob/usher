@@ -183,10 +183,41 @@ async def test_failures_with_cookie_lock_that_device_only(client, monkeypatch):
     assert await _login(client, "admin", "right-password") == 302
 
 
-async def test_device_cookie_survives_logout_path(client):
-    # The cookie is only set on login; logout never deletes it.
-    import inspect
-    assert "DEVICE_COOKIE" not in inspect.getsource(webui.logout)
+async def test_device_cookie_survives_logout(client):
+    session = webui._make_session_cookie(SECRET, "admin", 0)
+    csrf = webui.generate_csrf_token(SECRET, session.rsplit(".", 1)[-1])
+    device = _device_cookie(client)
+    r = await client.post(
+        "/admin/logout", data={"csrf_token": csrf},
+        cookies={"usher_session": session, "usher_csrf": csrf,
+                 "usher_device": device}, allow_redirects=False)
+    assert r.status == 302
+    assert "usher_device" not in r.cookies
+    assert any(m.key == "usher_session" for m in r.cookies.values())
+    # The browser still has the device cookie: a flood login still gets in.
+    client.session.cookie_jar.clear()
+    await _flood(client, 20)
+    assert await _login(client, "admin", "right-password", device) == 302
+
+
+async def test_device_success_does_not_reset_ip_gate(client):
+    await _flood(client, THROTTLE_IP_MAX_FAILURES - 1)
+    assert await _login(
+        client, "admin", "right-password", _device_cookie(client)) == 302
+    client.session.cookie_jar.clear()
+    # One more failure must still reach the limit: the success above did
+    # not clear the per-IP count.
+    assert await _login(client, "user-x", "wrong") == 401
+    assert await _login(client, "admin", "right-password") == 429
+
+
+async def test_device_failures_do_not_charge_ip_gate(client):
+    for n in range(THROTTLE_IP_MAX_FAILURES // THROTTLE_MAX_FAILURES + 1):
+        cookie = _device_cookie(client, device_id=f"dev-{n}")
+        for _ in range(THROTTLE_MAX_FAILURES):
+            assert await _login(client, "admin", "wrong", cookie) == 401
+    client.session.cookie_jar.clear()
+    assert await _login(client, "admin", "right-password") == 302
 
 
 async def test_admins_own_failures_without_cookie_lock_that_key(client):
