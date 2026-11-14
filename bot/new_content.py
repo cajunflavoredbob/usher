@@ -34,8 +34,9 @@ TAUTULLI_READ_PAGES = 40
 TAUTULLI_MAX_ITEMS = 250
 TAUTULLI_RETRY_S = 6 * 3600
 # On the Tautulli path, an arr import or delete record counts as an earlier
-# file only when it is dated this much before Tautulli's added_at: a record
-# closer than that is the import Plex just picked up (or an upgrade of it).
+# file only when it is dated this much before the item's newest import: a
+# record closer than that is part of the same arrival (a quick upgrade). Plex's
+# own added_at, which can trail the import by hours, plays no part.
 TAUTULLI_PRIOR_GAP_S = 10 * 60
 
 
@@ -268,25 +269,37 @@ async def _expand_episodes(tautulli, item: dict) -> list[tuple[dict, object]]:
     return out
 
 
-async def _was_imported_before(arr, find_id, added: int,
+async def _was_imported_before(arr, find_id,
                                fail_open: bool = False) -> bool:
     """With a configured Radarr or Sonarr that knows the item: True when its
     history holds a downloadFolderImported or file-deleted record dated more
-    than TAUTULLI_PRIOR_GAP_S before Tautulli's added_at, meaning a file
-    existed well before this one and this add is an upgrade or a re-import.
-    A record near added_at is the import Plex just listed, or a quick upgrade
-    of it, and does not count. False when there is no such client, or it
-    does not know the item. A lookup error propagates so the caller reads
-    the item again; once `fail_open` is set (the retry window has passed)
-    the error is logged and the item counts as new, so it is announced
-    rather than dropped."""
+    than TAUTULLI_PRIOR_GAP_S before the NEWEST import record, meaning a file
+    existed well before the latest one and this add is an upgrade or a
+    re-import. A first import (one import record, however late Plex lists it)
+    and a quick upgrade within the gap of the first import do not count.
+    False when there is no such client, or it does not know the item. A
+    lookup error propagates so the caller reads the item again; once
+    `fail_open` is set (the retry window has passed) the error is logged and
+    the item counts as new, so it is announced rather than dropped."""
     if arr is None:
         return False
-    cutoff = added - TAUTULLI_PRIOR_GAP_S
+    newest: list[int] = []
+
+    def when_of(r):
+        return _epoch(r.get("date")) if isinstance(r, dict) else None
+
+    def is_import(r) -> bool:
+        kind = r.get("eventType") if isinstance(r, dict) else None
+        return kind is None or kind == "downloadFolderImported"
 
     def before(r) -> bool:
-        when = _epoch(r.get("date")) if isinstance(r, dict) else None
-        return when is not None and when < cutoff
+        # Records come newest first: the first import seen anchors the rule.
+        when = when_of(r)
+        if when is None:
+            return False
+        if not newest and is_import(r):
+            newest.append(when)
+        return bool(newest) and when < newest[0] - TAUTULLI_PRIOR_GAP_S
 
     try:
         item_id = await find_id()
@@ -300,7 +313,9 @@ async def _was_imported_before(arr, find_id, added: int,
                        "window; the Tautulli item is recorded as new",
                        exc_info=True)
         return False
-    return any(before(r) for r in records)
+    newest.clear()
+    return any(before(r) for r in sorted(
+        records, key=lambda r: when_of(r) or 0, reverse=True))
 
 
 async def _poll_tautulli(store, tautulli, radarr=None, sonarr=None) -> None:
@@ -364,7 +379,7 @@ async def _poll_tautulli(store, tautulli, radarr=None, sonarr=None) -> None:
                         await tautulli.get_metadata(key))
                 if tmdb:
                     if await _was_imported_before(
-                            radarr, lambda: radarr_movie_id(tmdb), added,
+                            radarr, lambda: radarr_movie_id(tmdb),
                             fail_open=not retry):
                         continue
                     await store.add_new_content(
@@ -397,7 +412,7 @@ async def _poll_tautulli(store, tautulli, radarr=None, sonarr=None) -> None:
                 if await _was_imported_before(
                         sonarr,
                         lambda: sonarr_episode_id(tvdb, season, number),
-                        added, fail_open=not retry):
+                        fail_open=not retry):
                     continue
                 await store.add_new_content(
                     f"tautulli:{ep_key}", "episode", tmdb, title, season,

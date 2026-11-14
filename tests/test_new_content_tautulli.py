@@ -191,6 +191,44 @@ async def test_a_new_movie_upgraded_before_it_is_read_is_recorded(
     assert [r[1] for r in await _rows(fresh_store)] == [550]
 
 
+async def test_a_first_import_listed_by_plex_hours_later_is_recorded(
+        fresh_store):
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    tau = _tautulli([_movie(1, 1700000500, ["tmdb://550"])])
+    radarr = SimpleNamespace(
+        get_movie_by_tmdb=AsyncMock(return_value=SimpleNamespace(id=4)),
+        get_import_records=AsyncMock(return_value=[
+            {"id": 1, "date": _iso(1700000500 - 7200)}]))
+    await poll_new_content(_ctx(fresh_store, tautulli=tau, radarr=radarr))
+    assert [r[1] for r in await _rows(fresh_store)] == [550]
+
+
+async def test_an_upgrade_five_minutes_after_the_first_import_is_recorded(
+        fresh_store):
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    tau = _tautulli([_movie(1, 1700000500, ["tmdb://550"])])
+    radarr = SimpleNamespace(
+        get_movie_by_tmdb=AsyncMock(return_value=SimpleNamespace(id=4)),
+        get_import_records=AsyncMock(return_value=[
+            {"id": 2, "date": _iso(1700000500 - 7200 + 300)},
+            {"id": 1, "date": _iso(1700000500 - 7200)}]))
+    await poll_new_content(_ctx(fresh_store, tautulli=tau, radarr=radarr))
+    assert [r[1] for r in await _rows(fresh_store)] == [550]
+
+
+async def test_an_upgrade_three_days_after_the_first_import_is_skipped(
+        fresh_store):
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    tau = _tautulli([_movie(1, 1700000500, ["tmdb://550"])])
+    radarr = SimpleNamespace(
+        get_movie_by_tmdb=AsyncMock(return_value=SimpleNamespace(id=4)),
+        get_import_records=AsyncMock(return_value=[
+            {"id": 2, "date": _iso(1700000500 - 7200)},
+            {"id": 1, "date": _iso(1700000500 - 7200 - 3 * 86400)}]))
+    await poll_new_content(_ctx(fresh_store, tautulli=tau, radarr=radarr))
+    assert await _rows(fresh_store) == []
+
+
 async def test_a_library_import_then_upgrade_is_skipped_on_the_tautulli_path(
         fresh_store):
     # Only a file-deleted record (no earlier import) dated a day before.
