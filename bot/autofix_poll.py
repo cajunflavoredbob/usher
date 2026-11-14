@@ -189,17 +189,21 @@ async def _blocklist_on_repeat(ctx, store: UserStore, fix,
     if (not getattr(cfg, "autofix_blocklist_on_repeat", False)
             or fix.user_id == admin_id or fix.auto_blocklisted):
         return False
+    blocklisted = False  # Mark Failed ran: a later error is not a skip.
     try:
         fix_ctx, err = await _resolve_fix_context(
             ctx.bot_data["seerr"], fix.ticket_id, action_name="Mark Failed")
         if err is not None:
             logger.info("blocklist on repeat skipped for #%d: %s", fix.ticket_id, err)
+            await _notify_admin_skipped(ctx, fix, repeat, err)
             return False
         assert fix_ctx is not None
         key = media_action_key(fix_ctx.media)
         if not try_begin_action(ctx, key):
             logger.info("blocklist on repeat skipped for #%d: another fix is running",
                         fix.ticket_id)
+            await _notify_admin_skipped(ctx, fix, repeat,
+                                        "another fix is running for this title.")
             return False
         try:
             result = await _run_arr_action(
@@ -209,7 +213,10 @@ async def _blocklist_on_repeat(ctx, store: UserStore, fix,
             if result.status == "failed":
                 logger.warning("blocklist on repeat failed for #%d: %s",
                                fix.ticket_id, result.message)
+                await _notify_admin_skipped(
+                    ctx, fix, repeat, f"Mark Failed failed: {result.message}")
                 return False
+            blocklisted = True
             # Logged as the Admin's Fix (not counted against anyone's limit,
             # and the retry warning still sees it).
             event_id = await store.log_autofix(
@@ -231,9 +238,33 @@ async def _blocklist_on_repeat(ctx, store: UserStore, fix,
             end_action(ctx, key)
         await _notify_admin_blocklisted(ctx, fix, repeat, result.message)
         return searching
-    except Exception:
+    except Exception as exc:
         logger.exception("blocklist on repeat failed for #%d", fix.ticket_id)
+        if not blocklisted:
+            await _notify_admin_skipped(
+                ctx, fix, repeat, f"an error came up ({type(exc).__name__}).")
         return False
+
+
+async def _notify_admin_skipped(ctx, fix, repeat: ReleaseFingerprint,
+                                reason: str) -> None:
+    """Tell the Admin the switch did not act on a Reporter's repeat. Never
+    raises: a failed send must not stop the Reporter's completion DM."""
+    try:
+        lines = [
+            f"⚠️ Auto-fix could not blocklist a repeat on its own: "
+            f"<b>{html.escape(fix.label)}</b>",
+            f"A Reporter's Auto-fix brought back the same release: "
+            f"{html.escape(release_description(repeat))}.",
+            f"Why: {html.escape(reason)}",
+            *_ticket_line(fix),
+            "Use Mark Failed from the Ticket if you want it blocklisted.",
+        ]
+        await ctx.bot.send_message(chat_id=ctx.bot_data["admin_id"],
+                                   text="\n".join(lines), parse_mode="HTML")
+    except Exception as exc:
+        logger.exception("notify admin of skipped blocklist failed for fix %d",
+                         fix.id, exc_info=exc)
 
 
 async def _notify_admin_blocklisted(ctx, fix, repeat: ReleaseFingerprint,

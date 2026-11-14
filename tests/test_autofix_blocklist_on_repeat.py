@@ -162,6 +162,7 @@ async def test_on_a_repeat_on_an_admin_fix_runs_nothing():
     ctx = await _tick(user_id=ADMIN)
     ctx.bot_data["radarr"].mark_failed.assert_not_awaited()
     ctx.bot_data["store"].add_pending_autofix.assert_not_awaited()
+    assert _sent(ctx, ADMIN) == []
 
 
 async def test_on_a_busy_title_skips_the_blocklist_and_keeps_the_ask_button():
@@ -170,6 +171,9 @@ async def test_on_a_busy_title_skips_the_blocklist_and_keeps_the_ask_button():
     dm = _sent(ctx, 100)[-1]
     assert "different release now" not in dm["text"]
     assert any(c.startswith("askadm:") for c in _callbacks(dm))
+    (admin_dm,) = _sent(ctx, ADMIN)
+    assert "another fix is running" in admin_dm["text"]
+    ctx.bot_data["store"].add_pending_autofix.assert_not_awaited()
 
 
 async def test_on_the_title_slot_is_released_after_the_run():
@@ -177,18 +181,56 @@ async def test_on_the_title_slot_is_released_after_the_run():
     assert "movie:12345" not in ctx.bot_data["inflight_actions"]
 
 
-async def test_on_a_failed_mark_failed_still_sends_the_completion_dm_and_tells_no_one_else():
+async def test_on_a_failed_mark_failed_still_sends_the_completion_dm_and_tells_the_admin():
     ctx = await _tick(mark_failed=FixResult.failed("Radarr is down."))
     ctx.bot_data["store"].add_pending_autofix.assert_not_awaited()
-    assert _sent(ctx, ADMIN) == []
+    (admin_dm,) = _sent(ctx, ADMIN)
+    assert "Radarr is down." in admin_dm["text"]
+    assert "Test Movie" in admin_dm["text"]
+    assert "Movie.2020-GRP" in admin_dm["text"]
+    assert "issues/7" in admin_dm["text"]
+    assert "Mark Failed" in admin_dm["text"]
     dm = _sent(ctx, 100)[-1]
     assert "different release now" not in dm["text"]
     assert any(c.startswith("askadm:") for c in _callbacks(dm))
 
 
-async def test_on_a_resolved_ticket_runs_nothing():
+async def test_on_a_resolved_ticket_runs_nothing_and_tells_the_admin():
     ctx = await _tick(resolved=True)
     ctx.bot_data["radarr"].mark_failed.assert_not_awaited()
+    (admin_dm,) = _sent(ctx, ADMIN)
+    assert "resolved" in admin_dm["text"]
+
+
+async def test_on_a_failed_admin_dm_never_stops_the_reporters_dm():
+    fix = _fix()
+    fix.is_complete = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
+    ctx = make_ctx(admin_id=ADMIN)
+    ctx.bot_data["settings_store"].settings.autofix_blocklist_on_repeat = True
+    ctx.bot_data["seerr"].get_issue.return_value = IssueListItem(
+        id=7, issue_type=1, status=2, created_at="2026-05-29T12:00:00Z",
+        tmdb_id=12345, media_type="movie", problem_season=None,
+        problem_episode=None, created_by="someone")
+    radarr = ctx.bot_data["radarr"]
+    radarr.read_fingerprint = AsyncMock(return_value=FP(
+        release_name="Movie.2020-GRP", group="GRP", quality="WEBDL-1080p"))
+    radarr.get_queue_progress = AsyncMock(return_value=None)
+    store = ctx.bot_data["store"]
+    store.list_pending_autofixes = AsyncMock(return_value=[fix])
+    store.mark_autofix_status = AsyncMock()
+    reporter_sent = []
+
+    async def send(**kw):
+        if kw["chat_id"] == ADMIN:
+            raise RuntimeError("blocked")
+        reporter_sent.append(kw)
+        return make_message(message_id=900)
+
+    ctx.bot.send_message = AsyncMock(side_effect=send)
+    ctx.bot.edit_message_text = AsyncMock()
+    await poll_pending_autofixes(ctx)
+    assert reporter_sent
+    assert any(c.startswith("askadm:") for c in _callbacks(reporter_sent[-1]))
 
 
 # --- store -------------------------------------------------------------------------
@@ -224,3 +266,51 @@ async def test_a_schema_4_database_without_the_column_gets_it(
                                     auto_blocklisted=True)
     (row,) = await store.list_pending_autofixes()
     assert row.auto_blocklisted == 1
+
+
+async def test_on_an_error_before_mark_failed_tells_the_admin():
+    fix = _fix()
+    fix.is_complete = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
+    ctx = make_ctx(admin_id=ADMIN)
+    ctx.bot_data["settings_store"].settings.autofix_blocklist_on_repeat = True
+    ctx.bot_data["seerr"].get_issue.side_effect = RuntimeError("boom")
+    radarr = ctx.bot_data["radarr"]
+    radarr.read_fingerprint = AsyncMock(return_value=FP(
+        release_name="Movie.2020-GRP", group="GRP", quality="WEBDL-1080p"))
+    radarr.get_queue_progress = AsyncMock(return_value=None)
+    store = ctx.bot_data["store"]
+    store.list_pending_autofixes = AsyncMock(return_value=[fix])
+    store.mark_autofix_status = AsyncMock()
+    ctx.bot.send_message = AsyncMock(return_value=make_message(message_id=900))
+    ctx.bot.edit_message_text = AsyncMock()
+    await poll_pending_autofixes(ctx)
+    radarr.mark_failed.assert_not_awaited()
+    assert len(_sent(ctx, ADMIN)) == 1
+    assert len(_sent(ctx, 100)) == 1
+
+
+async def test_on_an_error_after_mark_failed_ran_sends_no_skip_dm():
+    fix = _fix()
+    fix.is_complete = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
+    ctx = make_ctx(admin_id=ADMIN)
+    ctx.bot_data["settings_store"].settings.autofix_blocklist_on_repeat = True
+    ctx.bot_data["seerr"].get_issue.return_value = IssueListItem(
+        id=7, issue_type=1, status=1, created_at="2026-05-29T12:00:00Z",
+        tmdb_id=12345, media_type="movie", problem_season=None,
+        problem_episode=None, created_by="someone")
+    radarr = ctx.bot_data["radarr"]
+    radarr.read_fingerprint = AsyncMock(return_value=FP(
+        release_name="Movie.2020-GRP", group="GRP", quality="WEBDL-1080p"))
+    radarr.get_queue_progress = AsyncMock(return_value=None)
+    radarr.mark_failed.return_value = FixResult.success(
+        "Blocklisted and searching.", ["blocklist"], poll_info={"movie_id": 555})
+    store = ctx.bot_data["store"]
+    store.list_pending_autofixes = AsyncMock(return_value=[fix])
+    store.mark_autofix_status = AsyncMock()
+    store.log_autofix.side_effect = RuntimeError("db down")
+    ctx.bot.send_message = AsyncMock(return_value=make_message(message_id=900))
+    ctx.bot.edit_message_text = AsyncMock()
+    await poll_pending_autofixes(ctx)
+    radarr.mark_failed.assert_awaited_once()
+    assert _sent(ctx, ADMIN) == []
+    assert len(_sent(ctx, 100)) == 1
