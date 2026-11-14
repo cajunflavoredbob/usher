@@ -422,7 +422,8 @@ async def test_get_import_records_keeps_imports_and_deletes_of_the_episode():
         return httpx.Response(200, json={"records": [
             {"id": 9, "episodeId": 501, "eventType": "downloadFolderImported"},
             {"id": 8, "episodeId": 501, "eventType": "grabbed"},
-            {"id": 7, "episodeId": 501, "eventType": "episodeFileDeleted"},
+            {"id": 7, "episodeId": 501, "eventType": "episodeFileDeleted",
+             "date": "2023-11-14T22:13:20Z", "data": {"reason": "Upgrade"}},
             {"id": 6, "episodeId": 777,
              "eventType": "downloadFolderImported"}]})
 
@@ -430,6 +431,8 @@ async def test_get_import_records_keeps_imports_and_deletes_of_the_episode():
     records = await client.get_import_records(501)
     await client.close()
     assert [r["id"] for r in records] == [9, 7]
+    assert records[1]["data"]["reason"] == "Upgrade"
+    assert records[1]["date"] == "2023-11-14T22:13:20Z"
     assert pages == [1, 2]
 
 

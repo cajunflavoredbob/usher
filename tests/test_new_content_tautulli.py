@@ -237,10 +237,76 @@ async def test_a_library_import_then_upgrade_is_skipped_on_the_tautulli_path(
     radarr = SimpleNamespace(
         get_movie_by_tmdb=AsyncMock(return_value=SimpleNamespace(id=4)),
         get_import_records=AsyncMock(return_value=[
-            {"id": 3, "date": _iso(1700000500 - 30)},
-            {"id": 2, "date": _iso(1700000500 - 86400)}]))
+            {"id": 3, "eventType": "downloadFolderImported",
+             "date": _iso(1700000500 - 30)},
+            {"id": 2, "eventType": "movieFileDeleted",
+             "data": {"reason": "Upgrade"},
+             "date": _iso(1700000500 - 86400)}]))
     await poll_new_content(_ctx(fresh_store, tautulli=tau, radarr=radarr))
     assert await _rows(fresh_store) == []
+
+
+async def test_a_library_imported_upgrade_seconds_after_its_delete_is_skipped(
+        fresh_store):
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    tau = _tautulli([_movie(1, 1700000500, ["tmdb://550"])])
+    radarr = SimpleNamespace(
+        get_movie_by_tmdb=AsyncMock(return_value=SimpleNamespace(id=4)),
+        get_import_records=AsyncMock(return_value=[
+            {"id": 3, "eventType": "downloadFolderImported",
+             "date": _iso(1700000500 - 20)},
+            {"id": 2, "eventType": "movieFileDeleted",
+             "data": {"reason": "Upgrade"},
+             "date": _iso(1700000500 - 40)}]))
+    await poll_new_content(_ctx(fresh_store, tautulli=tau, radarr=radarr))
+    assert await _rows(fresh_store) == []
+
+
+async def test_a_fix_with_a_manual_delete_five_minutes_before_is_skipped(
+        fresh_store):
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    tau = _tautulli([_movie(1, 1700000500, ["tmdb://550"])])
+    radarr = SimpleNamespace(
+        get_movie_by_tmdb=AsyncMock(return_value=SimpleNamespace(id=4)),
+        get_import_records=AsyncMock(return_value=[
+            {"id": 3, "eventType": "downloadFolderImported",
+             "date": _iso(1700000500 - 20)},
+            {"id": 2, "eventType": "movieFileDeleted",
+             "data": {"reason": "Manual"},
+             "date": _iso(1700000500 - 300)}]))
+    await poll_new_content(_ctx(fresh_store, tautulli=tau, radarr=radarr))
+    assert await _rows(fresh_store) == []
+
+
+async def test_a_new_item_upgraded_five_minutes_after_its_import_is_recorded(
+        fresh_store):
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    tau = _tautulli([_movie(1, 1700000500, ["tmdb://550"])])
+    first = 1700000500 - 7200
+    radarr = SimpleNamespace(
+        get_movie_by_tmdb=AsyncMock(return_value=SimpleNamespace(id=4)),
+        get_import_records=AsyncMock(return_value=[
+            {"id": 3, "eventType": "downloadFolderImported",
+             "date": _iso(first + 300)},
+            {"id": 2, "eventType": "movieFileDeleted",
+             "data": {"reason": "Upgrade"}, "date": _iso(first + 290)},
+            {"id": 1, "eventType": "downloadFolderImported",
+             "date": _iso(first)}]))
+    await poll_new_content(_ctx(fresh_store, tautulli=tau, radarr=radarr))
+    assert [r[1] for r in await _rows(fresh_store)] == [550]
+
+
+async def test_a_first_import_alone_is_recorded_with_real_event_types(
+        fresh_store):
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    tau = _tautulli([_movie(1, 1700000500, ["tmdb://550"])])
+    radarr = SimpleNamespace(
+        get_movie_by_tmdb=AsyncMock(return_value=SimpleNamespace(id=4)),
+        get_import_records=AsyncMock(return_value=[
+            {"id": 1, "eventType": "downloadFolderImported",
+             "date": _iso(1700000500 - 7200)}]))
+    await poll_new_content(_ctx(fresh_store, tautulli=tau, radarr=radarr))
+    assert [r[1] for r in await _rows(fresh_store)] == [550]
 
 
 async def test_an_arr_lookup_error_past_the_window_records_the_item_as_new(

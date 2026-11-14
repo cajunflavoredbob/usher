@@ -269,18 +269,28 @@ async def _expand_episodes(tautulli, item: dict) -> list[tuple[dict, object]]:
     return out
 
 
+def _delete_reason(r) -> str:
+    data = r.get("data") if isinstance(r, dict) else None
+    reason = data.get("reason") if isinstance(data, dict) else None
+    return reason.strip().lower() if isinstance(reason, str) else ""
+
+
 async def _was_imported_before(arr, find_id,
                                fail_open: bool = False) -> bool:
     """With a configured Radarr or Sonarr that knows the item: True when its
-    history holds a downloadFolderImported or file-deleted record dated more
-    than TAUTULLI_PRIOR_GAP_S before the NEWEST import record, meaning a file
-    existed well before the latest one and this add is an upgrade or a
-    re-import. A first import (one import record, however late Plex lists it)
-    and a quick upgrade within the gap of the first import do not count.
-    False when there is no such client, or it does not know the item. A
-    lookup error propagates so the caller reads the item again; once
-    `fail_open` is set (the retry window has passed) the error is logged and
-    the item counts as new, so it is announced rather than dropped."""
+    history shows a file existed before the latest import, meaning this add
+    is an upgrade, a Fix or a re-import. Two kinds of record prove it: an
+    import dated more than TAUTULLI_PRIOR_GAP_S before the NEWEST import, and
+    any file-deleted record whatever its age (a Library-Imported title has no
+    earlier import, so the delete written by its upgrade or Fix is the only
+    evidence). The one exception is a file-deleted record with reason
+    "Upgrade" dated at or after the item's FIRST import and within the gap of
+    it: a brand new title upgraded in its first minutes is still new. A first
+    import (however late Plex lists it) does not count. A delete with no
+    reason counts. False when there is no such client, or it does not know
+    the item. A lookup error propagates so the caller reads the item again;
+    once `fail_open` is set (the retry window has passed) the error is logged
+    and the item counts as new, so it is announced rather than dropped."""
     if arr is None:
         return False
     newest: list[int] = []
@@ -294,12 +304,17 @@ async def _was_imported_before(arr, find_id,
 
     def before(r) -> bool:
         # Records come newest first: the first import seen anchors the rule.
+        # Stops paging on proof that needs no other record: an old import or
+        # a delete that is not an Upgrade (an Upgrade delete may be the
+        # exempt quick upgrade, which only the first import can tell).
         when = when_of(r)
         if when is None:
             return False
-        if not newest and is_import(r):
-            newest.append(when)
-        return bool(newest) and when < newest[0] - TAUTULLI_PRIOR_GAP_S
+        if is_import(r):
+            if not newest:
+                newest.append(when)
+            return when < newest[0] - TAUTULLI_PRIOR_GAP_S
+        return _delete_reason(r) != "upgrade"
 
     try:
         item_id = await find_id()
@@ -314,8 +329,20 @@ async def _was_imported_before(arr, find_id,
                        exc_info=True)
         return False
     newest.clear()
-    return any(before(r) for r in sorted(
-        records, key=lambda r: when_of(r) or 0, reverse=True))
+    ordered = sorted(records, key=lambda r: when_of(r) or 0, reverse=True)
+    if any(before(r) for r in ordered):
+        return True
+    imports = [when_of(r) for r in ordered
+               if is_import(r) and when_of(r) is not None]
+    first = min(imports) if imports else None
+    for r in ordered:
+        when = when_of(r)
+        if when is None or is_import(r):
+            continue
+        if (first is not None and first <= when <= first + TAUTULLI_PRIOR_GAP_S):
+            continue
+        return True
+    return False
 
 
 async def _poll_tautulli(store, tautulli, radarr=None, sonarr=None) -> None:
