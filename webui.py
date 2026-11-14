@@ -135,8 +135,9 @@ async def _read_unauth_form(request: web.Request):
         return None, rejection
     try:
         return await request.post(), None
-    except UnicodeDecodeError:
-        return None, web.Response(text="Form is not valid UTF-8.", status=400)
+    except (UnicodeDecodeError, LookupError, ValueError):
+        # Undecodable bytes, an unknown charset, a nameless multipart part.
+        return None, web.Response(text="Form could not be read.", status=400)
 
 
 def _set_session_cookie(resp, cookie_value: str, *, secure: bool) -> None:
@@ -775,9 +776,9 @@ def _settings_page(
   <label class="inline-check"><input type="checkbox" name="alarm_disk"{alarm_disk_chk}> Low disk space</label>
   <label class="inline-check"><input type="checkbox" name="alarm_plex"{alarm_plex_chk}> Plex server offline (after two failed checks in a row)</label>
   <label>Alarm when a disk has less free space than <span class="note">percent, whichever is hit first</span></label>
-  <input type="text" name="low_disk_percent" value="{_esc(s.low_disk_percent)}" inputmode="numeric" pattern="[0-9]+" required>
+  <input type="text" name="low_disk_percent" value="{int(s.low_disk_percent)}" inputmode="numeric" pattern="[0-9]+" required>
   <label>or less than <span class="note">GB</span></label>
-  <input type="text" name="low_disk_gb" value="{_esc(s.low_disk_gb)}" inputmode="numeric" pattern="[0-9]+" required>
+  <input type="text" name="low_disk_gb" value="{int(s.low_disk_gb)}" inputmode="numeric" pattern="[0-9]+" required>
 
   <div class="btn-row divided">
     <button type="button" class="test-btn" data-test="telegram" data-form="telegram-form">Test</button>

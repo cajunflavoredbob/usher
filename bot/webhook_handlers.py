@@ -600,8 +600,11 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
     if tmdb_for_card is not None and type_for_card in ("movie", "tv"):
         from bot.progress_card import apply_webhook_event
         try:
-            await apply_webhook_event(app, nt, type_for_card, tmdb_for_card,
-                                      requester_id=requester_chat_id)
+            await apply_webhook_event(
+                app, nt, type_for_card, tmdb_for_card,
+                requester_id=requester_chat_id,
+                requester_known=bool(link is not None or requester_seerr_id
+                                     or requester_username))
         except Exception as exc:
             logger.exception("progress card update failed for %s", nt, exc_info=exc)
 

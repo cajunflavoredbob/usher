@@ -19,6 +19,7 @@ from telegram.ext import ContextTypes
 from fix_result import ReleaseFingerprint
 
 from bot.callback_prefixes import ASK_ADMIN, TK_FIX_MARK_FAILED
+from bot.hub import keyboard_callbacks
 from bot.shared import (
     end_action,
     format_scope_label,
@@ -117,6 +118,12 @@ async def ask_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     except (ValueError, IndexError):
         await q.answer()
         logger.warning("Unparseable callback data: %r", q.data)
+        return
+    # Only a tap on a message that really offers this button counts: the
+    # button gate lets this callback through on old DMs, and a client can
+    # send any callback data from any message.
+    if f"{ASK_ADMIN}:{ticket_id}" not in keyboard_callbacks(q.message):
+        await q.answer()
         return
     store = ctx.bot_data["store"]
     admin_id = ctx.bot_data.get("admin_id")

@@ -139,7 +139,8 @@ async def resolve_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     # active: both conversations would await the next message
     # and the new-Ticket flow, registered first, would swallow this comment as
     # its description. Reply in a NEW message so the buttons stay usable.
-    if user_in_conversation(ctx, update, "issue", "ticket_reply", "request", "invite"):
+    if user_in_conversation(ctx, update, "issue", "ticket_reply", "request", "invite",
+                            "broadcast"):
         await q.message.reply_text(
             "You're in the middle of another flow (like /issue or /request). Finish or "
             "/cancel it first, then tap the button again."

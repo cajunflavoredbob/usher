@@ -71,8 +71,7 @@ async def test_right_password_after_a_parallel_burst_is_locked_out(client):
 
 
 async def test_login_lock_belongs_to_the_app(client):
-    # One lock per panel app (so per event loop), and the form is read
-    # before it is taken: a stalled upload never holds up other logins.
+    # attach_webui gives each panel app (so each event loop) its own lock.
     assert isinstance(client.server.app["login_lock"], asyncio.Lock)
     assert not client.server.app["login_lock"].locked()
 
@@ -208,3 +207,12 @@ def test_csrf_compare_rejects_non_ascii_without_raising():
     req = SimpleNamespace(cookies={"usher_csrf": "toké"},
                           app={"session_secret": SECRET})
     assert validate_csrf(req, "tok") is False
+
+
+def test_zero_disk_thresholds_render_as_zero():
+    from settings import Settings
+    s = Settings(low_disk_percent=0, low_disk_gb=0)
+    page = webui._settings_page(s, webhook_url="http://x/webhook/seerr",
+                                csrf_token="t")
+    assert 'name="low_disk_percent" value="0"' in page
+    assert 'name="low_disk_gb" value="0"' in page

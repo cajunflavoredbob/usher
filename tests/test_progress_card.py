@@ -433,3 +433,13 @@ async def test_restart_progress_card_timeout_moves_it_forward(fresh_store):
     import datetime as _dt
     ts = _dt.datetime.fromisoformat(row["timeout_at"].replace(" ", "T"))
     assert ts > _dt.datetime.utcnow() + _dt.timedelta(hours=23)
+
+
+async def test_an_unlinked_requesters_decline_leaves_linked_cards_alone():
+    ctx = make_ctx()
+    app = ctx.application
+    app.bot_data["store"].find_progress_cards = AsyncMock(return_value=[
+        _card_row(id=1, user_id=111, status="waiting")])
+    await apply_webhook_event(app, "MEDIA_DECLINED", "tv", 550,
+                              requester_id=None, requester_known=True)
+    app.bot_data["store"].delete_progress_card.assert_not_awaited()

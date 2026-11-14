@@ -188,7 +188,7 @@ async def test_finalize_link_uses_html_and_escapes_display_name():
 import pytest as _pytest
 
 
-@_pytest.mark.parametrize("other", ["request", "invite"])
+@_pytest.mark.parametrize("other", ["request", "invite", "broadcast"])
 async def test_resolve_comment_refused_while_request_or_invite_active(other):
     upd = make_update(callback_data="resolve:42:no", user_id=42, chat_id=100)
     ctx = make_ctx(admin_id=999, link=make_link(plex_token="tok"))
@@ -199,7 +199,7 @@ async def test_resolve_comment_refused_while_request_or_invite_active(other):
     assert "middle of another flow" in upd.callback_query.message.reply_calls[0]["text"]
 
 
-@_pytest.mark.parametrize("other", ["request", "invite"])
+@_pytest.mark.parametrize("other", ["request", "invite", "broadcast"])
 async def test_ticket_reply_and_close_refused_while_request_or_invite_active(other):
     from bot.tickets import tk_close_with_comment_start, tk_reply_start
     for cb, fn in (("tkr:5", tk_reply_start), ("tkcc:5", tk_close_with_comment_start)):

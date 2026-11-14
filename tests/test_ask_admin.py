@@ -59,10 +59,26 @@ def ctx(fresh_store):
     return c
 
 
-async def _tap(ctx, user_id=REPORTER):
+def _offer_markup(ticket_id=7):
+    from bot.ask_admin import ask_admin_button
+    from telegram import InlineKeyboardMarkup
+    return InlineKeyboardMarkup([[ask_admin_button(ticket_id)]])
+
+
+async def _tap(ctx, user_id=REPORTER, markup=None):
     upd = make_update(callback_data="askadm:7", user_id=user_id)
+    upd.callback_query.message.reply_markup = (
+        _offer_markup() if markup is None else markup)
     await ask_admin(upd, ctx)
     return upd
+
+
+async def test_a_tap_from_a_message_without_the_button_does_nothing(ctx):
+    from telegram import InlineKeyboardMarkup
+    upd = await _tap(ctx, markup=InlineKeyboardMarkup([]))
+    ctx.bot.send_message.assert_not_awaited()
+    # The claim was left free for the real Reporter.
+    assert await ctx.bot_data["store"].claim_ticket_escalation(7)
 
 
 # --- the offer ---------------------------------------------------------------

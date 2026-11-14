@@ -188,7 +188,7 @@ async def test_gate_admits_bell_tap_with_recorded_pick_list():
     await global_btn_gate(upd, _Ctx(app))  # no raise
 
 
-@pytest.mark.parametrize("prefix", ["rqap", "rqdc", "rqrt"])
+@pytest.mark.parametrize("prefix", ["rqap", "rqdc", "rqrt", "askadm"])
 async def test_gate_admits_admin_request_dm_when_old_and_buried(prefix):
     app = _make_app()
     record_btn(app, 42, _make_message(2000))

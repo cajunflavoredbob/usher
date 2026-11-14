@@ -345,7 +345,8 @@ _FAILED_LINE_NO_ALARM = "⚠️ Download failed."
 
 async def apply_webhook_event(app, nt: str, media_type: str,
                               tmdb_id: int, *,
-                              requester_id: Optional[int] = None) -> None:
+                              requester_id: Optional[int] = None,
+                              requester_known: bool = False) -> None:
     """Update the Progress cards for this media per the lifecycle event.
     Approved -> grabbing (poller takes over); terminal events paint the
     final line and close the Progress card.
@@ -354,7 +355,10 @@ async def apply_webhook_event(app, nt: str, media_type: str,
     requester's Telegram id is known only their cards change: another
     user's Request for the same title must not flip or close yours.
     MEDIA_AVAILABLE is about the title being in Plex and reaches every
-    card for it."""
+    card for it. requester_known with no requester_id means the requester
+    is someone with no Usher Link (a Seerr web UI Request): no card is
+    theirs, so none changes. Only when the requester could not be told at
+    all do the events reach every card, as before."""
     store: UserStore = app.bot_data["store"]
     try:
         cards = await store.find_progress_cards(media_type, tmdb_id)
@@ -362,7 +366,7 @@ async def apply_webhook_event(app, nt: str, media_type: str,
         logger.exception("progress card lookup failed for %s/%s",
                          media_type, tmdb_id)
         return
-    if requester_id is not None and nt != "MEDIA_AVAILABLE":
+    if (requester_id is not None or requester_known) and nt != "MEDIA_AVAILABLE":
         cards = [c for c in cards if c["user_id"] == requester_id]
     if not cards:
         return
@@ -375,9 +379,11 @@ async def apply_webhook_event(app, nt: str, media_type: str,
     if nt in ("MEDIA_APPROVED", "MEDIA_AUTO_APPROVED"):
         for card in cards:
             if card["status"] != "grabbing":
-                await store.update_progress_card(card["id"], status="grabbing")
+                # Timeout first: a poll between the two writes must not see
+                # a grabbing card still carrying its creation-time timeout.
                 await store.restart_progress_card_timeout(
                     card["id"], PROGRESS_CARD_TIMEOUT_HOURS)
+                await store.update_progress_card(card["id"], status="grabbing")
                 await _edit_card(ctx, card, APPROVED_LINE)
         return
     final = _FINAL_LINES.get(nt)
