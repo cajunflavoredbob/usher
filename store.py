@@ -251,6 +251,17 @@ class UserStore:
                 )
                 """
             )
+            # One row per Ticket the Reporter asked the Admin to try a
+            # different release for. CREATE IF NOT EXISTS runs on every start,
+            # so a database already stamped schema 4 gets it too.
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ticket_escalations (
+                    ticket_id INTEGER PRIMARY KEY,
+                    escalated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+                """
+            )
             c.execute(
                 """
                 CREATE TABLE IF NOT EXISTS availability_subs (
@@ -819,16 +830,37 @@ class UserStore:
 
         return await self._run(_do)
 
+    _PENDING_COLUMNS = """id, chat_id, user_id, media_type, radarr_movie_id,
+                           sonarr_series_id, sonarr_episode_id, sonarr_season,
+                           expected_episode_ids, label, issue_id, issue_url,
+                           started_at, timeout_at, message_id, last_progress,
+                           bumped, reply_markup, action_name, before_fingerprint"""
+
+    @staticmethod
+    def _pending_from_row(r) -> PendingAutofix:
+        ids = json.loads(r[8] or "[]")
+        if not isinstance(ids, list):
+            raise ValueError(f"expected_episode_ids is {type(ids).__name__}, not list")
+        return PendingAutofix(
+            id=r[0], chat_id=r[1], user_id=r[2], media_type=r[3],
+            radarr_movie_id=r[4], sonarr_series_id=r[5],
+            sonarr_episode_id=r[6], sonarr_season=r[7],
+            expected_episode_ids=ids,
+            label=r[9], ticket_id=r[10], ticket_url=r[11],
+            started_at=r[12], timeout_at=r[13],
+            message_id=r[14], last_progress=r[15] or "",
+            bumped=r[16] or 0,
+            reply_markup=r[17] or "",
+            action_name=r[18] or "",
+            before_fingerprint=ReleaseFingerprint.from_json(r[19]),
+        )
+
     async def list_pending_autofixes(self) -> list[PendingAutofix]:
         def _do() -> list[tuple]:
             with self._conn() as c:
                 return c.execute(
-                    """
-                    SELECT id, chat_id, user_id, media_type, radarr_movie_id,
-                           sonarr_series_id, sonarr_episode_id, sonarr_season,
-                           expected_episode_ids, label, issue_id, issue_url,
-                           started_at, timeout_at, message_id, last_progress,
-                           bumped, reply_markup, action_name, before_fingerprint
+                    f"""
+                    SELECT {self._PENDING_COLUMNS}
                     FROM pending_autofixes
                     WHERE status = 'pending'
                     ORDER BY id
@@ -843,25 +875,52 @@ class UserStore:
         out: list[PendingAutofix] = []
         for r in rows:
             try:
-                ids = json.loads(r[8] or "[]")
-                if not isinstance(ids, list):
-                    raise ValueError(f"expected_episode_ids is {type(ids).__name__}, not list")
-                out.append(PendingAutofix(
-                    id=r[0], chat_id=r[1], user_id=r[2], media_type=r[3],
-                    radarr_movie_id=r[4], sonarr_series_id=r[5],
-                    sonarr_episode_id=r[6], sonarr_season=r[7],
-                    expected_episode_ids=ids,
-                    label=r[9], ticket_id=r[10], ticket_url=r[11],
-                    started_at=r[12], timeout_at=r[13],
-                    message_id=r[14], last_progress=r[15] or "",
-                    bumped=r[16] or 0,
-                    reply_markup=r[17] or "",
-                    action_name=r[18] or "",
-                    before_fingerprint=ReleaseFingerprint.from_json(r[19]),
-                ))
+                out.append(self._pending_from_row(r))
             except Exception as exc:
                 logger.exception("Skipping corrupt pending_autofix row id=%s", r[0], exc_info=exc)
         return out
+
+    async def latest_autofix_for_ticket(self, ticket_id: int) -> Optional[PendingAutofix]:
+        """The newest Fix row for a Ticket in any state (the row outlives its
+        poll for 7 days), or None when there is none or it is unreadable."""
+        def _do():
+            with self._conn() as c:
+                return c.execute(
+                    f"""
+                    SELECT {self._PENDING_COLUMNS}
+                    FROM pending_autofixes
+                    WHERE issue_id = ?
+                    ORDER BY id DESC LIMIT 1
+                    """, (ticket_id,)).fetchone()
+
+        r = await self._run(_do)
+        if r is None:
+            return None
+        try:
+            return self._pending_from_row(r)
+        except Exception as exc:
+            logger.exception("corrupt pending_autofix row id=%s", r[0], exc_info=exc)
+            return None
+
+    async def claim_ticket_escalation(self, ticket_id: int) -> bool:
+        """Record that the Reporter asked the Admin about this Ticket.
+        True for the first claim, False when it was already made."""
+        def _do() -> bool:
+            with self._conn() as c:
+                return c.execute(
+                    "INSERT OR IGNORE INTO ticket_escalations (ticket_id) VALUES (?)",
+                    (ticket_id,)).rowcount == 1
+
+        return await self._run(_do)
+
+    async def release_ticket_escalation(self, ticket_id: int) -> None:
+        """Undo a claim whose DM never reached the Admin, so a retap can retry."""
+        def _do():
+            with self._conn() as c:
+                c.execute("DELETE FROM ticket_escalations WHERE ticket_id = ?",
+                          (ticket_id,))
+
+        await self._run(_do)
 
     async def set_autofix_message(self, pending_id: int, message_id: int,
                                   reply_markup: str = "") -> None:

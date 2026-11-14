@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from telegram import Update
+from telegram import InlineKeyboardMarkup, Update
 from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
@@ -18,12 +18,14 @@ from telegram.ext import (
 from http_util import user_friendly_message
 from seerr import PlexTokenInvalidError, SeerrClient
 
+from bot.ask_admin import ask_admin_button
 from bot.callback_prefixes import RESOLVE
 from bot.shared import (
     DECRYPT_FAILED_MSG,
     AWAIT_COMMENT,
     RELINK_RESUME_EXECUTORS,
     end_action,
+    record_btn,
     prompt_plex_relink,
     token_for,
     try_begin_action,
@@ -159,6 +161,20 @@ async def resolve_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     return AWAIT_COMMENT
 
 
+async def _reply_comment_added(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
+                               ticket_id: int, is_admin: bool) -> None:
+    """The "Added your comment" confirmation. A non-Admin also gets "Ask the
+    Admin to try a different release"; the Admin follows up on their own."""
+    followup = "" if is_admin else " Admin will follow up."
+    sent = await update.effective_message.reply_text(
+        f"💬 Added your comment to ticket #{ticket_id}.{followup}",
+        reply_markup=(None if is_admin else
+                      InlineKeyboardMarkup([[ask_admin_button(ticket_id)]])),
+    )
+    if not is_admin:
+        record_btn(ctx.application, update.effective_user.id, sent)
+
+
 async def resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     ticket_id = ctx.user_data.get("awaiting_comment_for")
     if not ticket_id:
@@ -193,10 +209,7 @@ async def resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
         await update.effective_message.reply_text(f"Couldn't add comment. {user_friendly_message(exc)}")
         ctx.user_data.pop("awaiting_comment_for", None)
         return ConversationHandler.END
-    followup = "" if is_admin else " Admin will follow up."
-    await update.effective_message.reply_text(
-        f"💬 Added your comment to ticket #{ticket_id}.{followup}"
-    )
+    await _reply_comment_added(update, ctx, ticket_id, is_admin)
     ctx.user_data.pop("awaiting_comment_for", None)
     return ConversationHandler.END
 
@@ -236,10 +249,7 @@ async def _resume_resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE
         await update.effective_message.reply_text(
             f"Couldn't add comment. {user_friendly_message(exc)}")
         return
-    followup = "" if is_admin else " Admin will follow up."
-    await update.effective_message.reply_text(
-        f"💬 Added your comment to ticket #{ticket_id}.{followup}"
-    )
+    await _reply_comment_added(update, ctx, ticket_id, is_admin)
 
 
 RELINK_RESUME_EXECUTORS["resolve_close"] = _resume_resolve_close

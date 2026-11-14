@@ -88,6 +88,8 @@ SHARE_MATCHES: Final = "shq"          # shq:<page> Prev/Next of typed /uninvite
 
 # Post-autofix resolve follow-up
 RESOLVE: Final = "resolve"            # resolve:<ticket_id>:yes|no|skip
+ASK_ADMIN: Final = "askadm"           # askadm:<ticket_id> "Ask the Admin to try a
+                                      # different release" (global handler)
 
 # Hubs (shared by every Hub; see bot.hub)
 HUB_OPEN: Final = "hubo"              # hubo:<hub> "⬅️ <Hub>" back button:

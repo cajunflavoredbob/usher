@@ -68,6 +68,7 @@ from bot.callback_prefixes import (
     TK_CLOSE,
     TK_CLOSE_DIRECT,
     TK_FIX,
+    ASK_ADMIN,
     TK_FIX_MARK_FAILED,
     TK_FIX_REDOWNLOAD,
     TK_OPEN,
@@ -89,6 +90,7 @@ from bot.request_flow import (_RQ_KEYS, _request_conversation,
 from bot.requests_cmd import cmd_requests, requests_hub_mine, rq_list_cancel
 from bot.request_admin import rq_admin_action
 from bot.resolve_flow import _resolve_conversation
+from bot.ask_admin import ask_admin
 from bot.shared import (
     edit_or_send,
     force_end_flow_conversations,
@@ -500,6 +502,7 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(CallbackQueryHandler(tk_fix, pattern=fr"^{TK_FIX}:\d+$"))
     app.add_handler(CallbackQueryHandler(tk_fix_redownload, pattern=fr"^{TK_FIX_REDOWNLOAD}:\d+$"))
     app.add_handler(CallbackQueryHandler(tk_fix_mark_failed, pattern=fr"^{TK_FIX_MARK_FAILED}:\d+$"))
+    app.add_handler(CallbackQueryHandler(ask_admin, pattern=fr"^{ASK_ADMIN}:\d+$"))
     app.add_handler(CallbackQueryHandler(tk_back, pattern=fr"^({TK_BACK}|{TK_BACK_LIST}|{TK_BACK_DM}):\d+$"))
     app.add_handler(ticket_conv)
     app.add_handler(CallbackQueryHandler(cmd_link_didnt_work, pattern=fr"^{LINK_HELP}$"))

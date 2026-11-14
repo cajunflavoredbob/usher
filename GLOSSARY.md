@@ -77,6 +77,9 @@ _Avoid_: self-fix, re-search
 **Repeat**:
 An Auto-fix or Redownload whose replacement looks like the same release as the file it replaced. The bot compares release name, or else group, quality and size; it is a hint, not proof.
 
+**Ask the Admin**:
+A Reporter's one-tap request, after a Repeat or a comment, that the Admin try a different release. The bot sends the Admin a DM with Mark Failed first, once per Ticket.
+
 ## Requests and notifications
 
 **Request**:

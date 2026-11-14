@@ -23,6 +23,7 @@ from radarr import RadarrClient
 from sonarr import SonarrClient
 from store import UserStore
 
+from bot.ask_admin import ask_admin_button, mark_failed_button
 from bot.callback_prefixes import RESOLVE
 from bot.progress_card import (maybe_bump_priority, refresh_arr_downloads,
                                resolve_progress_line)
@@ -255,6 +256,11 @@ async def _notify_complete(ctx: ContextTypes.DEFAULT_TYPE, fix, extra: str = "",
         InlineKeyboardButton("✅ Yes, close it", callback_data=f"{RESOLVE}:{fix.ticket_id}:yes"),
         InlineKeyboardButton("💬 No, add a comment", callback_data=f"{RESOLVE}:{fix.ticket_id}:no"),
     ]]
+    if repeat is not None:
+        # The Admin's own repeat offers Mark Failed; a Reporter asks the Admin.
+        is_admin = fix.user_id == ctx.bot_data.get("admin_id")
+        keyboard.append([mark_failed_button(fix.ticket_id) if is_admin
+                         else ask_admin_button(fix.ticket_id)])
     try:
         sent = await ctx.bot.send_message(
             chat_id=fix.chat_id,

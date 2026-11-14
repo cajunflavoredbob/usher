@@ -306,7 +306,8 @@ async def test_repeat_paints_the_card_and_sends_the_repeat_dm(monkeypatch):
     assert "probably didn't fix the problem" in card
     dm = ctx.bot.send_message.call_args.kwargs["text"]
     assert "looks like the same release (GRP, WEBDL-1080p)" in dm
-    assert _buttons(ctx) == ["✅ Yes, close it", "💬 No, add a comment"]
+    assert _buttons(ctx) == ["✅ Yes, close it", "💬 No, add a comment",
+                       "🙋 Ask the Admin to try a different release"]
 
 
 async def test_unknown_comparison_keeps_todays_wording(monkeypatch):
