@@ -241,7 +241,7 @@ async def test_new_ticket_dm_submenus_back_shows_dm_buttons_with_history():
         upd = _from_dm(make_update(callback_data=data, user_id=ADMIN_ID))
         await handler(upd, ctx)
         assert ("⬅️ Back", f"{TK_BACK_DM}:5") in _flat(
-            upd.callback_query.edits[0]["reply_markup"])
+            upd.callback_query.edits[-1]["reply_markup"])
     upd = make_update(callback_data=f"{TK_BACK_DM}:5", user_id=ADMIN_ID)
     await tk_back(upd, ctx)
     assert _flat(upd.callback_query.edits[-1]["reply_markup"]) == DM_BUTTONS

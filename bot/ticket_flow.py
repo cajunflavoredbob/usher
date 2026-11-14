@@ -886,6 +886,8 @@ async def ticket_offer_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
         InlineKeyboardButton("⚠️ Yes, delete & re-search", callback_data=f"{TICKET_AUTOFIX_CONFIRM}:{version}:yes"),
         InlineKeyboardButton("No, report to Admin", callback_data=f"{TICKET_AUTOFIX_CONFIRM}:{version}:no"),
     ]]
+    # Edit BEFORE the Sonarr read: strips the Yes/No choices while it runs.
+    await q.edit_message_text("Checking which file this will delete...")
     target = await describe_fix_target(
         ctx.user_data.get("media") or {}, ctx.user_data.get("season"),
         ctx.user_data.get("episode"), ctx.bot_data.get("sonarr"))

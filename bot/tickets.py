@@ -520,15 +520,21 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     seerr = ctx.bot_data.get("seerr")
     sonarr = ctx.bot_data.get("sonarr")
     if seerr is not None and sonarr is not None:
+        # Edit BEFORE the network calls: the preview reads Seerr and Sonarr,
+        # and the Fix choices stay off until the menu is drawn below.
+        await q.edit_message_text(f"🔧 Fix #{ticket_id} - checking...")
         try:
-            fix_ctx, _err = await resolve_fix_context(
-                seerr, ticket_id, action_name="Fix")
+            fix_ctx, err = await resolve_fix_context(
+                seerr, ticket_id, action_name="Fix", preview=True)
             if fix_ctx is not None:
                 target = await describe_fix_target(
                     fix_ctx.media, fix_ctx.season, fix_ctx.episode, sonarr)
+            elif err is not None and err.startswith(_FETCH_FAILED):
+                target = _PREVIEW_UNKNOWN
         except Exception:
             logger.warning("couldn't preview the Fix target for #%d",
                            ticket_id, exc_info=True)
+            target = _PREVIEW_UNKNOWN
     await q.edit_message_text(
         f"🔧 Fix #{ticket_id} - how?\n"
         + (f"{target}\n" if target else "")
@@ -570,10 +576,14 @@ _FETCH_FAILED = "Couldn't fetch ticket"
 
 async def resolve_fix_context(
     seerr: SeerrClient, ticket_id: int, *, action_name: str,
+    preview: bool = False,
 ) -> tuple[Optional[_FixContext], Optional[str]]:
     """Fetch the ticket + media title + tvdb_id and return a _FixContext.
     On any unrecoverable failure returns (None, user_facing_error_string).
-    Best-effort lookups (title, tvdb_id) don't fail the whole flow."""
+    Best-effort lookups (title, tvdb_id) don't fail the whole flow.
+    preview: the caller only needs the media ids to describe the target, so
+    the title lookup (label unused) and, for a movie, the TV lookup are
+    skipped."""
     try:
         ticket = await seerr.get_issue(ticket_id)
     except Exception as exc:
@@ -600,10 +610,11 @@ async def resolve_fix_context(
     media: dict = {"type": media_type, "tmdb_id": tmdb_id}
     label_title = ""
     label_year = ""
-    try:
-        label_title, label_year = await seerr.get_media_title(media_type, tmdb_id)
-    except Exception as exc:
-        logger.exception("get_media_title failed for #%d", ticket_id, exc_info=exc)
+    if not preview:
+        try:
+            label_title, label_year = await seerr.get_media_title(media_type, tmdb_id)
+        except Exception as exc:
+            logger.exception("get_media_title failed for #%d", ticket_id, exc_info=exc)
     if media_type == "tv":
         try:
             _seasons, tvdb_id = await seerr.get_tv_seasons(tmdb_id)
@@ -1214,6 +1225,9 @@ async def run_arr_action(
     return FixResult.failed("Unknown media type.")
 
 
+_PREVIEW_UNKNOWN = "Sonarr: couldn't check which episode this is."
+
+
 async def describe_fix_target(
     media: dict, season: Optional[int], episode: Optional[int],
     sonarr: Optional[SonarrClient],
@@ -1221,14 +1235,17 @@ async def describe_fix_target(
     """For a TV episode Fix: the Sonarr episode (and any other episodes its
     file holds) the typed number resolves to, shown before the file is
     deleted so a wrong tap is visible. '' for movies, whole seasons, or when
-    Sonarr or the TVDb id is missing. Never raises."""
+    Sonarr is missing; "couldn't check" when the TVDb id is missing. Never
+    raises."""
     if (media.get("type") != "tv" or sonarr is None or not episode
-            or season is None or not media.get("tvdb_id")):
+            or season is None):
         return ""
+    if not media.get("tvdb_id"):
+        return _PREVIEW_UNKNOWN
     try:
         return await sonarr.describe_episode(media["tvdb_id"], season, episode)
     except Exception:
         logger.warning("couldn't preview the Sonarr episode", exc_info=True)
-        return "Sonarr: couldn't check which episode this is."
+        return _PREVIEW_UNKNOWN
 
 

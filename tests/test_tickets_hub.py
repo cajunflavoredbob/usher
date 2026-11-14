@@ -435,7 +435,7 @@ async def test_submenu_back_from_list_detail_keeps_tickets_back():
     for handler, data in ((tk_close_menu, "tkc:5"), (tk_fix, "tkf:5")):
         upd = _from_list_detail(make_update(callback_data=data, user_id=ADMIN_ID))
         await handler(upd, ctx)
-        flat = _flat(upd.callback_query.edits[0]["reply_markup"])
+        flat = _flat(upd.callback_query.edits[-1]["reply_markup"])
         assert ("⬅️ Back", f"{TK_BACK_LIST}:5") in flat
     ctx.bot_data["seerr"].get_issue.return_value = _ticket(id=5)
     upd = make_update(callback_data=f"{TK_BACK_LIST}:5", user_id=ADMIN_ID)
