@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Automatic follows**: when one daily pass follows several shows for a user at once (as on the first pass after they Link or switch automatic follows on), they get one summary listing the shows, with a numbered 🔕 Unfollow button for each of the first 25, instead of one message per show. A pass that follows a single show still sends the single message.
 - **Menu order**: the command menu and the /start and /help list now run /admin (the Admin only), /request, /tickets, /account, then /help. /admin used to come last and /account first.
 
 ## [0.20.0] - 2026-11-14

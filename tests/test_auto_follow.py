@@ -128,3 +128,48 @@ async def test_without_tautulli_nothing_runs(fresh_store):
     app.bot_data["tautulli"] = None
     await run_auto_follow(app)
     assert await fresh_store.list_follows(USER) == []
+
+
+async def test_several_new_follows_in_one_pass_send_one_summary(fresh_store):
+    rows = [_row(1, show=7), _row(2, show=7), _row(3, show=8), _row(4, show=8)]
+    app = await _setup(fresh_store, rows)
+    tau = app.bot_data["tautulli"]
+    tau.get_metadata.side_effect = lambda key: {"guids": [
+        f"tmdb://{1000 + int(key)}", "tvdb://1"]}
+    await run_auto_follow(app)
+    assert {f[1] for f in await fresh_store.list_follows(USER)} == {1007, 1008}
+    assert len(_sends(app)) == 1
+    call = _sends(app)[0]
+    assert call.kwargs["text"].count("Breaking Bad") == 2
+    btns = [(b.text, b.callback_data)
+            for r in call.kwargs["reply_markup"].inline_keyboard for b in r]
+    assert btns == [("🔕 1", "foldl:1007"), ("🔕 2", "foldl:1008")]
+
+
+async def test_a_long_first_batch_lists_the_first_titles_and_a_count(fresh_store):
+    rows = [_row(ep, show=s) for s in range(100, 160) for ep in (s * 10, s * 10 + 1)]
+    app = await _setup(fresh_store, rows)
+    app.bot_data["tautulli"].get_metadata.side_effect = lambda key: {
+        "guids": [f"tmdb://{key}"]}
+    await run_auto_follow(app)
+    assert len(await fresh_store.list_follows(USER)) == 60
+    assert len(_sends(app)) == 1
+    call = _sends(app)[0]
+    assert "and 35 more" in call.kwargs["text"]
+    assert len(call.kwargs["text"]) < 4096
+    assert sum(len(r) for r in call.kwargs["reply_markup"].inline_keyboard) == 25
+
+
+async def test_unfollow_on_a_summary_keeps_the_number_and_other_buttons():
+    from unittest.mock import MagicMock
+    from telegram import InlineKeyboardMarkup
+    from bot.follows import _swap_button, follow_button
+    q = MagicMock()
+    q.message.reply_markup = InlineKeyboardMarkup(
+        [[follow_button(1, True, "1"), follow_button(2, True, "2")]])
+    q.edit_message_reply_markup = AsyncMock()
+    await _swap_button(q, 2, False)
+    rows = q.edit_message_reply_markup.call_args.kwargs[
+        "reply_markup"].inline_keyboard
+    assert [(b.text, b.callback_data) for b in rows[0]] == [
+        ("🔕 1", "foldl:1"), ("➕ 2", "folad:2")]

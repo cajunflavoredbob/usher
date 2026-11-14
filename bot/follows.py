@@ -33,12 +33,21 @@ logger = logging.getLogger("usher")
 FOLLOWS_SHOWN_MAX = 60
 
 
-def follow_button(tmdb_id: int, following: bool) -> InlineKeyboardButton:
+def follow_button(tmdb_id: int, following: bool,
+                  name: Optional[str] = None) -> InlineKeyboardButton:
+    """`name` replaces the Follow or Unfollow word, as in the numbered
+    buttons of an automatic-follow summary ("🔕 3")."""
     if following:
-        return InlineKeyboardButton("🔕 Unfollow",
+        return InlineKeyboardButton(f"🔕 {name or 'Unfollow'}",
                                     callback_data=f"{FOLLOW_DEL}:{tmdb_id}")
-    return InlineKeyboardButton("➕ Follow",
+    return InlineKeyboardButton(f"➕ {name or 'Follow'}",
                                 callback_data=f"{FOLLOW_ADD}:{tmdb_id}")
+
+
+def _button_name(text: str) -> Optional[str]:
+    """The name a button was made with, or None for the plain labels."""
+    name = text.split(" ", 1)[1] if " " in text else ""
+    return None if name in ("", "Follow", "Unfollow") else name
 
 
 async def follow_state(bot_data: dict, telegram_id: int,
@@ -86,7 +95,8 @@ async def _swap_button(q, tmdb_id: int, following: bool) -> None:
         for btn in row:
             data = getattr(btn, "callback_data", None)
             if data in (f"{FOLLOW_ADD}:{tmdb_id}", f"{FOLLOW_DEL}:{tmdb_id}"):
-                btn = follow_button(tmdb_id, following)
+                btn = follow_button(tmdb_id, following,
+                                    _button_name(btn.text or ""))
             new_row.append(btn)
         rows.append(new_row)
     try:

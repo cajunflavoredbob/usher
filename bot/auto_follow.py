@@ -3,9 +3,11 @@
 For each Linked user who is also a Tautulli user (matched by Plex username),
 shows with 2 or more distinct episodes watched in the last 30 days get a
 Follow with `auto` set, unless the user already has a row for that show
-(active, or removed by them) or switched automatic follows off. The first
-automatic Follow of a show sends the user one message with Unfollow; a
-re-run finds the row and does nothing."""
+(active, or removed by them) or switched automatic follows off. A pass that
+adds one Follow for a user sends one message with Unfollow; a pass that adds
+several (the first run after a user is Linked or switches this on) sends one
+summary with a numbered Unfollow button per title. A re-run finds the rows
+and does nothing."""
 from __future__ import annotations
 
 import html
@@ -25,6 +27,7 @@ AUTO_FOLLOW_FIRST_DELAY_S = 300
 WINDOW_DAYS = 30
 MIN_EPISODES = 2
 HISTORY_LENGTH = 1000
+SUMMARY_TITLES_MAX = 25
 
 
 async def _watched_shows(tautulli, user_id) -> dict:
@@ -65,6 +68,41 @@ async def _notify(app, chat_id: int, tmdb_id: int, title: str) -> None:
         reply_markup=InlineKeyboardMarkup([row]))
 
 
+async def _notify_many(app, chat_id: int, added: list) -> None:
+    """One summary for several new Follows: a numbered list with a numbered
+    Unfollow button for each title shown."""
+    shown = added[:SUMMARY_TITLES_MAX]
+    lines = [f"➕ You've been watching these {len(added)} shows, so I "
+             "started following them. I'll ping you for each new episode.",
+             ""]
+    rows: list = []
+    for n, (tmdb_id, title) in enumerate(shown, start=1):
+        lines.append(f"{n}. 📺 <b>{html.escape(title)}</b>")
+        if (n - 1) % 4 == 0:
+            rows.append([])
+        rows[-1].append(follow_button(tmdb_id, True, str(n)))
+    if len(added) > len(shown):
+        lines.append(f"…and {len(added) - len(shown)} more, under "
+                     "Requests, 📺 Follows.")
+    lines += ["", "🔕 = unfollow. You can switch automatic follows off "
+              "under Account, 🔔 Notices."]
+    await app.bot.send_message(
+        chat_id=chat_id, parse_mode="HTML", disable_web_page_preview=True,
+        text="\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
+
+
+async def _tell(app, chat_id: int, added: list) -> None:
+    """One message for one new Follow, one summary for several."""
+    try:
+        if len(added) == 1:
+            await _notify(app, chat_id, *added[0])
+        elif added:
+            await _notify_many(app, chat_id, added)
+    except Exception:
+        logger.warning("Auto-follow message failed (telegram_id=%d)",
+                       chat_id, exc_info=True)
+
+
 async def run_auto_follow(app) -> None:
     """One pass over every Linked user. A failure for one user or show is
     logged and the pass goes on."""
@@ -88,6 +126,7 @@ async def run_auto_follow(app) -> None:
             logger.warning("Auto-follow read failed (telegram_id=%d)",
                            telegram_id, exc_info=True)
             continue
+        added: list = []
         for show_key, (title, count) in shows.items():
             if count < MIN_EPISODES:
                 continue
@@ -102,11 +141,12 @@ async def run_auto_follow(app) -> None:
                 if not await store.add_follow(telegram_id, tmdb, tvdb or 0,
                                               label, auto=True):
                     continue
-                if tell:
-                    await _notify(app, telegram_id, tmdb, label)
+                added.append((tmdb, label))
             except Exception:
                 logger.warning("Auto-follow failed (telegram_id=%d show=%s)",
                                telegram_id, show_key, exc_info=True)
+        if tell:
+            await _tell(app, telegram_id, added)
 
 
 async def auto_follow_job(ctx) -> None:
