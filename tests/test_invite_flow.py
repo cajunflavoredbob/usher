@@ -799,3 +799,19 @@ async def test_a_failed_removal_keeps_the_link(fresh_store):
     except RuntimeError:
         pass
     assert await fresh_store.get(5) is not None
+
+
+async def test_a_share_plex_404s_on_is_forgotten_and_its_holder_unlinked(
+        fresh_store):
+    from bot.invite_flow import remove_share_and_forget
+    from http_util import NotFoundAPIError
+    await _linked(fresh_store, 5, "friend")
+    await fresh_store.set_share_expiry(71, "friend@example.com", "friend",
+                                       "2031-01-01 00:00:00")
+    share = PlexShare(id=71, email="friend@example.com", username="friend",
+                      accepted=True, all_libraries=True)
+    plex = _plex_with_share(share)
+    plex.remove_share.side_effect = NotFoundAPIError("gone", status_code=404)
+    assert await remove_share_and_forget(fresh_store, plex, "tok", 71) is True
+    assert await fresh_store.get(5) is None
+    assert await fresh_store.get_share_expiry(71) is None

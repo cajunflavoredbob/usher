@@ -678,7 +678,7 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
         share_expiry_action,
         pattern=(fr"^({SHARE_EXTEND}|{SHARE_LET_END}|{SHARE_REMOVE_NOW}"
                  fr"|{SHARE_REMOVE_YES}|{SHARE_KEEP}|{SHARE_RETRY}"
-                 fr"|{SHARE_REMOVE_RETRY}):\d+$")))
+                 fr"|{SHARE_REMOVE_RETRY}):\d+(:\d{{14}})?$")))
     app.add_handler(CallbackQueryHandler(share_remove,
                                          pattern=fr"^{SHARE_REMOVE}:\d+$"))
     app.add_handler(CallbackQueryHandler(share_matches,

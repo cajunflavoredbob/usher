@@ -1086,12 +1086,24 @@ async def remove_share_and_forget(store: UserStore, plex: PlexClient,
     try:
         await plex.remove_share(token, share_id)
     except NotFoundAPIError:
-        await store.clear_share_expiry(share_id)
-        await _unlink_holder(store, holder, share_id)
+        await forget_gone_share(store, share_id, holder)
         return True
     await store.clear_share_expiry(share_id)
     await _unlink_holder(store, holder, share_id)
     return False
+
+
+async def forget_gone_share(store: UserStore, share_id: int,
+                            holder: Optional[str] = None) -> None:
+    """A Share Plex no longer has: drop its Expiry row and unlink the holder,
+    exactly as a removal does. `holder` is the Plex username read before the
+    Share went; None reads the Expiry row's stored username (the row is read
+    before it is dropped). Every "already gone" path calls this."""
+    if holder is None:
+        row = await store.get_share_expiry(share_id)
+        holder = (row.username or "") if row is not None else ""
+    await store.clear_share_expiry(share_id)
+    await _unlink_holder(store, holder, share_id)
 
 
 async def _unlink_holder(store: UserStore, holder: str, share_id: int) -> None:

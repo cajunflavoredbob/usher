@@ -25,7 +25,8 @@ from bot.admin_hub import refuse_outside_admin_dm
 from bot.callback_prefixes import (SHARE_EXTEND, SHARE_KEEP, SHARE_LET_END,
                                    SHARE_REMOVE_NOW, SHARE_REMOVE_RETRY,
                                    SHARE_REMOVE_YES, SHARE_RETRY)
-from bot.invite_flow import remove_share_and_forget, removal_prompt
+from bot.invite_flow import (forget_gone_share, remove_share_and_forget,
+                             removal_prompt)
 from bot.share_expiry import _DB_TIME, expires_at_text, expiry_date_text
 from bot.shared import edit_or_send
 
@@ -62,6 +63,12 @@ def _remove_retry_markup(share_id: int) -> InlineKeyboardMarkup:
         "🔁 Retry", callback_data=f"{SHARE_REMOVE_RETRY}:{share_id}")]])
 
 
+def _stamp_token(expires_at: str) -> str:
+    """The stored date as 14 digits, carried by the Extend button so a second
+    tap (or a tap on an old reminder) can tell the date has moved."""
+    return "".join(ch for ch in expires_at if ch.isdigit())
+
+
 async def _dm(app, chat_id: int, text: str,
               markup: Optional[InlineKeyboardMarkup] = None) -> bool:
     try:
@@ -93,7 +100,8 @@ def _reminder_card(row: ShareExpiry, now: Optional[datetime] = None
     sid = row.share_id
     markup = InlineKeyboardMarkup([[
         InlineKeyboardButton(f"➕ Extend {EXTEND_DAYS} days",
-                             callback_data=f"{SHARE_EXTEND}:{sid}"),
+                             callback_data=(f"{SHARE_EXTEND}:{sid}:"
+                                            f"{_stamp_token(row.expires_at)}")),
         InlineKeyboardButton("👍 Let it end",
                              callback_data=f"{SHARE_LET_END}:{sid}"),
         InlineKeyboardButton("🗑 Remove now",
@@ -176,7 +184,7 @@ async def run_share_expiries(app, now: Optional[datetime] = None) -> None:
         if fresh is None or _parse(fresh.expires_at) > now:
             continue
         if row.share_id not in present:
-            await store.clear_share_expiry(row.share_id)
+            await forget_gone_share(store, row.share_id, fresh.username)
             continue
         try:
             await remove_share_and_forget(store, plex, token, row.share_id)
@@ -201,7 +209,7 @@ async def share_expiry_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def share_expiry_action(update: Update,
                               ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Extend 30 days (shext:<id>), Let it end (shend:<id>), Remove now
+    """Extend 30 days (shext:<id>:<date digits>), Let it end (shend:<id>), Remove now
     (shnow:<id>, which asks to confirm: Remove shnoy:<id>, Keep shnok:<id>)
     and two Retries: shrty:<id> on the job's failure alert, which removes
     only while the date is still due, and shnor:<id> after a failed Remove
@@ -214,15 +222,18 @@ async def share_expiry_action(update: Update,
     q = update.callback_query
     await q.answer()
     try:
-        action, raw = q.data.split(":")
+        action, raw, *rest = q.data.split(":")
         share_id = int(raw)
     except ValueError:
         return
+    token = rest[0] if len(rest) == 1 else None
     store: UserStore = ctx.bot_data["store"]
     row = await store.get_share_expiry(share_id)
     if row is None:
-        await edit_or_send(q, "✅ That Share was already removed, or no "
-                              "longer has an expiry: nothing to do.")
+        await edit_or_send(
+            q, "Nothing was removed: that Share no longer has an expiry "
+               "date. Open the Share view (the Admin Hub's Shares list or "
+               "/uninvite) to check it.")
         return
     who = html.escape(_who(row))
     if action == SHARE_LET_END:
@@ -232,8 +243,19 @@ async def share_expiry_action(update: Update,
     elif action == SHARE_EXTEND:
         base = max(_parse(row.expires_at), datetime.now(timezone.utc))
         new_at = expires_at_text(EXTEND_DAYS, base)
-        await store.set_share_expiry(share_id, row.email, row.username,
-                                     new_at)
+        # A button carries the date its reminder was sent for (an older one
+        # carries none: it compares against the row just read). Only a row
+        # still on that date moves, atomically, so a second tap or an old
+        # reminder cannot extend again.
+        expected = row.expires_at if token is None else token
+        if not await store.extend_share_expiry(share_id, expected, new_at):
+            row = await store.get_share_expiry(share_id)
+            text = ("Nothing was extended: that Share no longer has an "
+                    "expiry date." if row is None
+                    else f"👍 <b>{who}</b> was already extended: now ends "
+                         f"on {expiry_date_text(row.expires_at)}.")
+            await edit_or_send(q, text, parse_mode="HTML")
+            return
         await edit_or_send(
             q, f"➕ <b>{who}</b> now ends on {expiry_date_text(new_at)}.",
             parse_mode="HTML")
@@ -252,7 +274,11 @@ async def share_expiry_action(update: Update,
     else:
         # The confirmed Remove, a Retry after a failed Remove now (shnor),
         # or a Retry of a removal that is still due (shrty, checked above).
-        await _remove_from_button(q, ctx, store, row, who)
+        # A failure keeps the kind of Retry that failed: the date-checked
+        # one is checked again on every tap.
+        retry = (_retry_markup if action == SHARE_RETRY
+                 else _remove_retry_markup)
+        await _remove_from_button(q, ctx, store, row, who, retry)
 
 
 async def _confirm_removal(q, ctx, store: UserStore, row: ShareExpiry) -> None:
@@ -281,7 +307,7 @@ async def _confirm_removal(q, ctx, store: UserStore, row: ShareExpiry) -> None:
         return
     share = next((s for s in shares if s.id == sid), None)
     if share is None:
-        await store.clear_share_expiry(sid)
+        await forget_gone_share(store, sid, row.username)
         await edit_or_send(q, "✅ Already removed.")
         return
     text, _flag = removal_prompt(share)
@@ -296,11 +322,12 @@ async def _confirm_removal(q, ctx, store: UserStore, row: ShareExpiry) -> None:
 
 
 async def _remove_from_button(q, ctx, store: UserStore, row: ShareExpiry,
-                              who: str) -> None:
+                              who: str, retry_markup) -> None:
+    """Remove the Share; a failure keeps `retry_markup`'s Retry on the DM."""
     link = await store.get(ctx.bot_data["admin_id"])
     if link is None or not link.plex_token:
         await edit_or_send(q, "Your /link is no longer usable; /link first.",
-                           reply_markup=_remove_retry_markup(row.share_id))
+                           reply_markup=retry_markup(row.share_id))
         return
     try:
         gone = await remove_share_and_forget(
@@ -312,7 +339,7 @@ async def _remove_from_button(q, ctx, store: UserStore, row: ShareExpiry,
             row.share_id, _stamp(datetime.now(timezone.utc)), error, False)
         await edit_or_send(
             q, f"⚠️ Couldn't remove <b>{who}</b>. {html.escape(error)}",
-            reply_markup=_remove_retry_markup(row.share_id), parse_mode="HTML")
+            reply_markup=retry_markup(row.share_id), parse_mode="HTML")
         return
     await edit_or_send(
         q, "✅ Already removed." if gone else f"✅ Removed <b>{who}</b>.",

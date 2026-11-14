@@ -1216,6 +1216,29 @@ class UserStore:
                     (share_id, email or "", username or "", expires_at))
         await self._run(_do)
 
+    async def extend_share_expiry(self, share_id: int, expected: str,
+                                  expires_at: str) -> bool:
+        """Move an Expiry to `expires_at` only while it is still on
+        `expected` (the stored date, or its digits alone), re-arming the
+        reminders as set_share_expiry does. False when it has moved or is
+        gone, so a double tap extends once."""
+        digits = "".join(ch for ch in expected if ch.isdigit())
+
+        def _do() -> bool:
+            with self._conn() as c:
+                return c.execute(
+                    """
+                    UPDATE share_expiries SET expires_at = ?,
+                        admin_reminded = 0, holder_reminded = 0,
+                        last_attempt_at = NULL, last_error = NULL,
+                        last_alerted_at = NULL
+                    WHERE share_id = ? AND
+                        REPLACE(REPLACE(REPLACE(expires_at, '-', ''), ' ', ''),
+                                ':', '') = ?
+                    """,
+                    (expires_at, share_id, digits)).rowcount > 0
+        return await self._run(_do)
+
     _SHARE_EXPIRY_COLS = (
         "share_id, email, username, expires_at, admin_reminded, "
         "holder_reminded, last_attempt_at, last_error, last_alerted_at")

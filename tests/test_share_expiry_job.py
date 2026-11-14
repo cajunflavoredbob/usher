@@ -71,7 +71,8 @@ async def test_reminder_goes_out_once_to_admin_and_holder(fresh_store):
     admin = _sent_to(app, ADMIN_ID)
     assert len(admin) == 1
     assert _buttons(admin[0]["reply_markup"]) == [
-        f"{SHARE_EXTEND}:1", f"{SHARE_LET_END}:1", f"{SHARE_REMOVE_NOW}:1"]
+        f"{SHARE_EXTEND}:1:20300613110000", f"{SHARE_LET_END}:1",
+        f"{SHARE_REMOVE_NOW}:1"]
     holder = _sent_to(app, HOLDER_ID)
     assert len(holder) == 1
     assert "ask the Admin" in holder[0]["text"]
@@ -312,7 +313,8 @@ async def test_keep_puts_the_reminder_back_and_removes_nothing(fresh_store):
     edit = upd.callback_query.edits[-1]
     assert "access ends on" in edit["text"]
     assert _buttons(edit["reply_markup"]) == [
-        f"{SHARE_EXTEND}:1", f"{SHARE_LET_END}:1", f"{SHARE_REMOVE_NOW}:1"]
+        f"{SHARE_EXTEND}:1:20310101000000", f"{SHARE_LET_END}:1",
+        f"{SHARE_REMOVE_NOW}:1"]
 
 
 async def test_retry_failure_keeps_row_and_offers_retry_again(fresh_store):
@@ -325,7 +327,7 @@ async def test_retry_failure_keeps_row_and_offers_retry_again(fresh_store):
     row = await fresh_store.get_share_expiry(1)
     assert row is not None and row.last_error
     assert _buttons(upd.callback_query.edits[-1]["reply_markup"]) == [
-        f"{SHARE_REMOVE_RETRY}:1"]
+        f"{SHARE_RETRY}:1"]
 
 
 async def test_retry_when_plex_says_gone_drops_the_row(fresh_store):
@@ -489,11 +491,159 @@ async def test_remove_now_without_a_link_keeps_the_reminder_buttons(
     edit = upd.callback_query.edits[-1]
     assert "/link first" in edit["text"]
     assert _buttons(edit["reply_markup"]) == [
-        f"{SHARE_EXTEND}:1", f"{SHARE_LET_END}:1", f"{SHARE_REMOVE_NOW}:1"]
+        f"{SHARE_EXTEND}:1:20310101000000", f"{SHARE_LET_END}:1",
+        f"{SHARE_REMOVE_NOW}:1"]
 
 
 async def test_tap_on_an_old_reminder_after_the_job_removed_the_share(
         fresh_store):
     app, plex = await _setup(fresh_store, [])
     upd = await _gated_tap(app, f"{SHARE_EXTEND}:1")
-    assert "already removed" in upd.callback_query.edits[-1]["text"]
+    text = upd.callback_query.edits[-1]["text"]
+    assert "Nothing was removed" in text and "no longer has an expiry" in text
+    assert "✅" not in text and "Share view" in text
+
+
+async def _two_shares_holder(store, plex_username="alice"):
+    await _holder(store)
+    await store.set_share_expiry(1, "a@example.com", plex_username,
+                                 "2020-01-01 00:00:00")
+
+
+async def test_failed_job_alert_retry_keeps_the_date_checked_retry(
+        fresh_store):
+    """A failed shrty must offer shrty again, so a Share extended before the
+    next tap is left alone instead of removed by an unconditional Retry."""
+    app, plex = await _setup(fresh_store, [_share(1)])
+    await _holder(fresh_store)
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2020-01-01 00:00:00")
+    plex.remove_share.side_effect = TransientAPIError("down", service="Plex")
+    upd = await _gated_tap(app, f"{SHARE_RETRY}:1")
+    failed = upd.callback_query.edits[-1]
+    assert _buttons(failed["reply_markup"]) == [f"{SHARE_RETRY}:1"]
+    # The Admin extends, then taps the old Retry: nothing is removed.
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2031-01-01 00:00:00")
+    plex.remove_share.side_effect = None
+    plex.remove_share.reset_mock()
+    upd = await _gated_tap(app, f"{SHARE_RETRY}:1")
+    plex.remove_share.assert_not_awaited()
+    assert "left as it is" in upd.callback_query.edits[-1]["text"]
+    assert await fresh_store.get(HOLDER_ID) is not None
+
+
+async def test_retry_without_a_link_keeps_the_kind_of_retry(fresh_store):
+    app, _ = await _setup(fresh_store, [_share(1)])
+    await fresh_store.unlink(ADMIN_ID)
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2020-01-01 00:00:00")
+    upd = await _gated_tap(app, f"{SHARE_RETRY}:1")
+    assert _buttons(upd.callback_query.edits[-1]["reply_markup"]) == [
+        f"{SHARE_RETRY}:1"]
+    upd = await _gated_tap(app, f"{SHARE_REMOVE_RETRY}:1")
+    assert _buttons(upd.callback_query.edits[-1]["reply_markup"]) == [
+        f"{SHARE_REMOVE_RETRY}:1"]
+
+
+async def test_failed_confirmed_remove_keeps_the_unconditional_retry(
+        fresh_store):
+    app, plex = await _setup(fresh_store, [_share(1)])
+    plex.remove_share.side_effect = TransientAPIError("down", service="Plex")
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2020-01-01 00:00:00")
+    upd = await _gated_tap(app, f"{SHARE_REMOVE_YES}:1")
+    assert _buttons(upd.callback_query.edits[-1]["reply_markup"]) == [
+        f"{SHARE_REMOVE_RETRY}:1"]
+
+
+async def test_a_second_extend_tap_does_not_extend_again(fresh_store):
+    app, _ = await _setup(fresh_store, [_share(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2031-01-01 00:00:00")
+    data = f"{SHARE_EXTEND}:1:20310101000000"
+    first = await _gated_tap(app, data)
+    assert "now ends on Jan 31, 2031" in first.callback_query.edits[-1]["text"]
+    second = await _gated_tap(app, data)
+    assert (await fresh_store.get_share_expiry(1)).expires_at == \
+        "2031-01-31 00:00:00"
+    text = second.callback_query.edits[-1]["text"]
+    assert "already extended" in text and "Jan 31, 2031" in text
+
+
+async def test_an_old_reminder_cannot_extend_a_moved_date(fresh_store):
+    app, _ = await _setup(fresh_store, [_share(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2031-03-01 00:00:00")
+    upd = await _gated_tap(app, f"{SHARE_EXTEND}:1:20310101000000")
+    assert (await fresh_store.get_share_expiry(1)).expires_at == \
+        "2031-03-01 00:00:00"
+    assert "Mar 1, 2031" in upd.callback_query.edits[-1]["text"]
+
+
+async def test_an_extend_button_from_before_the_date_token_still_works(
+        fresh_store):
+    app, _ = await _setup(fresh_store, [_share(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2031-01-01 00:00:00")
+    await _gated_tap(app, f"{SHARE_EXTEND}:1")
+    assert (await fresh_store.get_share_expiry(1)).expires_at == \
+        "2031-01-31 00:00:00"
+
+
+async def test_extend_pattern_accepts_the_dated_button(fresh_store):
+    """The registered handler pattern takes shext:<id>:<14 digits> and the
+    old shext:<id>, and nothing else shaped differently."""
+    import re
+    from pathlib import Path
+    from unittest.mock import MagicMock
+
+    from telegram.ext import CallbackQueryHandler
+
+    import bot.app as app_mod
+    settings = MagicMock()
+    settings.settings.telegram_bot_token = "123:abc"
+    settings.settings.admin_telegram_id = ADMIN_ID
+    app = app_mod._build_app(settings, b"secret", MagicMock(), MagicMock(),
+                             Path("."), Path("settings.json"), ":memory:",
+                             8080, "127.0.0.1")
+    handler = next(h for g in app.handlers.values() for h in g
+                   if isinstance(h, CallbackQueryHandler)
+                   and h.callback is share_expiry_action)
+    pat = handler.pattern
+    assert isinstance(pat, re.Pattern)
+    assert pat.match(f"{SHARE_EXTEND}:7:20310101000000")
+    assert pat.match(f"{SHARE_EXTEND}:7")
+    assert not pat.match(f"{SHARE_EXTEND}:7:2031")
+
+
+async def test_job_drops_a_share_missing_from_the_listing_and_unlinks_holder(
+        fresh_store):
+    app, plex = await _setup(fresh_store, [])
+    await _two_shares_holder(fresh_store)
+    await run_share_expiries(app, NOW)
+    plex.remove_share.assert_not_awaited()
+    assert await fresh_store.get_share_expiry(1) is None
+    assert await fresh_store.get(HOLDER_ID) is None
+
+
+async def test_remove_now_on_a_gone_share_unlinks_the_holder(fresh_store):
+    app, plex = await _setup(fresh_store, [])
+    await _holder(fresh_store)
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2031-01-01 00:00:00")
+    ctx, upd = _tap(app, f"{SHARE_REMOVE_NOW}:1")
+    await share_expiry_action(upd, ctx)
+    assert await fresh_store.get_share_expiry(1) is None
+    assert await fresh_store.get(HOLDER_ID) is None
+
+
+async def test_a_gone_share_with_no_stored_username_unlinks_nobody(
+        fresh_store):
+    app, _ = await _setup(fresh_store, [])
+    await _holder(fresh_store)
+    await fresh_store.set_share_expiry(1, "a@example.com", "",
+                                       "2020-01-01 00:00:00")
+    await run_share_expiries(app, NOW)
+    assert await fresh_store.get_share_expiry(1) is None
+    assert await fresh_store.get(HOLDER_ID) is not None
