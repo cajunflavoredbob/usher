@@ -1142,7 +1142,7 @@ Post-autofix resolve chain fixes: it was broken end to end.
   Success message updated to reflect the actual end-state. `poll_info` shape unchanged, so the existing post-fix polling in `_run_mark_failed` continues to work without modification.
 
 ### Notes
-- Discovered via ticket #28 (`Mating Season S01E08`): file was a 1.1 GB zero-byte payload (EBML header all `0x00`) that Plex's `/transcode/universal/decision` endpoint rejected with HTTP 400. "Mark Failed" was the right user intent but didn't carry out the file replacement.
+- Discovered via a tester report on a TV episode: the file was a 1.1 GB zero-byte payload (EBML header all `0x00`) that Plex's `/transcode/universal/decision` endpoint rejected with HTTP 400. "Mark Failed" was the right user intent but didn't carry out the file replacement.
 
 ## [0.10.5] - 2026-05-28
 
@@ -1150,7 +1150,7 @@ Post-autofix resolve chain fixes: it was broken end to end.
 - **Ticket detail now includes the original report text.** `IssueListItem` gains a `description` field; `SeerrClient.get_issue` populates it from the first entry in the issue's `comments` array (Seerr stores the original description there at creation time). The `/tickets` drilldown now appends:
   ```
   Description:
-  "subs suck"
+  "subtitles are out of sync"
   ```
   under the metadata block.
 
@@ -1174,7 +1174,7 @@ Post-autofix resolve chain fixes: it was broken end to end.
   Ticket #28
   📺 Mating Season (2026) — S01E08
   Issue: 🎥 Video
-  Reported by: FooManChewy
+  Reported by: alice
   Age: 7h ago
   ```
   Same buttons attached. Refactored into a `_build_ticket_detail` helper shared with `tk_back`.
@@ -1194,7 +1194,7 @@ Post-autofix resolve chain fixes: it was broken end to end.
 
 ### Added
 - **Multi-line search-result buttons.** Long media titles no longer get hard-truncated at ~60 chars. A `\n` is inserted near the middle of long labels so Telegram renders the button on two lines, doubling visible width before any truncation kicks in (cap is now 90 chars).
-- **Specials (S00) included in the TV season picker** as a "Specials" entry. Anime movies / OVAs / tie-in specials often live there; users were previously locked out of reporting issues on them. Discovered via a tester case (Demon Slayer: Infinity Castle = S00E16 of the parent show).
+- **Specials (S00) included in the TV season picker** as a "Specials" entry. Anime movies / OVAs / tie-in specials often live there; users were previously locked out of reporting issues on them. Discovered via a tester case (an anime movie stored as a special of its parent show).
 - **Parent-show re-search fallback.** When a search query contains a separator (`:`, ` - `, ` — `, ` | `) AND every Seerr result is out-of-library, the bot offers a `🔍 Search "..." instead` button using the part before the separator. Same button also shows on the "title isn't in your library" error message, so the user can pivot without restarting `/issue`. Refactored `issue_title` and the new `issue_research_parent` callback to share a `_show_search_results` helper.
 - **Usher version in the "Bot is online" startup DM.** Header is now `👋 Usher vX.Y.Z is online.`
 - **Admin also DM'd on resolved issues.** `handle_seerr_resolved` now sends a notification to the admin (in addition to the reporter) whenever a ticket is resolved, unless the admin IS the reporter. Format: `✅ Issue #N resolved\n<title>\nReported by: <user>`. Filled the gap left when we disabled Seerr's built-in Telegram notification integration in favor of Usher's webhook.
