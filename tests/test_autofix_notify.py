@@ -178,7 +178,7 @@ async def test_corrupt_timeout_at_is_treated_as_timed_out(monkeypatch):
     fix.timeout_at = "not-a-timestamp"
     notified: list[int] = []
 
-    async def fake_notify(_ctx, fx):
+    async def fake_notify(_ctx, fx, _missing=""):
         notified.append(fx.id)
     monkeypatch.setattr(autofix_poll, "_notify_timeout", fake_notify)
 
@@ -212,7 +212,7 @@ async def test_failed_mark_suppresses_timeout_dm(monkeypatch):
     notified: list[int] = []
     fix = _make_fix(timed_out=True)
 
-    async def fake_notify(_ctx, fx):
+    async def fake_notify(_ctx, fx, _missing=""):
         notified.append(fx.id)
     monkeypatch.setattr(autofix_poll, "_notify_timeout", fake_notify)
 

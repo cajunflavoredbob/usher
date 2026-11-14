@@ -9,7 +9,7 @@ import httpx
 
 from fix_result import (FixResult, ReleaseFingerprint, build_fingerprint,
                         find_grab_for_import, parse_queue_records)
-from http_util import (APIError, execute, json_or_raise,
+from http_util import (APIError, NotFoundAPIError, execute, json_or_raise,
                        user_friendly_message)
 
 logger = logging.getLogger("usher." + __name__)
@@ -239,8 +239,11 @@ class SonarrClient:
             await self.trigger_episode_search(episode_ids)
             steps.append("search")
         except APIError as exc:
+            gone = (f" The deleted file also held "
+                    f"{', '.join(episode_code(e) for e in siblings)}."
+                    if siblings and "delete" in steps else "")
             return FixResult.partial(
-                f"Cleaned up but couldn't trigger search {user_friendly_message(exc)}",
+                f"Cleaned up but couldn't trigger search {user_friendly_message(exc)}{gone}",
                 steps_done=steps, poll_info=poll_info, before=before,
             )
 
@@ -314,8 +317,11 @@ class SonarrClient:
                            exc_info=True)
             return "Sonarr: couldn't check which episode this is."
         if err is not None:
-            return f"Sonarr: {err.message}"
-        line = f'Sonarr: {episode_code(match)} "{match.title}"'
+            # Some messages already name Sonarr ("Sonarr lookup failed ...").
+            return (err.message if err.message.startswith("Sonarr")
+                    else f"Sonarr: {err.message}")
+        title = f' "{match.title}"' if match.title and match.title != "?" else ""
+        line = f"Sonarr: {episode_code(match)}{title}"
         note = _sibling_note(siblings)
         return f"{line}\n{note}" if note else line
 
@@ -331,9 +337,9 @@ class SonarrClient:
 
     # NOTE: the whole-season workflow (auto_fix_season / SeasonSearch /
     # season_files_present) was removed in 0.12.0 as dead code -- no caller
-    # ever produced a season-shaped poll_info. The DB columns
-    # (sonarr_season, expected_episode_ids) are kept for when the feature
-    # is actually wired up.
+    # ever produced a season-shaped poll_info. The sonarr_season column is
+    # kept for when the feature is actually wired up; expected_episode_ids is
+    # live again, holding the episodes one deleted file held.
 
     async def mark_failed_episode(
         self, tvdb_id: int, season: int, episode: int
@@ -382,6 +388,21 @@ class SonarrClient:
                             and not rec.get("episodes")]
             records = filtered
         return parse_queue_records(records)
+
+    async def episode_file_states(self, episode_ids: list[int]) -> list[tuple[str, bool]]:
+        """(episode code, has a file) for each id. An episode Sonarr no
+        longer knows (404) is left out."""
+        out: list[tuple[str, bool]] = []
+        for episode_id in episode_ids:
+            try:
+                r = await execute(self._client, "GET", f"/episode/{episode_id}",
+                                  service=_SERVICE)
+            except NotFoundAPIError:
+                continue
+            e = json_or_raise(r, service=_SERVICE, what="episode detail")
+            code = f"S{e.get('seasonNumber') or 0:02d}E{e.get('episodeNumber') or 0:02d}"
+            out.append((code, bool(e.get("hasFile"))))
+        return out
 
     async def episode_has_file(self, episode_id: int) -> bool:
         r = await execute(self._client, "GET", f"/episode/{episode_id}",

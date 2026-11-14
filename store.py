@@ -33,6 +33,7 @@ from fix_kinds import (KIND_AUTO_FIX, OUTCOME_COMPLETE, OUTCOME_FAILED,
                        OUTCOME_PENDING, OUTCOME_REPEAT, OUTCOME_TIMEOUT)
 from former_name import legacy_env
 from fix_result import ReleaseFingerprint
+from http_util import NotFoundAPIError
 from fsutil import atomic_write_bytes
 
 logger = logging.getLogger("usher." + __name__)
@@ -176,7 +177,7 @@ class PendingAutofix:
     sonarr_series_id: Optional[int]     # for tv
     sonarr_episode_id: Optional[int]    # for single-episode tv
     sonarr_season: Optional[int]        # for whole-season tv
-    expected_episode_ids: list[int]     # episodes that had files at fix time (whole-season)
+    expected_episode_ids: list[int]     # episodes the deleted file held (tv)
     label: str                          # for the notification text
     ticket_id: int
     ticket_url: str
@@ -203,15 +204,26 @@ class PendingAutofix:
     async def is_complete(self, radarr, sonarr) -> tuple[bool, str]:
         """Returns (done, extra_suffix). Polymorphic dispatch over media_type
         lives here so the poller stays flat. Only {movie_id} and
-        {series_id, episode_id} poll shapes exist; the whole-season branch
-        was removed as dead code in 0.12.0 (columns kept)."""
+        {series_id, episode_id, episode_ids} poll shapes exist; the
+        whole-season branch was removed as dead code in 0.12.0."""
         if self.media_type == "movie" and radarr and self.radarr_movie_id:
             return await radarr.movie_has_file(self.radarr_movie_id), ""
         if self.media_type == "tv" and sonarr and self.sonarr_episode_id:
             # Every episode the deleted file held must have a file again.
-            # Rows from before sibling tracking have an empty list.
+            # Rows from before sibling tracking have an empty list. A
+            # sibling Sonarr no longer knows (404) is dropped from tracking
+            # and the rest keep polling; the reported episode's 404 still
+            # propagates (the media is gone).
             for episode_id in self.tracked_episode_ids():
-                if not await sonarr.episode_has_file(episode_id):
+                try:
+                    has_file = await sonarr.episode_has_file(episode_id)
+                except NotFoundAPIError:
+                    if episode_id == self.sonarr_episode_id:
+                        raise
+                    self.expected_episode_ids = [
+                        i for i in self.expected_episode_ids if i != episode_id]
+                    continue
+                if not has_file:
                     return False, ""
             return True, ""
         return False, ""
@@ -1538,10 +1550,10 @@ class UserStore:
         radarr_movie_id: Optional[int] = None,
         sonarr_series_id: Optional[int] = None,
         sonarr_episode_id: Optional[int] = None,
-        # sonarr_season / expected_episode_ids: no production caller passes
-        # these anymore (the whole-season workflow was removed in 0.12.0), but
-        # the columns are deliberately retained for a future re-wiring, so the
-        # params stay to populate them. Only tests exercise them today.
+        # sonarr_season: no production caller passes it anymore (the
+        # whole-season workflow was removed in 0.12.0), but the column is
+        # kept for a future re-wiring. expected_episode_ids is live: the
+        # episodes the deleted file held.
         sonarr_season: Optional[int] = None,
         expected_episode_ids: Optional[list[int]] = None,
         message_id: Optional[int] = None,

@@ -90,10 +90,13 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 except Exception:
                     logger.exception("couldn't mark fix %d timed out; retrying next tick", fix.id)
                     continue
+                missing = await _missing_episodes(fix, sonarr)
                 await _paint_progress(
                     ctx, store, fix,
-                    final=f"⏱️ Timed out after {AUTOFIX_TIMEOUT_HOURS}h, no new file imported.")
-                await _notify_timeout(ctx, fix)
+                    final=(f"⏱️ Timed out after {AUTOFIX_TIMEOUT_HOURS}h, "
+                           + (f"still missing {missing}." if missing
+                              else "no new file imported.")))
+                await _notify_timeout(ctx, fix, missing)
                 continue
 
             # Poll for completion (dispatch lives on PendingAutofix.is_complete)
@@ -139,6 +142,25 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 logger.exception("poll failed for fix %d", fix.id, exc_info=exc)
         finally:
             _inflight.discard(fix.id)
+
+
+async def _missing_episodes(fix, sonarr) -> str:
+    """For a timed-out TV Fix whose file held several episodes: the codes
+    of the ones still without a file ("S01E02, S01E03"), but only when at
+    least one other tracked episode did get its file back. '' otherwise
+    (nothing came back, a single episode, a movie, or Sonarr can't say)."""
+    ids = fix.tracked_episode_ids()
+    if fix.media_type != "tv" or sonarr is None or len(ids) < 2:
+        return ""
+    try:
+        states = await sonarr.episode_file_states(ids)
+    except Exception:
+        logger.warning("couldn't check which episodes are missing for fix %d",
+                       fix.id, exc_info=True)
+        return ""
+    if not any(has for _, has in states):
+        return ""
+    return ", ".join(code for code, has in states if not has)
 
 
 async def _detect_repeat(fix, radarr, sonarr) -> Optional[ReleaseFingerprint]:
@@ -436,13 +458,15 @@ async def _notify_complete(ctx: ContextTypes.DEFAULT_TYPE, fix, extra: str = "",
         logger.exception("notify_complete send_message failed for fix %d", fix.id, exc_info=exc)
 
 
-async def _notify_timeout(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:
+async def _notify_timeout(ctx: ContextTypes.DEFAULT_TYPE, fix,
+                          missing: str = "") -> None:
     # The admin follows up on their own Tickets; don't tell them to comment
     # "for the admin".
     is_admin = fix.user_id == ctx.bot_data.get("admin_id")
     lines = [
         f"⏱️ {_fix_name(fix)} timed out ({AUTOFIX_TIMEOUT_HOURS}h) for <b>{html.escape(fix.label)}</b>.",
-        "No new file was imported."
+        (f"Still no new file for {html.escape(missing)}." if missing
+         else "No new file was imported.")
         + (" Check Sonarr/Radarr to see if a release was grabbed." if is_admin else ""),
         *_ticket_line(fix),
         "",

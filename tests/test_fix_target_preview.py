@@ -71,7 +71,7 @@ async def test_describe_says_when_the_lookup_fails(monkeypatch):
         return None
     monkeypatch.setattr("http_util.asyncio.sleep", _no_sleep)
     text = await _sonarr(None).describe_episode(42, 1, 1)
-    assert text.startswith("Sonarr: Sonarr episode lookup failed")
+    assert text.startswith("Sonarr episode lookup failed")
 
 
 async def test_describe_fix_target_is_empty_without_an_episode_or_sonarr():
@@ -88,7 +88,7 @@ async def test_reporter_confirm_shows_the_sonarr_episode():
     ctx.bot_data["sonarr"] = _sonarr(EPS)
     upd = make_update(callback_data=f"{TICKET_AUTOFIX_OFFER}:1:yes", user_id=USER_ID)
     await ticket_offer_autofix(upd, ctx)
-    text = upd.callback_query.edits[0]["text"]
+    text = upd.callback_query.edits[-1]["text"]
     assert 'Sonarr: S01E03 "Third"' in text
     assert "delete the current file" in text
 
@@ -101,7 +101,7 @@ async def test_reporter_confirm_still_asks_when_sonarr_lookup_fails():
         return_value="Sonarr: couldn't check which episode this is.")
     upd = make_update(callback_data=f"{TICKET_AUTOFIX_OFFER}:1:yes", user_id=USER_ID)
     await ticket_offer_autofix(upd, ctx)
-    text = upd.callback_query.edits[0]["text"]
+    text = upd.callback_query.edits[-1]["text"]
     assert "couldn't check which episode" in text
     assert "Confirm?" in text
 
@@ -116,7 +116,7 @@ async def test_admin_fix_menu_shows_the_sonarr_episode():
     ctx.bot_data["sonarr"] = _sonarr(EPS)
     upd = make_update(callback_data="tkf:5", user_id=ADMIN_ID)
     await tk_fix(upd, ctx)
-    text = upd.callback_query.edits[0]["text"]
+    text = upd.callback_query.edits[-1]["text"]
     assert 'Sonarr: S01E03 "Third"' in text
     assert "delete the current file" in text
 
