@@ -39,6 +39,10 @@ from _version import __version__ as USHER_VERSION
 from bot.autofix_poll import poll_pending_autofixes
 from bot.progress_card import poll_progress_cards
 from bot.callback_prefixes import (
+    ACCESS_ASK,
+    ACCESS_CANCEL,
+    ACCESS_IGNORE,
+    ACCESS_SEND,
     ACCOUNT_UNLINK,
     ADMIN_INACTIVE,
     ADMIN_SHARES,
@@ -90,6 +94,8 @@ from bot.downloads import downloads
 from bot.nowplaying import now_playing_section, stop_ask, stop_confirmed
 from bot.alarms import (ALARM_FIRST_DELAY_S, ALARM_INTERVAL_S, check_alarms,
                         status_section as alarms_section)
+from bot.access_asks import (access_ask_cancel, access_ask_ignore,
+                            access_ask_send, access_ask_start)
 from bot.hub import end_markup, hub_open_callback
 from bot.link_flow import (_link_conversation, account_unlink, cmd_account,
                            cmd_link_didnt_work, cmd_unlink)
@@ -573,6 +579,16 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
         downloads,
         pattern=(fr"^({DOWNLOADS_VIEW}|{DOWNLOADS_PAUSE}|{DOWNLOADS_PAUSE_30}"
                  fr"|{DOWNLOADS_RESUME}|{DOWNLOADS_LIMIT}:\d+)$")))
+    # Access asks: the person's Ask / Send / Cancel and the Admin DM's Ignore
+    # (Approve is an invite-conversation entry).
+    app.add_handler(CallbackQueryHandler(access_ask_start,
+                                         pattern=fr"^{ACCESS_ASK}$"))
+    app.add_handler(CallbackQueryHandler(access_ask_send,
+                                         pattern=fr"^{ACCESS_SEND}$"))
+    app.add_handler(CallbackQueryHandler(access_ask_cancel,
+                                         pattern=fr"^{ACCESS_CANCEL}$"))
+    app.add_handler(CallbackQueryHandler(access_ask_ignore,
+                                         pattern=fr"^{ACCESS_IGNORE}:\d+$"))
     app.add_handler(CallbackQueryHandler(stop_ask,
                                          pattern=fr"^{STOP_ASK}:\w+$"))
     app.add_handler(CallbackQueryHandler(

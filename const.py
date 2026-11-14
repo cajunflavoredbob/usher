@@ -86,3 +86,10 @@ INVITE_FLOW_TIMEOUT_S: Final = 600     # 10 min
 # token) stays valid. Matches LINK_FLOW_TIMEOUT_S so a resume can survive
 # the full strong-PIN window but a stale draft can't fire hours later.
 RELINK_RESUME_TTL_S: Final = 1800      # 30 min
+
+# Access asks: a stranger's request for an Invite.
+ACCESS_ASK_MAX_OPEN: Final = 10        # open asks at once
+ACCESS_ASK_IGNORE_DAYS: Final = 7      # no new ask this long after an Ignore
+ACCESS_ASK_KEEP_DAYS: Final = 30       # asks older than this are pruned
+ACCESS_ASK_TOKEN_TTL_S: Final = 3600   # how long the fresh Plex sign-in is
+                                       # kept in memory for the Send tap

@@ -129,3 +129,12 @@ STOP_ASK: Final = "stk"               # stk:<token> a Now playing Stop button
                                       # -> confirm card (Admin, DM only)
 STOP_GO: Final = "stg"                # stg:<token> confirmed Stop, no message
 STOP_MSG: Final = "stm"               # stm:<token> Stop with the default message
+
+# Access asks (a stranger asks the Admin for an Invite)
+ACCESS_ASK: Final = "acsk"            # "Ask for access" on the rejected-sign-in
+                                      # message -> preview card
+ACCESS_SEND: Final = "acss"           # preview card's Send
+ACCESS_CANCEL: Final = "acsc"         # preview card's Cancel
+ACCESS_APPROVE: Final = "acap"        # acap:<ask_id> Admin DM Approve (invite
+                                      # conversation entry point)
+ACCESS_IGNORE: Final = "acig"         # acig:<ask_id> Admin DM Ignore

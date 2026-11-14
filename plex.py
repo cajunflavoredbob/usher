@@ -66,6 +66,14 @@ class PlexUser:
     username: str
 
 
+@dataclass
+class PlexAccount:
+    """A Plex account's username and email, read only when someone sends an
+    Access ask (a Link never stores the email)."""
+    username: str
+    email: str
+
+
 class PlexClient:
     def __init__(self, client_id_path: str | Path = "/data/client_id"):
         self.client_id_path = Path(client_id_path)
@@ -231,4 +239,15 @@ class PlexClient:
         return PlexUser(
             uuid=d.get("uuid", ""),
             username=d.get("username", "") or d.get("title", ""),
+        )
+
+    async def get_account(self, auth_token: str) -> PlexAccount:
+        """The account's username and email, for an Access ask."""
+        r = await execute(self._http, "GET", f"{PLEX_API_BASE}/user",
+                          service=_SERVICE,
+                          headers={"X-Plex-Token": auth_token})
+        d = json_or_raise(r, service=_SERVICE, what="user lookup")
+        return PlexAccount(
+            username=d.get("username", "") or d.get("title", ""),
+            email=d.get("email", "") or "",
         )

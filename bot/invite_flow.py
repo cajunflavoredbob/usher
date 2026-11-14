@@ -43,8 +43,10 @@ from plex import PlexClient, PlexShare
 from store import UserStore
 from tautulli import match_share_user
 
+from bot.access_asks import approve_access_ask
 from bot.admin_hub import ADMIN_HUB, refuse_outside_admin_dm
 from bot.callback_prefixes import (
+    ACCESS_APPROVE,
     ADMIN_INACTIVE,
     ADMIN_INVITE,
     ADMIN_SHARES,
@@ -79,7 +81,7 @@ _STALE_INVITE_TOAST = "That invite menu is stale: /invite to start over."
 # inv_version is deliberately NOT here: the stale-menu guard depends on the
 # counter surviving every reset (same lesson as rq_search_version).
 _INV_KEYS = ("inv_email", "inv_sections", "inv_selected", "inv_machine",
-             "inv_server_name", "inv_submitting")
+             "inv_server_name", "inv_submitting", "inv_access_ask")
 
 
 def _looks_like_email(s: str) -> bool:
@@ -151,6 +153,10 @@ def _invite_conversation() -> ConversationHandler:
         entry_points=[
             CommandHandler("invite", invite_start),
             CallbackQueryHandler(invite_hub_start, pattern=fr"^{ADMIN_INVITE}$"),
+            # Approve on an Access ask DM: the same flow with the ask's
+            # email filled in, starting at the Library picker.
+            CallbackQueryHandler(invite_access_start,
+                                 pattern=fr"^{ACCESS_APPROVE}:\d+$"),
         ],
         states={
             INV_EMAIL: [
@@ -184,6 +190,7 @@ def _invite_conversation() -> ConversationHandler:
 
 async def invite_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     set_hub_origin(ctx, None)
+    ctx.user_data.pop("inv_access_ask", None)
     token = await _admin_gate(update, ctx)
     if token is None:
         return ConversationHandler.END
@@ -205,11 +212,48 @@ async def invite_hub_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
     await q.answer()
     force_end_flow_conversations(ctx, update)
     set_hub_origin(ctx, ADMIN_HUB)
+    ctx.user_data.pop("inv_access_ask", None)
     if await _admin_gate(update, ctx, ADMIN_HUB) is None:
         return ConversationHandler.END
     await edit_or_send(
         q, "Who am I inviting? Reply with their email (or Plex username).")
     return INV_EMAIL
+
+
+async def invite_access_start(update: Update,
+                              ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Approve on an Access ask DM: enter the invite flow with the ask's
+    email filled in, straight at the Library picker. Admin and DM only. The
+    DM itself is never edited here, so Approve stays on it until the Invite
+    is sent (cancelling leaves the ask open)."""
+    if await refuse_outside_admin_dm(update, ctx):
+        return ConversationHandler.END
+    q = update.callback_query
+    try:
+        ask_id = int(q.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await q.answer()
+        return ConversationHandler.END
+    store: UserStore = ctx.bot_data["store"]
+    ask = await store.get_access_ask(ask_id)
+    if ask is None or ask.status != "open":
+        await q.answer("That ask was already handled.", show_alert=True)
+        return ConversationHandler.END
+    await q.answer()
+    force_end_flow_conversations(ctx, update)
+    set_hub_origin(ctx, None)
+    _clear(ctx)
+    link = await store.get(update.effective_user.id)
+    if link is None or not link.plex_token:
+        await q.message.reply_text(_NOT_LINKED)
+        return ConversationHandler.END
+    who = ask.plex_email or ask.plex_username
+    if not who:
+        await q.message.reply_text(
+            "That ask has no Plex email or username: /invite them by hand.")
+        return ConversationHandler.END
+    ctx.user_data["inv_access_ask"] = ask.id
+    return await _accept_email(update, ctx, who)
 
 
 async def invite_email(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
@@ -224,6 +268,9 @@ async def _accept_email(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             "That doesn't look like an email or username. Try again, or /cancel.")
         return INV_EMAIL
     ctx.user_data["inv_email"] = email
+    # An Approve starts on the Access ask DM: failures must reply, not edit
+    # the DM and lose its text and buttons.
+    edit = "inv_access_ask" not in ctx.user_data
     await send_typing(update, ctx)
     store: UserStore = ctx.bot_data["store"]
     link = await store.get(update.effective_user.id)
@@ -235,20 +282,20 @@ async def _accept_email(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         await end_flow(update, ctx,
                        "Your linked Plex account doesn't own a server: sharing needs "
                        "the server owner's account. /link with the owner account first.",
-                       _admin_origin(ctx))
+                       _admin_origin(ctx), edit=edit)
         _clear(ctx)
         return ConversationHandler.END
     except Exception as exc:
         logger.exception("plex server/section lookup failed")
         await end_flow(update, ctx,
                        f"Couldn't read your Plex server. {user_friendly_message(exc)}",
-                       _admin_origin(ctx), ADMIN_INVITE)
+                       _admin_origin(ctx), ADMIN_INVITE, edit=edit)
         _clear(ctx)
         return ConversationHandler.END
     if not sections:
         await end_flow(update, ctx,
                        "Your Plex server reports no libraries; nothing to share.",
-                       _admin_origin(ctx))
+                       _admin_origin(ctx), edit=edit)
         _clear(ctx)
         return ConversationHandler.END
     ctx.user_data["inv_machine"] = machine_id
@@ -453,6 +500,9 @@ async def _invite_send_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
         _clear(ctx)
         return ConversationHandler.END
 
+    ask_id = ctx.user_data.get("inv_access_ask")
+    if ask_id is not None:
+        await approve_access_ask(ctx, ask_id)
     lib_word = "library" if len(selected) == 1 else "libraries"
     await end_flow(update, ctx,
                    f"📨 Invite sent to <b>{html.escape(email)}</b> "

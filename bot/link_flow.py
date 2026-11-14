@@ -30,6 +30,7 @@ from plex import PlexClient
 from seerr import SeerrClient
 from store import UserStore
 
+from bot.access_asks import forget_sign_in, offer_markup, remember_sign_in
 from bot.callback_prefixes import (
     ACCOUNT_LINK,
     ACCOUNT_UNLINK,
@@ -293,6 +294,9 @@ async def _finalize_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         seerr_id, display = await seerr.login_with_plex(auth_token)
     except Exception as exc:
         logger.exception("seerr login_with_plex failed")
+        # Keep the fresh sign-in in memory so "Ask for access" can read the
+        # person's Plex username and email if they tap and confirm.
+        remember_sign_in(ctx, auth_token, hub)
         sent = await ctx.bot.send_message(
             chat_id=chat_id,
             text=(
@@ -301,12 +305,12 @@ async def _finalize_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                 "Your Plex account probably isn't shared in Seerr yet. "
                 "Ask the admin to invite you."
             ),
-            **_end_kwargs(hub, ACCOUNT_LINK),
+            reply_markup=offer_markup(hub, ACCOUNT_LINK if hub else None),
         )
-        if hub is not None:
-            record_btn(ctx.application, tg_id, sent)
+        record_btn(ctx.application, tg_id, sent)
         return
 
+    forget_sign_in(ctx)
     try:
         plex_user = await plex.get_user(auth_token)
     except Exception:

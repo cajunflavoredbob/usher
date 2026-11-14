@@ -26,7 +26,8 @@ from typing import Callable, Iterator, Optional, TypeVar
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from const import AUTOFIX_TIMEOUT_HOURS
+from const import (ACCESS_ASK_IGNORE_DAYS, ACCESS_ASK_KEEP_DAYS,
+                   ACCESS_ASK_MAX_OPEN, AUTOFIX_TIMEOUT_HOURS)
 from fix_kinds import (KIND_AUTO_FIX, OUTCOME_COMPLETE, OUTCOME_FAILED,
                        OUTCOME_PENDING, OUTCOME_REPEAT, OUTCOME_TIMEOUT)
 from former_name import legacy_env
@@ -102,6 +103,18 @@ class TokenCrypto:
 
     def decrypt(self, ciphertext: str) -> str:
         return self.fernet.decrypt(ciphertext.encode()).decode()
+
+
+@dataclass(frozen=True)
+class AccessAsk:
+    """A stranger's request for an Invite (see GLOSSARY: Access ask)."""
+    id: int
+    telegram_id: int
+    telegram_name: str
+    plex_username: str
+    plex_email: str
+    status: str                       # open, approved or ignored
+    admin_message_id: Optional[int]
 
 
 @dataclass(frozen=True)
@@ -336,6 +349,23 @@ class UserStore:
                     text TEXT NOT NULL DEFAULT '',
                     started_at TEXT NOT NULL DEFAULT (datetime('now')),
                     notified INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            # Access asks: one row per Telegram user (a stranger asking the
+            # Admin for an Invite). status is open, approved or ignored.
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS access_asks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_id INTEGER NOT NULL UNIQUE,
+                    telegram_name TEXT NOT NULL DEFAULT '',
+                    plex_username TEXT NOT NULL DEFAULT '',
+                    plex_email TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'open',
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    decided_at TEXT,
+                    admin_message_id INTEGER
                 )
                 """
             )
@@ -1153,6 +1183,83 @@ class UserStore:
                 c.execute("DELETE FROM alarm_state WHERE key = ?", (key,))
         await self._run(_do)
 
+    # Access asks
+
+    @staticmethod
+    def _ask_from_row(r) -> "AccessAsk":
+        return AccessAsk(id=r[0], telegram_id=r[1], telegram_name=r[2],
+                         plex_username=r[3], plex_email=r[4], status=r[5],
+                         admin_message_id=r[6])
+
+    _ASK_COLS = ("id, telegram_id, telegram_name, plex_username, plex_email, "
+                 "status, admin_message_id")
+
+    async def create_access_ask(self, telegram_id: int, telegram_name: str,
+                                plex_username: str, plex_email: str
+                                ) -> tuple[Optional[int], str]:
+        """Store a new open ask. Returns (id, "") or (None, reason) with
+        reason "open" (this person already has an open ask), "ignored"
+        (ignored within ACCESS_ASK_IGNORE_DAYS) or "full" (ACCESS_ASK_MAX_OPEN
+        asks are open). An approved or long-ago ignored ask is replaced."""
+        def _do() -> tuple[Optional[int], str]:
+            with self._conn() as c:
+                row = c.execute(
+                    "SELECT status, decided_at > datetime('now', ?) "
+                    "FROM access_asks WHERE telegram_id = ?",
+                    (f"-{ACCESS_ASK_IGNORE_DAYS} days", telegram_id)).fetchone()
+                if row is not None:
+                    if row[0] == "open":
+                        return None, "open"
+                    if row[0] == "ignored" and row[1]:
+                        return None, "ignored"
+                open_count = c.execute(
+                    "SELECT COUNT(*) FROM access_asks WHERE status = 'open'"
+                ).fetchone()[0]
+                if open_count >= ACCESS_ASK_MAX_OPEN:
+                    return None, "full"
+                c.execute("DELETE FROM access_asks WHERE telegram_id = ?",
+                          (telegram_id,))
+                cur = c.execute(
+                    "INSERT INTO access_asks (telegram_id, telegram_name, "
+                    "plex_username, plex_email) VALUES (?, ?, ?, ?)",
+                    (telegram_id, telegram_name, plex_username, plex_email))
+                return cur.lastrowid, ""
+        return await self._run(_do)
+
+    async def get_access_ask(self, ask_id: int) -> Optional["AccessAsk"]:
+        def _do():
+            with self._conn() as c:
+                return c.execute(
+                    f"SELECT {self._ASK_COLS} FROM access_asks WHERE id = ?",
+                    (ask_id,)).fetchone()
+        row = await self._run(_do)
+        return None if row is None else self._ask_from_row(row)
+
+    async def set_access_ask_message(self, ask_id: int, message_id: int) -> None:
+        def _do():
+            with self._conn() as c:
+                c.execute("UPDATE access_asks SET admin_message_id = ? "
+                          "WHERE id = ?", (message_id, ask_id))
+        await self._run(_do)
+
+    async def decide_access_ask(self, ask_id: int, status: str) -> bool:
+        """Move an OPEN ask to `status` (approved or ignored). False when it
+        was no longer open, so a second tap does nothing."""
+        def _do() -> bool:
+            with self._conn() as c:
+                return c.execute(
+                    "UPDATE access_asks SET status = ?, "
+                    "decided_at = datetime('now') "
+                    "WHERE id = ? AND status = 'open'",
+                    (status, ask_id)).rowcount > 0
+        return await self._run(_do)
+
+    async def delete_access_ask(self, ask_id: int) -> None:
+        def _do():
+            with self._conn() as c:
+                c.execute("DELETE FROM access_asks WHERE id = ?", (ask_id,))
+        await self._run(_do)
+
     async def prune_autofix_history(self) -> tuple[int, int]:
         """Delete rows nothing reads anymore, so neither table grows for the
         life of the install: pending_autofixes rows in a terminal state
@@ -1182,6 +1289,12 @@ class UserStore:
                 c.execute(
                     "DELETE FROM ticket_escalations WHERE escalated_at < datetime('now', ?)",
                     (f"-{TICKET_ESCALATION_KEEP_DAYS} days",),
+                )
+                # Access asks older than ACCESS_ASK_KEEP_DAYS, in any state
+                # (not counted in the return value).
+                c.execute(
+                    "DELETE FROM access_asks WHERE created_at < datetime('now', ?)",
+                    (f"-{ACCESS_ASK_KEEP_DAYS} days",),
                 )
                 return pending, events
 

@@ -49,6 +49,9 @@ A Share the recipient has not accepted yet.
 Removing a Share, pending or accepted.
 _Avoid_: unshare
 
+**Access ask**:
+A stranger's request, sent through the bot, for the Admin to Invite them. It comes from the Link flow when Seerr rejects the person's Plex sign-in, and is open until the Admin approves it (by sending the Invite) or ignores it.
+
 ## Tickets
 
 **Ticket**:

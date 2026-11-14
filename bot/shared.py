@@ -25,6 +25,8 @@ from store import UserStore
 from procutil import schedule_clean_exit  # noqa: F401  (re-export for bot.*)
 
 from bot.callback_prefixes import (
+    ACCESS_APPROVE,
+    ACCESS_IGNORE,
     RELINK,
     RQ_ADMIN_APPROVE,
     RQ_ADMIN_DECLINE,
@@ -639,6 +641,7 @@ async def run_relink_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> b
 _GATE_EXEMPT_PREFIXES: Final = frozenset({
     RQ_INFO_DISMISS, SUBSCRIPTION_ADD,
     RQ_ADMIN_APPROVE, RQ_ADMIN_DECLINE, RQ_ADMIN_RETRY,
+    ACCESS_APPROVE, ACCESS_IGNORE,
 })
 
 
@@ -662,6 +665,8 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     #  - Approve/Decline/Retry sit on the Admin's Request DMs. They are
     #    Admin-only and re-read the Request's status from Seerr before acting,
     #    and there is no way to bring the DM back in Telegram once it expires.
+    #  - Approve/Ignore on an Access ask DM: Admin-only, and each ask is acted
+    #    on once (the ask's status is re-read before anything happens).
     data = getattr(q, "data", None)
     if isinstance(data, str) and data.split(":", 1)[0] in _GATE_EXEMPT_PREFIXES:
         return

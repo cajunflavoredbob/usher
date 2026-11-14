@@ -6,7 +6,8 @@ from types import SimpleNamespace
 from telegram import InlineKeyboardButton
 
 from bot import hub
-from bot.callback_prefixes import HUB_OPEN, HUB_RETRY, LINK_HELP
+from bot.callback_prefixes import (ACCESS_ASK, HUB_OPEN, HUB_RETRY,
+                                   LINK_HELP)
 
 
 def _btns(markup):
@@ -333,15 +334,17 @@ async def test_hub_link_seerr_rejection_offers_try_again_and_back():
     await link_flow._finalize_link(upd, ctx, "tok", hub="account")
     kwargs = ctx.bot.send_message.call_args.kwargs
     assert "Seerr rejected the sign-in" in kwargs["text"]
-    assert _flat(kwargs["reply_markup"]) == [("🔁 Try again", ACCOUNT_LINK), BACK]
+    assert _flat(kwargs["reply_markup"]) == [
+        ("🙋 Ask for access", ACCESS_ASK), ("🔁 Try again", ACCOUNT_LINK), BACK]
 
 
-async def test_typed_link_seerr_rejection_has_no_buttons():
+async def test_typed_link_seerr_rejection_offers_only_ask_for_access():
     ctx = make_ctx()
     ctx.bot_data["seerr"].login_with_plex = AsyncMock(side_effect=RuntimeError("no"))
     upd = make_update(callback_data=LINK_HELP)
     await link_flow._finalize_link(upd, ctx, "tok")
-    assert "reply_markup" not in ctx.bot.send_message.call_args.kwargs
+    kwargs = ctx.bot.send_message.call_args.kwargs
+    assert _flat(kwargs["reply_markup"]) == [("🙋 Ask for access", ACCESS_ASK)]
 
 
 async def test_hub_link_success_ends_with_back():
