@@ -157,24 +157,41 @@ def _onoff(value: bool) -> str:
     return "on" if value else "off"
 
 
-async def _notices_card(store, telegram_id: int):
+def _digest_live(bot_data) -> bool:
+    cfg = bot_data["settings_store"].settings
+    return bool(cfg.digest_enabled and cfg.tg_notify_digest)
+
+
+def _auto_follow_live(bot_data) -> bool:
+    return bot_data.get("tautulli") is not None
+
+
+async def _notices_card(store, telegram_id: int, bot_data):
+    """The card. A switch the server cannot act on reads "off on this
+    server" and gets no button, so nobody opts in to nothing."""
     prefs = await store.get_prefs(telegram_id)
+    digest_live = _digest_live(bot_data)
+    follow_live = _auto_follow_live(bot_data)
+    digest_state = _onoff(prefs["digest"]) if digest_live else "off on this server"
+    follow_state = (_onoff(prefs["auto_follow"]) if follow_live
+                    else "off on this server")
     text = (
         "🔔 <b>Notices</b>\n\n"
-        f"Daily digest: <b>{_onoff(prefs['digest'])}</b>. A daily message "
+        f"Daily digest: <b>{digest_state}</b>. A daily message "
         "listing what was added to the server.\n"
-        f"Automatic follows: <b>{_onoff(prefs['auto_follow'])}</b>. Follow "
+        f"Automatic follows: <b>{follow_state}</b>. Follow "
         "shows you have been watching, so you hear about new episodes.")
-    markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton(
+    rows = []
+    if digest_live:
+        rows.append([InlineKeyboardButton(
             f"📰 Daily digest: {_onoff(prefs['digest'])}",
-            callback_data=f"{NOTICE_TOGGLE}:digest")],
-        [InlineKeyboardButton(
+            callback_data=f"{NOTICE_TOGGLE}:digest")])
+    if follow_live:
+        rows.append([InlineKeyboardButton(
             f"➕ Automatic follows: {_onoff(prefs['auto_follow'])}",
-            callback_data=f"{NOTICE_TOGGLE}:auto")],
-        [back_button("account")],
-    ])
-    return text, markup
+            callback_data=f"{NOTICE_TOGGLE}:auto")])
+    rows.append([back_button("account")])
+    return text, InlineKeyboardMarkup(rows)
 
 
 async def is_linked(ctx, telegram_id: int) -> bool:
@@ -191,7 +208,7 @@ async def _show_card(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             reply_markup=InlineKeyboardMarkup([[back_button("account")]]))
         record_btn(ctx.application, uid, sent)
         return
-    text, markup = await _notices_card(ctx.bot_data["store"], uid)
+    text, markup = await _notices_card(ctx.bot_data["store"], uid, ctx.bot_data)
     sent = await edit_or_send(q, text, reply_markup=markup, parse_mode="HTML")
     record_btn(ctx.application, uid, sent)
 
@@ -209,7 +226,9 @@ async def notice_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     name = {"digest": "digest", "auto": "auto_follow"}.get(
         q.data.split(":", 1)[1])
     uid = update.effective_user.id
-    if name is not None and await is_linked(ctx, uid):
+    live = (name is not None and
+            (_digest_live if name == "digest" else _auto_follow_live)(ctx.bot_data))
+    if live and await is_linked(ctx, uid):
         store = ctx.bot_data["store"]
         prefs = await store.get_prefs(uid)
         await store.set_pref(uid, name, not prefs[name])

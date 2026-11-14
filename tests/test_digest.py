@@ -180,6 +180,7 @@ async def test_notices_toggles_persist(fresh_store):
     await _link(fresh_store, 1)
     hub.register_hub("account", "Account", None)
     ctx = _ctx(fresh_store)
+    ctx.bot_data["tautulli"] = AsyncMock()
     assert await fresh_store.get_prefs(1) == {"digest": False, "auto_follow": True}
     await account_notices(make_update(callback_data="accnt", user_id=1), ctx)
     await notice_toggle(make_update(callback_data="ntg:digest", user_id=1), ctx)
@@ -190,6 +191,41 @@ async def test_notices_toggles_persist(fresh_store):
     assert await fresh_store.get_prefs(1) == {"digest": True, "auto_follow": True}
     shown = upd.callback_query.edits[-1]["text"].replace("<b>", "").replace("</b>", "")
     assert "Daily digest: on" in shown
+
+
+def _buttons(upd):
+    markup = upd.callback_query.edits[-1]["reply_markup"]
+    return [b.callback_data for row in markup.inline_keyboard for b in row]
+
+
+@pytest.mark.parametrize("enabled,dm", [(False, True), (True, False)])
+async def test_notices_card_says_digest_is_off_on_the_server(
+        fresh_store, enabled, dm):
+    await _link(fresh_store, 1)
+    hub.register_hub("account", "Account", None)
+    ctx = _ctx(fresh_store, enabled=enabled)
+    ctx.bot_data["settings_store"].settings.tg_notify_digest = dm
+    ctx.bot_data["tautulli"] = AsyncMock()
+    upd = make_update(callback_data="accnt", user_id=1)
+    await account_notices(upd, ctx)
+    assert "Daily digest: <b>off on this server</b>" in upd.callback_query.edits[-1]["text"]
+    assert "ntg:digest" not in _buttons(upd)
+    assert "ntg:auto" in _buttons(upd)
+    await notice_toggle(make_update(callback_data="ntg:digest", user_id=1), ctx)
+    assert (await fresh_store.get_prefs(1))["digest"] is False
+
+
+async def test_notices_card_says_auto_follow_is_off_without_tautulli(fresh_store):
+    await _link(fresh_store, 1)
+    hub.register_hub("account", "Account", None)
+    ctx = _ctx(fresh_store)
+    upd = make_update(callback_data="accnt", user_id=1)
+    await account_notices(upd, ctx)
+    assert "Automatic follows: <b>off on this server</b>" in upd.callback_query.edits[-1]["text"]
+    assert "ntg:auto" not in _buttons(upd)
+    assert "ntg:digest" in _buttons(upd)
+    await notice_toggle(make_update(callback_data="ntg:auto", user_id=1), ctx)
+    assert (await fresh_store.get_prefs(1))["auto_follow"] is True
 
 
 async def test_an_unlinked_user_cannot_change_notices(fresh_store):
