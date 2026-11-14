@@ -24,6 +24,7 @@ from telegram.ext import (
     filters,
 )
 
+from fix_result import FixResult
 from http_util import user_friendly_message
 from radarr import RadarrClient
 from seerr import CreatedIssue, PlexTokenInvalidError, SeerrClient
@@ -832,6 +833,15 @@ async def ticket_confirm_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
     return await _submit_ticket(update, ctx, autofix=True)
 
 
+_FIX_NOTE_RAN = (
+    "Auto-fix requested by reporter: a fresh download was started automatically. "
+    "This can take a while to finish and reappear in Plex.")
+_FIX_NOTE_SKIPPED = "Auto-fix requested by reporter but skipped: "
+_FIX_NOTE_FAILED = "Auto-fix requested by reporter but it failed"
+_FIX_NOTE_NO_SEARCH = ("Auto-fix requested by reporter: it ran, but no fresh "
+                       "download was started")
+
+
 async def _submit_ticket(
     update: Update,
     ctx: ContextTypes.DEFAULT_TYPE,
@@ -880,12 +890,6 @@ async def _submit_ticket_inner(
         return ConversationHandler.END
 
     full_message = description
-    if autofix:
-        full_message += (
-            "\n\n(Auto-fix requested by reporter: the current file was removed and a "
-            "fresh download was started automatically. This can take a while to finish "
-            "and reappear in Plex.)"
-        )
 
     # 1. Create the Ticket in Seerr first
     try:
@@ -922,6 +926,9 @@ async def _submit_ticket_inner(
     if media["type"] == "tv" and season and not episode:
         label += " (whole season)"
 
+    # What the Auto-fix did, for the note added to the Seerr Ticket once known.
+    fix_note: Optional[str] = None
+
     lines = [
         f"✅ Reported as ticket #{created.id}",
         f"  {emoji} {name} - {label}",
@@ -946,16 +953,28 @@ async def _submit_ticket_inner(
                         f"⚠️ Auto-fix skipped: you've used your "
                         f"{s_cfg.daily_autofix_limit} auto-fixes today."
                     )
+                    fix_note = (_FIX_NOTE_SKIPPED
+                                + "the reporter's daily Auto-fix limit was reached.")
     if autofix:
         media_key = media_action_key(media)
         if not try_begin_action(ctx, media_key):
             lines.append("⚠️ Auto-fix skipped: another fix for this title is already running.")
+            fix_note = (_FIX_NOTE_SKIPPED
+                        + "another fix for this title was already running.")
         else:
             try:
-                result = await run_arr_action(media, season, episode, radarr, sonarr, action="fix")
+                try:
+                    result = await run_arr_action(media, season, episode, radarr, sonarr, action="fix")
+                except Exception as exc:
+                    logger.exception("auto-fix raised")
+                    result = FixResult.failed(user_friendly_message(exc))
                 if result.status == "failed":
                     lines.append(f"⚠️ Auto-fix didn't run: {result.message}")
+                    fix_note = f"{_FIX_NOTE_FAILED}: {result.message}"
                 else:
+                    # A fresh download only started when the search step ran.
+                    fix_note = (_FIX_NOTE_RAN if result.should_poll
+                                else f"{_FIX_NOTE_NO_SEARCH}: {result.message}")
                     # ok or partial: always log the autofix event; only enqueue the
                     # completion poller when search actually ran.
                     event_id = await store.log_autofix(
@@ -1003,6 +1022,14 @@ async def _submit_ticket_inner(
                         lines.append(f"⚠️ Auto-fix: {result.message}")
             finally:
                 end_action(ctx, media_key)
+
+    if fix_note:
+        # The Ticket already exists; a failed note must not lose the reply.
+        try:
+            await seerr.add_issue_comment(created.id, fix_note,
+                                          as_plex_token=link.plex_token)
+        except Exception:
+            logger.exception("couldn't add the Auto-fix note to ticket #%d", created.id)
 
     lines.append("\nUse /tickets to manage it.")
     markup = None if hub is None else end_markup(hub)
