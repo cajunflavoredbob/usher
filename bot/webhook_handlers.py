@@ -13,6 +13,7 @@ from seerr import SeerrClient
 from store import UserStore
 
 from bot.callback_prefixes import TK_OPEN, TK_REPLY
+from bot.follows import notice_markup
 from bot.playback import playback_lines
 from bot.request_admin import admin_request_kb, seerr_link
 from bot.shared import (
@@ -25,7 +26,7 @@ from bot.shared import (
     new_ticket_dm_kb,
     record_btn,
     truncate_message,
-    watch_now_markup,
+    watch_now_button,
 )
 
 logger = logging.getLogger("usher")
@@ -573,9 +574,11 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
                 nt, request_id, seerr_link(cfg.seerr_public_url, media))
         available_kb = None
         if nt == "MEDIA_AVAILABLE":
-            available_kb = await watch_now_markup(
-                seerr, media.get("media_type"),
-                coerce_tmdb_id(media.get("tmdbId")) or 0)
+            m_type = media.get("media_type")
+            m_tmdb = coerce_tmdb_id(media.get("tmdbId")) or 0
+            available_kb = await notice_markup(
+                app.bot_data, m_type, m_tmdb, requester_chat_id,
+                await watch_now_button(seerr, m_type, m_tmdb))
         await _dm(requester_chat_id, requester_line, with_requester=False,
                   reply_markup=own_failed_kb or available_kb)
         requester_dmed = True

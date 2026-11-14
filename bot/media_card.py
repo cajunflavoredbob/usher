@@ -21,6 +21,7 @@ from seerr import (
 )
 
 from bot.callback_prefixes import RQ_INFO_DISMISS, SUBSCRIPTION_ADD
+from bot.follows import follow_button, follow_state
 from const import DETAIL_OVERVIEW_MAX_CHARS
 
 logger = logging.getLogger("usher")
@@ -59,14 +60,19 @@ def build_card_caption(r: MediaResult) -> str:
     return "\n".join(lines)
 
 
-def card_keyboard(r: MediaResult) -> InlineKeyboardMarkup:
+def card_keyboard(r: MediaResult,
+                  following: "bool | None" = None) -> InlineKeyboardMarkup:
     """Dismiss always; 🔔 Notify-me only when availability could still
-    change (an already-available or blocklisted title would never fire)."""
+    change (an already-available or blocklisted title would never fire);
+    Follow or Unfollow for a show when `following` is given (None = the
+    viewer may not follow, so no button)."""
     rows = []
     if (r.status or 0) not in (MEDIA_STATUS_AVAILABLE, MEDIA_STATUS_BLOCKLISTED):
         rows.append([InlineKeyboardButton(
             "🔔 Notify me when available",
             callback_data=f"{SUBSCRIPTION_ADD}:{r.media_type}:{r.tmdb_id}")])
+    if r.media_type == "tv" and following is not None:
+        rows.append([follow_button(r.tmdb_id, following)])
     rows.append([InlineKeyboardButton("🗑 Dismiss", callback_data=RQ_INFO_DISMISS)])
     return InlineKeyboardMarkup(rows)
 
@@ -75,7 +81,10 @@ async def send_detail_card(ctx, chat_id: int, r: MediaResult) -> None:
     """Send the card as a photo when a poster exists, text otherwise (a dead
     poster URL degrades to the text card, never a dead tap)."""
     caption = build_card_caption(r)
-    kb = card_keyboard(r)
+    following = None
+    if r.media_type == "tv":
+        following = await follow_state(ctx.bot_data, chat_id, r.tmdb_id)
+    kb = card_keyboard(r, following)
     if r.poster_path:
         try:
             await ctx.bot.send_photo(

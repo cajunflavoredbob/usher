@@ -732,6 +732,7 @@ def _settings_page(
     alarm_plex_chk = " checked" if s.alarm_plex else ""
     iss_chk = " checked" if s.tg_notify_issues else ""
     subscriptions_chk = " checked" if s.tg_notify_subscriptions else ""
+    follows_chk = " checked" if s.tg_notify_follows else ""
     token_rejected_note = (
         '<div class="error">Telegram rejected the bot token, so the bot is not running. '
         'Enter a valid token below and Save; Usher then restarts.</div>'
@@ -757,6 +758,7 @@ def _settings_page(
   <label class="inline-check"><input type="checkbox" name="tg_notify_admin_failed"{fail_chk}> Failed-download alarm to the admin</label>
   <label class="inline-check"><input type="checkbox" name="tg_notify_issues"{iss_chk}> Ticket DMs</label>
   <label class="inline-check"><input type="checkbox" name="tg_notify_subscriptions"{subscriptions_chk}> Subscription DMs</label>
+  <label class="inline-check"><input type="checkbox" name="tg_notify_follows"{follows_chk}> Follow pings (new episodes)</label>
 
   <h2>Alarms</h2>
   <div class="note">DMs to the admin when something needs attention, checked every 5 minutes, once for each new problem and once when it clears.</div>
@@ -1436,7 +1438,7 @@ async def telegram_post(request: web.Request) -> web.Response:
         setattr(s, flag, form.get(flag) is not None)
     for flag in ("tg_notify_requester", "tg_notify_admin_requests",
                  "tg_notify_admin_failed", "tg_notify_issues",
-                 "tg_notify_subscriptions"):
+                 "tg_notify_subscriptions", "tg_notify_follows"):
         setattr(s, flag, form.get(flag) is not None)
     restart_needed = (token != _orig_token) or (admin_tg != _orig_admin)
     return await _save_and_render(

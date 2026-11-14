@@ -339,3 +339,39 @@ class SonarrClient:
                           service=_SERVICE)
         return bool(json_or_raise(r, service=_SERVICE, what="episode detail").get("hasFile"))
 
+
+    async def get_history_imports_since(self, since: str) -> list[dict]:
+        """GET /history/since: imports (`downloadFolderImported`) recorded
+        after the ISO time `since`. Each record has id, date, seriesId,
+        episodeId and (asked for here) the episode."""
+        r = await execute(self._client, "GET", "/history/since",
+                          service=_SERVICE,
+                          params={"date": since,
+                                  "eventType": "downloadFolderImported",
+                                  "includeEpisode": "true"})
+        return json_or_raise(r, service=_SERVICE, what="history since",
+                             expect=list)
+
+    async def get_series_ids(self, series_id: int) -> Optional[dict]:
+        """GET /series/{id}: {tmdb_id, tvdb_id, title} for a series id, or
+        None when Sonarr has no such series."""
+        try:
+            r = await execute(self._client, "GET", f"/series/{series_id}",
+                              service=_SERVICE)
+        except APIError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
+        d = json_or_raise(r, service=_SERVICE, what="series detail")
+        return {"tmdb_id": d.get("tmdbId") or 0,
+                "tvdb_id": d.get("tvdbId") or 0,
+                "title": d.get("title") or "?"}
+
+    async def get_episode_numbers(self, episode_id: int) -> Optional[tuple]:
+        """GET /episode/{id}: (season, episode) numbers."""
+        r = await execute(self._client, "GET", f"/episode/{episode_id}",
+                          service=_SERVICE)
+        d = json_or_raise(r, service=_SERVICE, what="episode detail")
+        if d.get("seasonNumber") is None or d.get("episodeNumber") is None:
+            return None
+        return d["seasonNumber"], d["episodeNumber"]

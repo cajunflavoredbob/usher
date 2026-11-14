@@ -19,6 +19,7 @@ from seerr import SeerrClient
 from store import UserStore
 
 from bot.callback_prefixes import SUBSCRIPTION_DEL
+from bot.follows import notice_markup
 from bot.hub import back_button, came_from_hub, end_markup, reply_end
 from bot.requests_hub import REQUESTS_HUB
 from bot.shared import (
@@ -28,7 +29,7 @@ from bot.shared import (
     record_btn,
     require_seerr,
     token_for,
-    watch_now_markup,
+    watch_now_button,
 )
 
 logger = logging.getLogger("usher")
@@ -183,13 +184,15 @@ async def fan_out_availability(app, media_type: str, tmdb_id: int,
     body = "🔔 Now available in Plex!"
     if title_line:
         body += f"\n{html.escape(title_line)}"
-    markup = None
+    watch = None
     if any(c not in already_notified for c in subscribers):
-        markup = await watch_now_markup(app.bot_data.get("seerr"),
-                                        media_type, tmdb_id)
+        watch = await watch_now_button(app.bot_data.get("seerr"),
+                                       media_type, tmdb_id)
     for chat_id in subscribers:
         if chat_id in already_notified:
             continue
+        markup = await notice_markup(app.bot_data, media_type, tmdb_id,
+                                     chat_id, watch)
         try:
             await app.bot.send_message(
                 chat_id=chat_id, text=body, parse_mode="HTML",

@@ -74,6 +74,11 @@ MYSTATS: Final = "mys"                # "📊 My stats" in the Trending list
 SUBSCRIPTION_ADD: Final = "subadd"    # subadd:<media_type>:<tmdb_id>
 SUBSCRIPTION_DEL: Final = "subdel"    # subdel:<id> from /subscriptions
 
+# Follows (a standing ask for each new episode of a show)
+FOLLOW_ADD: Final = "folad"           # folad:<tmdb_id> Follow (detail card, notices)
+FOLLOW_DEL: Final = "foldl"           # foldl:<tmdb_id> Unfollow (card, notices, pings)
+FOLLOW_REMOVE: Final = "folrm"        # folrm:<id> Unfollow from the Follows list
+
 # Admin provisioning (/invite, /uninvite, the Admin Hub's Shares)
 INV_LIB: Final = "invl"               # invl:<version>:<section_id> toggle
 INV_ALL: Final = "inva"               # inva:<version> select all libraries
@@ -107,6 +112,7 @@ REQUESTS_MINE: Final = "rqhm"         # Requests Hub "My requests" (global handl
 REQUESTS_TRENDING: Final = "rqht"     # Requests Hub "Trending" (global handler)
 REQUESTS_SUBSCRIPTIONS: Final = "rqhs"  # Requests Hub "Subscriptions" (global
                                       # handler)
+REQUESTS_FOLLOWS: Final = "rqhf"      # Requests Hub "Follows" (global handler)
 TICKETS_REPORT: Final = "tkhr"        # Tickets Hub "Report a problem" (new-Ticket
                                       # conversation entry point)
 TICKETS_LIST: Final = "tkhl"          # Tickets Hub list button and a detail

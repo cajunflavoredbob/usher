@@ -9,6 +9,7 @@ from __future__ import annotations
 from telegram import InlineKeyboardButton
 
 from bot.callback_prefixes import (
+    REQUESTS_FOLLOWS,
     REQUESTS_MINE,
     REQUESTS_NEW,
     REQUESTS_SUBSCRIPTIONS,
@@ -23,13 +24,14 @@ async def render_requests_hub(update, ctx) -> HubView:
     return HubView(
         text=("🎬 <b>Requests</b>\nAsk for a movie or show, check on your "
               "requests, browse what's trending, or see your "
-              "Subscriptions."),
+              "Subscriptions and the shows you follow."),
         buttons=[
             InlineKeyboardButton("➕ New request", callback_data=REQUESTS_NEW),
             InlineKeyboardButton("📥 My requests", callback_data=REQUESTS_MINE),
             InlineKeyboardButton("🔥 Trending", callback_data=REQUESTS_TRENDING),
             InlineKeyboardButton("🔔 Subscriptions",
                                  callback_data=REQUESTS_SUBSCRIPTIONS),
+            InlineKeyboardButton("📺 Follows", callback_data=REQUESTS_FOLLOWS),
         ],
     )
 

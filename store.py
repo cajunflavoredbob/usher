@@ -407,6 +407,61 @@ class UserStore:
                 )
                 """
             )
+            # Follows: a standing ask to be told about each new episode of a
+            # show. One row per user and show; removed = 1 after Unfollow so
+            # a later automatic follow can tell "never followed" from
+            # "followed and removed". tvdb_id 0 = unknown.
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS follows (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_id INTEGER NOT NULL,
+                    tmdb_id INTEGER NOT NULL,
+                    tvdb_id INTEGER NOT NULL DEFAULT 0,
+                    title TEXT NOT NULL DEFAULT '',
+                    auto INTEGER NOT NULL DEFAULT 0,
+                    removed INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    UNIQUE(telegram_id, tmdb_id)
+                )
+                """
+            )
+            c.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_follows_show
+                ON follows(tmdb_id)
+                """
+            )
+            # New content: one row per import the poller saw. media_type is
+            # movie or episode; for an episode tmdb_id and title name the
+            # show. source_key ("radarr:<history id>") makes a record count
+            # once however often it is read; pinged = 1 once the Follow
+            # pings for the row were handled.
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS new_content (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_key TEXT NOT NULL UNIQUE,
+                    media_type TEXT NOT NULL,
+                    tmdb_id INTEGER NOT NULL,
+                    tvdb_id INTEGER NOT NULL DEFAULT 0,
+                    title TEXT NOT NULL DEFAULT '',
+                    season INTEGER,
+                    episode INTEGER,
+                    added_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    pinged INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            # Where each poller source left off (an ISO time).
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS poller_marks (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
             c.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_watch_media
@@ -831,6 +886,176 @@ class UserStore:
                 return [r[0] for r in rows]
 
         return await self._run(_do)
+
+    # Follows
+
+    async def add_follow(self, telegram_id: int, tmdb_id: int, tvdb_id: int,
+                         title: str, auto: bool = False) -> bool:
+        """Follow a show. True when the Follow is newly active (a new row,
+        or a removed one switched back on); False when already active."""
+        def _do() -> bool:
+            with self._conn() as c:
+                cur = c.execute(
+                    """
+                    INSERT OR IGNORE INTO follows
+                        (telegram_id, tmdb_id, tvdb_id, title, auto)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (telegram_id, tmdb_id, tvdb_id or 0, title, int(auto)))
+                if cur.rowcount > 0:
+                    return True
+                cur = c.execute(
+                    """
+                    UPDATE follows SET removed = 0, auto = ?
+                    WHERE telegram_id = ? AND tmdb_id = ? AND removed = 1
+                    """,
+                    (int(auto), telegram_id, tmdb_id))
+                return cur.rowcount > 0
+        return await self._run(_do)
+
+    async def set_follow_info(self, telegram_id: int, tmdb_id: int,
+                              tvdb_id: int, title: str) -> None:
+        """Fill in a Follow's title and TVDb id once the lookup comes back."""
+        def _do() -> None:
+            with self._conn() as c:
+                c.execute(
+                    """
+                    UPDATE follows SET title = ?, tvdb_id = ?
+                    WHERE telegram_id = ? AND tmdb_id = ?
+                    """,
+                    (title, tvdb_id or 0, telegram_id, tmdb_id))
+        await self._run(_do)
+
+    async def remove_follow(self, telegram_id: int, tmdb_id: int) -> bool:
+        """Unfollow: sets the removed flag. False when there was no active
+        Follow."""
+        def _do() -> bool:
+            with self._conn() as c:
+                cur = c.execute(
+                    """
+                    UPDATE follows SET removed = 1
+                    WHERE telegram_id = ? AND tmdb_id = ? AND removed = 0
+                    """,
+                    (telegram_id, tmdb_id))
+                return cur.rowcount > 0
+        return await self._run(_do)
+
+    async def remove_follow_by_id(self, follow_id: int,
+                                  telegram_id: int) -> bool:
+        """Unfollow by row id, only the owner's (a forged id is a no-op)."""
+        def _do() -> bool:
+            with self._conn() as c:
+                cur = c.execute(
+                    """
+                    UPDATE follows SET removed = 1
+                    WHERE id = ? AND telegram_id = ? AND removed = 0
+                    """,
+                    (follow_id, telegram_id))
+                return cur.rowcount > 0
+        return await self._run(_do)
+
+    async def is_following(self, telegram_id: int, tmdb_id: int) -> bool:
+        def _do() -> bool:
+            with self._conn() as c:
+                return c.execute(
+                    """
+                    SELECT 1 FROM follows
+                    WHERE telegram_id = ? AND tmdb_id = ? AND removed = 0
+                    """,
+                    (telegram_id, tmdb_id)).fetchone() is not None
+        return await self._run(_do)
+
+    async def list_follows(self, telegram_id: int) -> list[tuple]:
+        """A user's active Follows: [(id, tmdb_id, title)]."""
+        def _do() -> list[tuple]:
+            with self._conn() as c:
+                return c.execute(
+                    """
+                    SELECT id, tmdb_id, title FROM follows
+                    WHERE telegram_id = ? AND removed = 0 ORDER BY id
+                    """,
+                    (telegram_id,)).fetchall()
+        return await self._run(_do)
+
+    async def list_followers(self, tmdb_id: int) -> list[int]:
+        """Telegram ids with an active Follow on a show."""
+        def _do() -> list[int]:
+            with self._conn() as c:
+                return [r[0] for r in c.execute(
+                    """
+                    SELECT telegram_id FROM follows
+                    WHERE tmdb_id = ? AND removed = 0 ORDER BY id
+                    """,
+                    (tmdb_id,)).fetchall()]
+        return await self._run(_do)
+
+    # New-content poller
+
+    async def get_poller_mark(self, key: str) -> Optional[str]:
+        def _do() -> Optional[str]:
+            with self._conn() as c:
+                row = c.execute("SELECT value FROM poller_marks WHERE key = ?",
+                                (key,)).fetchone()
+                return row[0] if row else None
+        return await self._run(_do)
+
+    async def set_poller_mark(self, key: str, value: str) -> None:
+        def _do() -> None:
+            with self._conn() as c:
+                c.execute(
+                    "INSERT INTO poller_marks (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (key, value))
+        await self._run(_do)
+
+    async def add_new_content(self, source_key: str, media_type: str,
+                              tmdb_id: int, title: str,
+                              season: Optional[int] = None,
+                              episode: Optional[int] = None,
+                              tvdb_id: int = 0,
+                              added_at: Optional[str] = None) -> bool:
+        """Record one import. False when this source record was already
+        recorded, or (for an episode) the same episode already has a row, so
+        an upgrade import never pings twice."""
+        def _do() -> bool:
+            with self._conn() as c:
+                if media_type == "episode" and c.execute(
+                        """
+                        SELECT 1 FROM new_content WHERE media_type = 'episode'
+                        AND tmdb_id = ? AND season = ? AND episode = ?
+                        """,
+                        (tmdb_id, season, episode)).fetchone():
+                    return False
+                cur = c.execute(
+                    """
+                    INSERT OR IGNORE INTO new_content
+                        (source_key, media_type, tmdb_id, tvdb_id, title,
+                         season, episode, added_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
+                    """,
+                    (source_key, media_type, tmdb_id, tvdb_id or 0, title,
+                     season, episode, added_at))
+                return cur.rowcount > 0
+        return await self._run(_do)
+
+    async def list_unpinged_episodes(self) -> list[tuple]:
+        """Episode rows whose Follow pings are not handled yet:
+        [(id, tmdb_id, title, season, episode)] oldest first."""
+        def _do() -> list[tuple]:
+            with self._conn() as c:
+                return c.execute(
+                    """
+                    SELECT id, tmdb_id, title, season, episode FROM new_content
+                    WHERE media_type = 'episode' AND pinged = 0 ORDER BY id
+                    """).fetchall()
+        return await self._run(_do)
+
+    async def mark_pinged(self, ids: list[int]) -> None:
+        def _do() -> None:
+            with self._conn() as c:
+                c.executemany("UPDATE new_content SET pinged = 1 WHERE id = ?",
+                              [(i,) for i in ids])
+        await self._run(_do)
 
     async def unlink(self, telegram_id: int) -> bool:
         def _do() -> bool:
@@ -1434,6 +1659,10 @@ class UserStore:
                 c.execute(
                     "DELETE FROM broadcasts WHERE status = 'done' "
                     "AND created_at < datetime('now', ?)", (old,))
+                # New content older than 30 days (not counted either).
+                c.execute(
+                    "DELETE FROM new_content "
+                    "WHERE added_at < datetime('now', '-30 days')")
                 return pending, events
 
         return await self._run(_do)

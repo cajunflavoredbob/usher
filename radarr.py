@@ -243,3 +243,15 @@ class RadarrClient:
         if movie is None:
             return FixResult.failed("Movie isn't in Radarr (not monitored).")
         return await self._run_movie_workflow(movie=movie, blocklist=True)
+
+    async def get_history_imports_since(self, since: str) -> list[dict]:
+        """GET /history/since: imports (`downloadFolderImported`) recorded
+        after the ISO time `since`. Each record has id, date, movieId and
+        (asked for here) the movie."""
+        r = await execute(self._client, "GET", "/history/since",
+                          service=_SERVICE,
+                          params={"date": since,
+                                  "eventType": "downloadFolderImported",
+                                  "includeMovie": "true"})
+        return json_or_raise(r, service=_SERVICE, what="history since",
+                             expect=list)

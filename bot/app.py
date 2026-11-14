@@ -65,6 +65,10 @@ from bot.callback_prefixes import (
     DV_INFO,
     DV_PAGE,
     SUBSCRIPTION_ADD,
+    FOLLOW_ADD,
+    FOLLOW_DEL,
+    FOLLOW_REMOVE,
+    REQUESTS_FOLLOWS,
     SUBSCRIPTION_DEL,
     UNINV_GO,
     UNINV_KEEP,
@@ -108,6 +112,9 @@ from bot.invite_flow import (_INV_KEYS, _invite_conversation,
                              admin_inactive, admin_shares, cmd_uninvite,
                              share_matches, share_remove,
                              share_view, uninvite_cancel, uninvite_go)
+from bot.follows import follow_add, follow_del, follow_remove, follows_hub
+from bot.new_content import (NEW_CONTENT_FIRST_DELAY_S, NEW_CONTENT_INTERVAL_S,
+                             poll_new_content)
 from bot.subscriptions import (cmd_subscriptions, subscription_add,
                                subscription_del, subscriptions_hub)
 from bot.request_flow import (_RQ_KEYS, _request_conversation,
@@ -532,6 +539,14 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
                                          pattern=fr"^{SUBSCRIPTION_ADD}:"))
     app.add_handler(CallbackQueryHandler(subscription_del,
                                          pattern=fr"^{SUBSCRIPTION_DEL}:"))
+    # Follow callbacks (detail card, availability notices, Follow pings, and
+    # the Requests Hub's Follows list).
+    app.add_handler(CallbackQueryHandler(follow_add,
+                                         pattern=fr"^{FOLLOW_ADD}:\d+$"))
+    app.add_handler(CallbackQueryHandler(follow_del,
+                                         pattern=fr"^{FOLLOW_DEL}:\d+$"))
+    app.add_handler(CallbackQueryHandler(follow_remove,
+                                         pattern=fr"^{FOLLOW_REMOVE}:\d+$"))
     # /uninvite confirm card (its own prefixes -- never collides with the
     # invite conversation's versioned invx:<v> cancel).
     app.add_handler(CallbackQueryHandler(uninvite_go,
@@ -563,6 +578,8 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
                                          pattern=fr"^{REQUESTS_TRENDING}$"))
     app.add_handler(CallbackQueryHandler(subscriptions_hub,
                                          pattern=fr"^{REQUESTS_SUBSCRIPTIONS}$"))
+    app.add_handler(CallbackQueryHandler(follows_hub,
+                                         pattern=fr"^{REQUESTS_FOLLOWS}$"))
     # Tickets Hub list button, also a detail card's "⬅️ Tickets" (Report a
     # problem is a new-Ticket conversation entry).
     app.add_handler(CallbackQueryHandler(tickets_hub_list,
@@ -621,6 +638,12 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
         interval=ALARM_INTERVAL_S,
         first=ALARM_FIRST_DELAY_S,
         name="service_alarms",
+    )
+    app.job_queue.run_repeating(
+        poll_new_content,
+        interval=NEW_CONTENT_INTERVAL_S,
+        first=NEW_CONTENT_FIRST_DELAY_S,
+        name="new_content_poll",
     )
     # Keep autofix bookkeeping tables from growing for the life of the
     # install (also pruned once at startup in _post_init).

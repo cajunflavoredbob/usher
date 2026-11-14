@@ -98,6 +98,10 @@ A Linked user's ask for a movie or show, made in Seerr as that user.
 A one-shot ask to be told when a title becomes available.
 _Avoid_: watch, availability watch
 
+**Follow**:
+A Linked user's standing ask to be told about each new episode of a show, until they Unfollow (a Subscription is one-shot). New episodes of a show arrive as one ping with a Watch now button.
+_Avoid_: watch, track
+
 ## Chat
 
 **Hub**:

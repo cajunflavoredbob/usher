@@ -33,6 +33,8 @@ from bot.callback_prefixes import (
     RQ_ADMIN_RETRY,
     RQ_INFO_DISMISS,
     SUBSCRIPTION_ADD,
+    FOLLOW_ADD,
+    FOLLOW_DEL,
     TK_CLOSE,
     TK_FIX,
     TK_OPEN,
@@ -316,12 +318,6 @@ async def watch_now_button(seerr, media_type: str,
                        media_type, tmdb_id, exc_info=True)
         return None
     return InlineKeyboardButton("▶️ Watch now", url=url) if url else None
-
-
-async def watch_now_markup(seerr, media_type: str,
-                           tmdb_id: int) -> Optional[InlineKeyboardMarkup]:
-    button = await watch_now_button(seerr, media_type, tmdb_id)
-    return InlineKeyboardMarkup([[button]]) if button else None
 
 
 async def format_media_title_line(
@@ -664,7 +660,7 @@ async def run_relink_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> b
 
 
 _GATE_EXEMPT_PREFIXES: Final = frozenset({
-    RQ_INFO_DISMISS, SUBSCRIPTION_ADD,
+    RQ_INFO_DISMISS, SUBSCRIPTION_ADD, FOLLOW_ADD, FOLLOW_DEL,
     RQ_ADMIN_APPROVE, RQ_ADMIN_DECLINE, RQ_ADMIN_RETRY,
     ACCESS_APPROVE, ACCESS_IGNORE,
 })
@@ -687,6 +683,8 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     #    recorded (recording them would evict the live pick list after three
     #    taps and brick the /request flow). Dismiss only deletes the tapped
     #    card; Notify-me only writes a row for the tapper.
+    #  - Follow and Unfollow sit on detail cards, availability notices and
+    #    Follow pings; they only write the tapper's own Follow row.
     #  - Approve/Decline/Retry sit on the Admin's Request DMs. They are
     #    Admin-only and re-read the Request's status from Seerr before acting,
     #    and there is no way to bring the DM back in Telegram once it expires.

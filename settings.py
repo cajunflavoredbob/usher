@@ -98,6 +98,7 @@ class Settings:
     tg_notify_admin_failed: bool = True    # failed-download alarm to the admin
     tg_notify_issues: bool = True          # Ticket reported/comment/resolved DMs
     tg_notify_subscriptions: bool = True   # Subscription fan-out
+    tg_notify_follows: bool = True         # Follow pings (new episodes)
     # Service alarms (DMs to the admin): Radarr/Sonarr health, and a disk
     # below either threshold (whichever is hit first).
     alarm_health: bool = True
@@ -185,6 +186,7 @@ class Settings:
             tg_notify_admin_failed=bool(data.get("tg_notify_admin_failed", True)),
             tg_notify_issues=bool(data.get("tg_notify_issues", True)),
             tg_notify_subscriptions=bool(data.get("tg_notify_subscriptions", True)),
+            tg_notify_follows=bool(data.get("tg_notify_follows", True)),
             radarr_api_key=data.get("radarr_api_key", "") or "",
             sonarr_url=data.get("sonarr_url", "") or "",
             sonarr_api_key=data.get("sonarr_api_key", "") or "",

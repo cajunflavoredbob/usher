@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Follow a show**: Linked users can tap Follow on a show's detail card or on its "available" notice and get a ping for each new episode, with a ▶️ Watch now button when the title is in Plex. Episodes that land together arrive as one ping, and each episode is only ever pinged once. Follows are listed with Unfollow under Follows in the Requests Hub. The Admin can switch Follow pings off in the web admin panel (Telegram tab, Notifications). New episodes are found by checking Radarr and Sonarr imports every 15 minutes.
 - **Watch now**: the "available" DM to the Requester and the Subscription notice gain a ▶️ Watch now button that opens the title in Plex. It appears once Seerr has a Plex link for the title; without one the notice is sent as before.
 - **Tautulli**: link Tautulli in the web admin panel (URL, API key, Test, Save, Remove the saved key) and see its version or error in /status. Nothing else changes until later releases use the link.
 - **Playback details on Tickets**: with Tautulli linked, the Admin's new-Ticket DM and Ticket card show how the Reporter last played that title (player, platform, direct play or transcode, video and audio codecs, date). Left out when there is no matching play; never shown to the Reporter.
