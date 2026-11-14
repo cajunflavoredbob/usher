@@ -154,6 +154,29 @@ async def test_send_pending_request_says_waiting():
     assert "Waiting for approval" in upd.callback_query.edits[-1]["text"]
 
 
+async def test_send_sends_a_progress_card_and_stores_its_row():
+    ctx = _linked_ctx()
+    ctx.bot_data["seerr"].create_request.return_value = CreatedRequest(
+        id=3, status=REQUEST_STATUS_PENDING, seasons=[3, 2])
+    upd = make_update(callback_data=f"rqrgo:{SHOW}", user_id=USER_ID)
+    await remaining_seasons_send(upd, ctx)
+    ctx.bot.send_message.assert_awaited_once()
+    kwargs = ctx.bot_data["store"].add_progress_card.call_args.kwargs
+    assert kwargs["user_id"] == USER_ID
+    assert kwargs["media_type"] == "tv" and kwargs["tmdb_id"] == SHOW
+    assert kwargs["status"] == "waiting"
+    assert kwargs["seasons"] == [2, 3]
+
+
+async def test_send_that_fails_sends_no_progress_card():
+    ctx = _linked_ctx()
+    ctx.bot_data["seerr"].create_request.side_effect = NothingToRequestError()
+    upd = make_update(callback_data=f"rqrgo:{SHOW}", user_id=USER_ID)
+    await remaining_seasons_send(upd, ctx)
+    ctx.bot.send_message.assert_not_awaited()
+    ctx.bot_data["store"].add_progress_card.assert_not_awaited()
+
+
 async def test_send_202_says_nothing_left_to_request():
     ctx = _linked_ctx()
     ctx.bot_data["seerr"].create_request.side_effect = NothingToRequestError()

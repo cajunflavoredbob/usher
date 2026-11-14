@@ -653,6 +653,24 @@ async def test_resume_submit_request_resubmits_at_chosen_tier():
     assert "[4K]" in upd.effective_message.reply_calls[0]["text"]
 
 
+async def test_resume_submit_request_sends_a_progress_card():
+    from bot.request_flow import _resume_submit_request
+    ctx = _linked_ctx(user_data={
+        "rq_media": {"type": "movie", "tmdb_id": 550, "title": "Movie",
+                     "year": "2020"},
+    })
+    ctx.bot_data["conversations"] = {}
+    ctx.bot_data["seerr"].create_request.return_value = CreatedRequest(
+        id=9, status=REQUEST_STATUS_APPROVED)
+    upd = make_update(text="resumed", user_id=USER_ID)
+    await _resume_submit_request(upd, ctx, {})
+    ctx.bot.send_message.assert_awaited_once()
+    kwargs = ctx.bot_data["store"].add_progress_card.call_args.kwargs
+    assert kwargs["user_id"] == USER_ID
+    assert kwargs["media_type"] == "movie" and kwargs["tmdb_id"] == 550
+    assert kwargs["status"] == "grabbing"
+
+
 async def test_resume_submit_request_without_draft_says_so():
     from bot.request_flow import _resume_submit_request
     ctx = _linked_ctx()

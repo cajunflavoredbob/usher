@@ -1459,6 +1459,12 @@ async def _remaining_seasons_submit(update: Update,
                 "Waiting for approval."
                 + (" I'll DM you when it moves." if dms_on else ""))
     await edit_or_send(q, text, parse_mode="HTML")
+    await _send_progress_card(
+        ctx, chat_id=update.effective_chat.id,
+        owner_id=update.effective_user.id, media_type="tv", tmdb_id=tmdb_id,
+        label=label, is4k=False,
+        approved=created.status == REQUEST_STATUS_APPROVED,
+        seasons=sorted(created.seasons) if created.seasons else None)
 
 
 def _clear_rq_state(ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1515,6 +1521,13 @@ async def _resume_submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     else:
         msg = f"📨 Requested: {label}. Waiting for approval."
     await update.effective_message.reply_text(msg)
+    await _send_progress_card(
+        ctx, chat_id=update.effective_chat.id,
+        owner_id=update.effective_user.id, media_type=media["type"],
+        tmdb_id=media["tmdb_id"], label=label, is4k=is4k,
+        approved=created.status == REQUEST_STATUS_APPROVED,
+        seasons=(sorted(created.seasons or seasons)
+                 if media["type"] == "tv" else None))
     _clear_rq_state(ctx)
 
 
