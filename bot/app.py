@@ -808,12 +808,75 @@ async def _register_commands(app: Application) -> None:
         logger.exception("set_my_commands failed (menu may be stale)", exc_info=exc)
 
 
+# The "What can this bot do?" welcome text and the profile-page blurb, also
+# set at every startup so they never drift from the code. The welcome
+# picture can only be set in BotFather (see README, "Bot profile and welcome
+# screen").
+_BOT_DESCRIPTION = (
+    "Hi, I'm your Usher, the front desk for this Plex server.\n"
+    "\n"
+    "• Ask for a movie or show and follow it from request to Watch now\n"
+    "• Get told when new episodes of your shows land\n"
+    "• Report a bad file, and often fix it yourself\n"
+    "• Ask the Admin for access if you're new\n"
+    "\n"
+    "Tap Start, then /account to link your Plex sign-in."
+)
+_BOT_SHORT_DESCRIPTION = (
+    "Request movies and shows, follow new episodes, and report problems "
+    "on this Plex server."
+)
+_AVATAR_PATH = Path(__file__).resolve().parent.parent / "assets" / "avatar.png"
+# Holds the sha256 of the last avatar uploaded, so a restart re-uploads only
+# when the picture changed (each upload adds a photo to the bot's history).
+_AVATAR_MARKER = "avatar.sha256"
+
+
+async def _register_profile(app: Application) -> None:
+    """Publish the description, short description and profile photo. Each
+    step is non-fatal: a failure is logged and startup carries on."""
+    import hashlib
+    from telegram import InputProfilePhotoStatic
+    try:
+        await app.bot.set_my_description(description=_BOT_DESCRIPTION)
+        await app.bot.set_my_short_description(
+            short_description=_BOT_SHORT_DESCRIPTION)
+    except Exception as exc:
+        logger.exception("set_my_description failed (welcome text may be stale)",
+                         exc_info=exc)
+    try:
+        photo = _AVATAR_PATH.read_bytes()
+    except OSError:
+        logger.warning("No avatar at %s; profile photo left as is", _AVATAR_PATH)
+        return
+    digest = hashlib.sha256(photo).hexdigest()
+    marker = Path(app.bot_data["data_dir"]) / _AVATAR_MARKER
+    try:
+        if marker.read_text().strip() == digest:
+            return
+    except (OSError, ValueError):  # missing, unreadable or not UTF-8
+        pass
+    try:
+        await app.bot.set_my_profile_photo(photo=InputProfilePhotoStatic(photo))
+    except Exception as exc:
+        logger.exception("set_my_profile_photo failed (will retry next start)",
+                         exc_info=exc)
+        return
+    logger.info("Uploaded the bot profile photo")
+    try:
+        marker.write_text(digest + "\n")
+    except OSError as exc:
+        logger.warning("Could not save %s (%s); the photo will be uploaded "
+                       "again next start", marker, exc)
+
+
 async def _post_init(app: Application) -> None:
     """Start the HTTP server (webhook + webui), run startup checks, DM admin.
     Server first: the probes retry with backoff and can take 1-2 minutes
     with all three services down, during which /healthz and the webhook
     receiver would look dead to health checks."""
     await _register_commands(app)
+    await _register_profile(app)
     web_app = web.Application(client_max_size=ADMIN_UPLOAD_MAX_BYTES)
 
     async def _on_comment(payload: dict) -> None:

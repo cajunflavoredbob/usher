@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **New look**: a new app icon, a flashlight lighting a pool on the floor with a play symbol in it, and the same art as the bot's profile photo.
+- **Welcome screen**: the "What can this bot do?" screen a new user sees before tapping Start now says what Usher does, in its own voice ("Hi, I'm your Usher..."), and the profile page has a matching short description. The bot sets both, and its profile photo, at every startup, so they always match the code; the photo is uploaded again only when it changes. The welcome picture is set once in BotFather; the README's "Bot profile and welcome screen" section has the steps.
+
 ## [0.20.1] - 2026-11-14
 
 ### Changed

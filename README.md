@@ -217,7 +217,25 @@ Because users sign in with Plex, Usher authenticates to Seerr **as the user** (v
 - `http_util.py`, `fix_result.py`: API error contracts and retry, auto-fix result types.
 - `auth_util.py`, `backup_crypto.py`: admin auth/CSRF/throttle, passphrase-wrapped backups.
 - `Dockerfile`, `docker-compose.yml`, `.env.example`, `unraid-template.xml`
+- `icon.png` / `icon.svg`: the app icon. `assets/`: the bot's profile photo and welcome picture, each with its SVG source.
 - `.github/workflows/`: tests gate releases; images publish to GHCR and Docker Hub on tag.
+
+## Bot profile and welcome screen
+
+At every startup the bot sets its own description (the "What can this bot do?" text a new user sees before tapping Start), its short description (the blurb on its profile page) and its profile photo (`assets/avatar.png`). The photo is uploaded only when the file changed since the last upload, which is tracked in `avatar.sha256` in the data folder; delete that file to force a fresh upload. A failure in any of these is logged and the bot starts anyway.
+
+The welcome picture above the description is the one thing the Bot API can't set. Set it once in BotFather:
+
+1. Open [@BotFather](https://t.me/BotFather), send `/mybots` and pick your bot.
+2. Tap **Edit Bot**, then **Edit Description Picture**.
+3. Send `assets/welcome.png` (640x360) as a photo.
+
+To change a picture, edit its SVG in `assets/` and render the PNGs again with [resvg](https://github.com/linebender/resvg) (the renderer is not a project dependency):
+
+```bash
+npm install --prefix /tmp/resvg @resvg/resvg-js@2.6.2
+NODE_PATH=/tmp/resvg/node_modules node scripts/render_assets.cjs
+```
 
 ## Privacy
 

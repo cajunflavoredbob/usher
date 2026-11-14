@@ -10,6 +10,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # an app module, so copy them all.
 COPY *.py ./
 COPY bot/ ./bot/
+# The bot's profile photo, uploaded at startup when it changes.
+COPY assets/avatar.png ./assets/avatar.png
 
 # /data holds settings.json, the SQLite mappings DB, the encryption key,
 # the session secret, and the Plex client id
