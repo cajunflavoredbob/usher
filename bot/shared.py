@@ -731,6 +731,21 @@ _GATE_EXEMPT_PREFIXES: Final = frozenset({
 })
 
 
+def _exempt_buttons_only(message) -> Optional[InlineKeyboardMarkup]:
+    """`message`'s keyboard with the gated buttons dropped: the buttons whose
+    callback prefix is gate-exempt (and so still work on an old message)
+    stay, in their rows. None when none remain, which removes the keyboard."""
+    markup = getattr(message, "reply_markup", None)
+    rows = []
+    for row in getattr(markup, "inline_keyboard", ()) or ():
+        kept = [b for b in row
+                if isinstance(getattr(b, "callback_data", None), str)
+                and b.callback_data.split(":", 1)[0] in _GATE_EXEMPT_PREFIXES]
+        if kept:
+            rows.append(kept)
+    return InlineKeyboardMarkup(rows) if rows else None
+
+
 def _is_group_message(message) -> bool:
     chat = getattr(message, "chat", None)
     return getattr(chat, "type", None) in ("group", "supergroup")
@@ -866,7 +881,8 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     except telegram.error.TelegramError as exc:
         logger.debug("callback answer failed", exc_info=exc)
     try:
-        await q.edit_message_reply_markup(reply_markup=None)
+        await q.edit_message_reply_markup(
+            reply_markup=_exempt_buttons_only(q.message))
     except telegram.error.TelegramError as exc:
         logger.debug("edit_message_reply_markup failed", exc_info=exc)
     raise ApplicationHandlerStop

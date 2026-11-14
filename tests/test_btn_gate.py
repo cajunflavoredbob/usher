@@ -244,3 +244,54 @@ async def test_gate_admits_entry_without_chat_id_by_message_id():
     del app.bot_data["btn_msgs"][42][0]["chat_id"]
     upd = _make_update(42, 1001, chat_id=200)
     await global_btn_gate(upd, _Ctx(app))  # no raise
+
+
+# --- a refusal keeps the exempt buttons ---
+
+
+def _stale_tap_on(app, markup, data):
+    """A tap on message 2000 (not the live one) that carries `markup`."""
+    record_btn(app, 42, _make_message(1001))
+    upd = _make_update(42, 2000, data=data)
+    upd.callback_query.message.reply_markup = markup
+    return upd
+
+
+def _callbacks(markup):
+    return [[b.callback_data for b in row] for row in markup.inline_keyboard]
+
+
+async def test_refusal_on_ask_admin_dm_keeps_the_exempt_buttons():
+    from bot.ask_admin import mark_failed_button
+    from bot.shared import new_ticket_dm_kb
+    from telegram import InlineKeyboardMarkup
+    kb = InlineKeyboardMarkup([[mark_failed_button(7)],
+                               *new_ticket_dm_kb(7).inline_keyboard])
+    app = _make_app()
+    upd = _stale_tap_on(app, kb, "tkfm:7")
+    with pytest.raises(ApplicationHandlerStop):
+        await global_btn_gate(upd, _Ctx(app))
+    assert _callbacks(upd.callback_query.edits[-1]) == [
+        ["tkr:7", "tkf:7", "tkc:7"], ["tkopen:7"]]
+
+
+async def test_refusal_on_a_listed_ticket_card_drops_the_gated_back_button():
+    from bot.shared import ticket_detail_kb
+    from bot.tickets import _with_list_back
+    kb = _with_list_back(ticket_detail_kb(7, True), 7, retry=False)
+    app = _make_app()
+    upd = _stale_tap_on(app, kb, kb.inline_keyboard[-1][0].callback_data)
+    with pytest.raises(ApplicationHandlerStop):
+        await global_btn_gate(upd, _Ctx(app))
+    assert _callbacks(upd.callback_query.edits[-1]) == [
+        ["tkr:7", "tkf:7", "tkc:7"]]
+
+
+async def test_refusal_removes_the_keyboard_when_nothing_exempt_remains():
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("x", callback_data="tkfm:7")]])
+    app = _make_app()
+    upd = _stale_tap_on(app, kb, "tkfm:7")
+    with pytest.raises(ApplicationHandlerStop):
+        await global_btn_gate(upd, _Ctx(app))
+    assert upd.callback_query.edits[-1] is None
