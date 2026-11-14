@@ -72,6 +72,7 @@ from bot.callback_prefixes import (
     FOLLOW_DEL,
     FOLLOW_REMOVE,
     REQUESTS_FOLLOWS,
+    REQUESTS_WEEK,
     SUBSCRIPTION_DEL,
     UNINV_GO,
     UNINV_KEEP,
@@ -118,6 +119,7 @@ from bot.invite_flow import (_INV_KEYS, _invite_conversation,
 from bot.digest import (DIGEST_FIRST_DELAY_S, DIGEST_INTERVAL_S,
                         account_notices, digest_info, digest_job,
                         notice_toggle)
+from bot.coming_week import coming_week_hub
 from bot.follows import follow_add, follow_del, follow_remove, follows_hub
 from bot.auto_follow import (AUTO_FOLLOW_FIRST_DELAY_S,
                              AUTO_FOLLOW_INTERVAL_S, auto_follow_job)
@@ -609,6 +611,8 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
                                          pattern=fr"^{REQUESTS_SUBSCRIPTIONS}$"))
     app.add_handler(CallbackQueryHandler(follows_hub,
                                          pattern=fr"^{REQUESTS_FOLLOWS}$"))
+    app.add_handler(CallbackQueryHandler(
+        coming_week_hub, pattern=fr"^{REQUESTS_WEEK}(:[01]:[0-9]+)?$"))
     # Tickets Hub list button, also a detail card's "⬅️ Tickets" (Report a
     # problem is a new-Ticket conversation entry).
     app.add_handler(CallbackQueryHandler(tickets_hub_list,

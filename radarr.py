@@ -255,3 +255,12 @@ class RadarrClient:
                                   "includeMovie": "true"})
         return json_or_raise(r, service=_SERVICE, what="history since",
                              expect=list)
+
+    async def get_calendar(self, start: str, end: str) -> list[dict]:
+        """GET /calendar: movies with an `inCinemas`, `digitalRelease` or
+        `physicalRelease` date from `start` to `end` (YYYY-MM-DD)."""
+        r = await execute(self._client, "GET", "/calendar",
+                          service=_SERVICE,
+                          params={"start": start, "end": end})
+        return json_or_raise(r, service=_SERVICE, what="calendar",
+                             expect=list)

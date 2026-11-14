@@ -113,6 +113,8 @@ REQUESTS_TRENDING: Final = "rqht"     # Requests Hub "Trending" (global handler)
 REQUESTS_SUBSCRIPTIONS: Final = "rqhs"  # Requests Hub "Subscriptions" (global
                                       # handler)
 REQUESTS_FOLLOWS: Final = "rqhf"      # Requests Hub "Follows" (global handler)
+REQUESTS_WEEK: Final = "rqhw"         # Requests Hub "Coming this week"; its
+                                      # filter and paging use rqhw:<0|1>:<page>
 TICKETS_REPORT: Final = "tkhr"        # Tickets Hub "Report a problem" (new-Ticket
                                       # conversation entry point)
 TICKETS_LIST: Final = "tkhl"          # Tickets Hub list button and a detail

@@ -11,7 +11,7 @@ from telegram.ext import ConversationHandler
 from bot import hub
 from bot.callback_prefixes import (HUB_OPEN, REQUESTS_MINE, REQUESTS_NEW,
                                    REQUESTS_SUBSCRIPTIONS, REQUESTS_TRENDING,
-                                   REQUESTS_FOLLOWS)
+                                   REQUESTS_FOLLOWS, REQUESTS_WEEK)
 from bot.discover_cmd import (cmd_trending, dv_category, dv_page,
                               trending_hub)
 from bot.request_flow import (_request_conversation, _request_timeout,
@@ -107,7 +107,7 @@ def _fake_conv(key=(100, USER_ID)):
 
 # --- the Hub itself ------------------------------------------------------------
 
-async def test_request_without_title_shows_five_button_hub():
+async def test_request_without_title_shows_six_button_hub():
     ctx = make_ctx(admin_id=ADMIN_ID, link=None)  # no gate for the Hub
     ctx.args = []
     upd = make_update(text="/request", user_id=USER_ID)
@@ -119,7 +119,8 @@ async def test_request_without_title_shows_five_button_hub():
     assert _flat(reply["reply_markup"]) == [
         ("➕ New request", REQUESTS_NEW), ("📥 My requests", REQUESTS_MINE),
         ("🔥 Trending", REQUESTS_TRENDING), ("🔔 Subscriptions", REQUESTS_SUBSCRIPTIONS),
-        ("📺 Follows", REQUESTS_FOLLOWS)]
+        ("📺 Follows", REQUESTS_FOLLOWS),
+        ("🗓 Coming this week", REQUESTS_WEEK)]
     ctx.bot_data["seerr"].get_my_permissions.assert_not_awaited()
 
 
@@ -138,7 +139,7 @@ async def test_request_with_title_searches_without_hub():
 async def test_requests_hub_rows_at_most_two():
     view = await render_requests_hub(None, None)
     rows = hub.hub_rows(view.buttons)
-    assert [len(r) for r in rows] == [2, 2, 1]
+    assert [len(r) for r in rows] == [2, 2, 2]
 
 
 async def test_requests_back_button_shows_hub():
@@ -149,7 +150,7 @@ async def test_requests_back_button_shows_hub():
     assert edit["text"].startswith("🎬 <b>Requests</b>")
     assert [c for _, c in _flat(edit["reply_markup"])] == [
         REQUESTS_NEW, REQUESTS_MINE, REQUESTS_TRENDING, REQUESTS_SUBSCRIPTIONS,
-        REQUESTS_FOLLOWS]
+        REQUESTS_FOLLOWS, REQUESTS_WEEK]
 
 
 # --- Hub buttons reach the same result as the typed commands -------------------

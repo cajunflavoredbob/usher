@@ -1000,6 +1000,18 @@ class UserStore:
                     (telegram_id,)).fetchall()
         return await self._run(_do)
 
+    async def list_follow_ids(self, telegram_id: int) -> list[tuple]:
+        """A user's active Follows as [(tmdb_id, tvdb_id)]."""
+        def _do() -> list[tuple]:
+            with self._conn() as c:
+                return c.execute(
+                    """
+                    SELECT tmdb_id, tvdb_id FROM follows
+                    WHERE telegram_id = ? AND removed = 0
+                    """,
+                    (telegram_id,)).fetchall()
+        return await self._run(_do)
+
     async def list_followers(self, tmdb_id: int) -> list[int]:
         """Telegram ids with an active Follow on a show."""
         def _do() -> list[int]:

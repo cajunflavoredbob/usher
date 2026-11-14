@@ -14,6 +14,7 @@ from bot.callback_prefixes import (
     REQUESTS_NEW,
     REQUESTS_SUBSCRIPTIONS,
     REQUESTS_TRENDING,
+    REQUESTS_WEEK,
 )
 from bot.hub import HubView, register_hub
 
@@ -23,8 +24,9 @@ REQUESTS_HUB = "requests"
 async def render_requests_hub(update, ctx) -> HubView:
     return HubView(
         text=("🎬 <b>Requests</b>\nAsk for a movie or show, check on your "
-              "requests, browse what's trending, or see your "
-              "Subscriptions and the shows you follow."),
+              "requests, browse what's trending, see your "
+              "Subscriptions and the shows you follow, or what's coming "
+              "this week."),
         buttons=[
             InlineKeyboardButton("➕ New request", callback_data=REQUESTS_NEW),
             InlineKeyboardButton("📥 My requests", callback_data=REQUESTS_MINE),
@@ -32,6 +34,8 @@ async def render_requests_hub(update, ctx) -> HubView:
             InlineKeyboardButton("🔔 Subscriptions",
                                  callback_data=REQUESTS_SUBSCRIPTIONS),
             InlineKeyboardButton("📺 Follows", callback_data=REQUESTS_FOLLOWS),
+            InlineKeyboardButton("🗓 Coming this week",
+                                 callback_data=REQUESTS_WEEK),
         ],
     )
 

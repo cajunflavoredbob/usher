@@ -375,3 +375,13 @@ class SonarrClient:
         if d.get("seasonNumber") is None or d.get("episodeNumber") is None:
             return None
         return d["seasonNumber"], d["episodeNumber"]
+
+    async def get_calendar(self, start: str, end: str) -> list[dict]:
+        """GET /calendar: episodes airing from `start` to `end` (dates,
+        YYYY-MM-DD), each with its series (`includeSeries`)."""
+        r = await execute(self._client, "GET", "/calendar",
+                          service=_SERVICE,
+                          params={"start": start, "end": end,
+                                  "includeSeries": "true"})
+        return json_or_raise(r, service=_SERVICE, what="calendar",
+                             expect=list)
