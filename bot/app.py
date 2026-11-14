@@ -69,6 +69,7 @@ from bot.callback_prefixes import (
     DV_GENRE_TYPE,
     DV_INFO,
     DV_PAGE,
+    DV_SIMILAR,
     SUBSCRIPTION_ADD,
     FOLLOW_ADD,
     RQ_REMAINING,
@@ -117,7 +118,8 @@ from bot.link_flow import (_link_conversation, account_unlink, cmd_account,
                            cmd_link_didnt_work, cmd_unlink)
 from bot.mystats_cmd import cmd_mystats, mystats_button
 from bot.discover_cmd import (cmd_trending, dv_category, dv_genre,
-                              dv_genre_type, dv_info, dv_page, trending_hub)
+                              dv_genre_type, dv_info, dv_page, dv_similar,
+                              trending_hub)
 from bot.invite_flow import (_INV_KEYS, _invite_conversation,
                              admin_inactive, admin_shares, cmd_uninvite,
                              share_matches, share_remove,
@@ -584,6 +586,7 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
                                          pattern=fr"^{DV_GENRE_TYPE}:"))
     app.add_handler(CallbackQueryHandler(dv_genre, pattern=fr"^{DV_GENRE}:"))
     app.add_handler(CallbackQueryHandler(dv_info, pattern=fr"^{DV_INFO}:"))
+    app.add_handler(CallbackQueryHandler(dv_similar, pattern=fr"^{DV_SIMILAR}:"))
     # Subscription callbacks (detail-card 🔔 + /subscriptions ❌).
     app.add_handler(CallbackQueryHandler(subscription_add,
                                          pattern=fr"^{SUBSCRIPTION_ADD}:"))

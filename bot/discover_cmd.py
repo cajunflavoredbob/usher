@@ -65,6 +65,10 @@ GENRES_CATEGORY = "genres"
 GENRE_RESULT_CATEGORY = "genre"  # dv_cat while a genre's titles are shown
 _GENRE_TYPE_LABELS = {"movie": "🎬 Movies", "tv": "📺 Shows"}
 
+SIMILAR_CATEGORY = "similar"  # dv_cat while "more like this" titles are shown
+SIMILAR_LABEL = "🔁 More like this"
+NO_SIMILAR_MSG = "Nothing similar to this title turned up."
+
 POPULAR_CATEGORY = "popular"
 POPULAR_LABEL = "🏆 Popular here this week"
 POPULAR_PER_STAT = 10
@@ -162,6 +166,8 @@ def _render(ctx: ContextTypes.DEFAULT_TYPE,
 
     if category == GENRE_RESULT_CATEGORY:
         title = ctx.user_data.get("dv_label") or CATEGORY_LABELS["genres"]
+    elif category == SIMILAR_CATEGORY:
+        title = SIMILAR_LABEL
     else:
         title = _labels(ctx).get(category, POPULAR_LABEL)
     lines = [f"{title} - tap a number to request:", ""]
@@ -224,9 +230,11 @@ def _render(ctx: ContextTypes.DEFAULT_TYPE,
 async def _load_and_render(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                            reply_method, category: str, *,
                            user_id: int, hub=None,
-                           genre: tuple | None = None) -> None:
+                           genre: tuple | None = None,
+                           similar: tuple | None = None) -> None:
     """Fetch and render a browse list. `genre` is (media_type, genre_id,
-    name) for a genre's titles, which show under their own title."""
+    name) for a genre's titles, which show under their own title; `similar`
+    is (media_type, tmdb_id) for the titles like one title."""
     seerr: SeerrClient = ctx.bot_data["seerr"]
     ctx.user_data["dv_popular_ok"] = await _popular_allowed(ctx, user_id)
     # /mystats needs the user's own Link, so the Admin without one gets no button.
@@ -235,7 +243,10 @@ async def _load_and_render(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     if category == POPULAR_CATEGORY and not ctx.user_data["dv_popular_ok"]:
         category = "trending"
     try:
-        if genre:
+        if similar:
+            results = await seerr.similar_titles(
+                similar[0], similar[1], limit=REQUEST_SEARCH_FETCH_LIMIT)
+        elif genre:
             results = await seerr.discover_genre(
                 genre[0], genre[1], limit=REQUEST_SEARCH_FETCH_LIMIT)
         elif category == POPULAR_CATEGORY:
@@ -246,18 +257,23 @@ async def _load_and_render(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     except Exception as exc:
         logger.exception("discover fetch failed")
         text = f"Couldn't fetch the list. {user_friendly_message(exc)}"
-        retry = (f"{DV_GENRE}:{_current_version(ctx)}:{genre[0]}:{genre[1]}"
-                 if genre else REQUESTS_TRENDING)
+        if genre:
+            retry = f"{DV_GENRE}:{_current_version(ctx)}:{genre[0]}:{genre[1]}"
+        else:
+            retry = REQUESTS_TRENDING
         await reply_end(ctx, reply_method, text, hub, retry,
                         user_id=user_id)
         return
     if not results:
-        text = "Nothing in that list right now. Try another category."
+        text = (NO_SIMILAR_MSG if similar else
+                "Nothing in that list right now. Try another category.")
         await reply_end(ctx, reply_method, text, hub, user_id=user_id)
         return
     ctx.user_data["dv_version"] = _current_version(ctx) + 1
     ctx.user_data["dv_results"] = results
-    ctx.user_data["dv_cat"] = GENRE_RESULT_CATEGORY if genre else category
+    ctx.user_data["dv_cat"] = (SIMILAR_CATEGORY if similar
+                               else GENRE_RESULT_CATEGORY if genre
+                               else category)
     if genre:
         ctx.user_data["dv_label"] = (
             f"🎭 {genre[2]} ({_GENRE_TYPE_LABELS[genre[0]][2:]})")
@@ -484,3 +500,29 @@ async def dv_info(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await q.answer()
     await send_detail_card(ctx, update.effective_chat.id, r,
                            update.effective_user.id)
+
+
+async def dv_similar(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """dvs:<media_type>:<tmdb_id>: the titles like a detail card's title,
+    sent as a new list under the card (a card is a photo, so it can't be
+    edited into one)."""
+    q = update.callback_query
+    user_id = update.effective_user.id
+    if not await _may_browse(ctx, user_id):
+        await q.answer(NOT_LINKED_MSG, show_alert=True)
+        return
+    try:
+        _, media_type, tmdb_id_s = q.data.split(":")
+        tmdb_id = int(tmdb_id_s)
+    except (ValueError, IndexError):
+        await q.answer()
+        return
+    if media_type not in _GENRE_TYPE_LABELS:
+        await q.answer()
+        return
+    await q.answer()
+    if await require_seerr(update, ctx) is None:
+        return
+    await send_typing(update, ctx)
+    await _load_and_render(update, ctx, q.message.reply_text, SIMILAR_CATEGORY,
+                           user_id=user_id, similar=(media_type, tmdb_id))

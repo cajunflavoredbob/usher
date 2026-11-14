@@ -20,7 +20,7 @@ from seerr import (
     MediaResult,
 )
 
-from bot.callback_prefixes import RQ_INFO_DISMISS, SUBSCRIPTION_ADD
+from bot.callback_prefixes import DV_SIMILAR, RQ_INFO_DISMISS, SUBSCRIPTION_ADD
 from bot.follows import follow_button, follow_state
 from bot.remaining import remaining_button, requestable_seasons
 from bot.shared import record_card_owner
@@ -69,7 +69,8 @@ def card_keyboard(r: MediaResult,
     change (an already-available or blocklisted title would never fire);
     Follow or Unfollow for a show when `following` is given (None = the
     viewer may not follow, so no button); Request remaining seasons for a
-    show when `remaining` says a season is left to request."""
+    show when `remaining` says a season is left to request; More like this
+    always."""
     rows = []
     if (r.status or 0) not in (MEDIA_STATUS_AVAILABLE, MEDIA_STATUS_BLOCKLISTED):
         rows.append([InlineKeyboardButton(
@@ -79,6 +80,9 @@ def card_keyboard(r: MediaResult,
         rows.append([follow_button(r.tmdb_id, following)])
     if r.media_type == "tv" and remaining:
         rows.append([remaining_button(r.tmdb_id)])
+    rows.append([InlineKeyboardButton(
+        "🔁 More like this",
+        callback_data=f"{DV_SIMILAR}:{r.media_type}:{r.tmdb_id}")])
     rows.append([InlineKeyboardButton("🗑 Dismiss", callback_data=RQ_INFO_DISMISS)])
     return InlineKeyboardMarkup(rows)
 

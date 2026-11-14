@@ -48,3 +48,42 @@ async def test_discover_genre_uses_type_path_and_tags_media_type(monkeypatch):
         ("movie", 5, "A Film")]
     await client.discover_genre("tv", 18)
     assert seen["path"].endswith("/discover/tv/genre/18")
+
+
+async def test_similar_titles_prefers_recommendations(monkeypatch):
+    paths = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        return httpx.Response(200, json={"results": [
+            {"id": 5, "title": "Rec", "releaseDate": "2020-01-01"}]})
+
+    out = await _client(monkeypatch, handler).similar_titles("movie", 11)
+    assert [p.split("/api/v1")[-1] for p in paths] == ["/movie/11/recommendations"]
+    assert [(r.media_type, r.tmdb_id) for r in out] == [("movie", 5)]
+
+
+async def test_similar_titles_falls_back_to_similar_then_empty(monkeypatch):
+    paths = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path.split("/api/v1")[-1])
+        if request.url.path.endswith("/similar"):
+            return httpx.Response(200, json={"results": [
+                {"id": 8, "name": "Sim", "firstAirDate": "2019-01-01"}]})
+        return httpx.Response(200, json={"results": []})
+
+    client = _client(monkeypatch, handler)
+    out = await client.similar_titles("tv", 3)
+    assert paths == ["/tv/3/recommendations", "/tv/3/similar"]
+    assert [(r.media_type, r.tmdb_id) for r in out] == [("tv", 8)]
+
+    with pytest.raises(ValueError):
+        await client.similar_titles("person", 3)
+
+
+async def test_similar_titles_both_empty_is_empty(monkeypatch):
+    def empty(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"results": []})
+
+    assert await _client(monkeypatch, empty).similar_titles("tv", 3) == []

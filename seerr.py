@@ -575,6 +575,25 @@ class SeerrClient:
                  for i in data.get("results") or []]
         return self._parse_media_results(items, limit)
 
+    async def similar_titles(self, media_type: str, tmdb_id: int,
+                             limit: int = SEARCH_RESULT_LIMIT
+                             ) -> list[MediaResult]:
+        """Titles like one title: Seerr's recommendations, or its similar
+        list when there are no recommendations. Same result shape as discover."""
+        if media_type not in ("movie", "tv"):
+            raise ValueError(f"unknown media type: {media_type}")
+        for kind in ("recommendations", "similar"):
+            r = await execute(
+                self._client, "GET", f"/{media_type}/{int(tmdb_id)}/{kind}",
+                service=_SERVICE)
+            data = _json_or_raise(r, what=kind)
+            items = [{"mediaType": media_type, **(i or {})}
+                     for i in data.get("results") or []]
+            out = self._parse_media_results(items, limit)
+            if out:
+                return out
+        return []
+
     async def get_tv_seasons(self, tmdb_id: int) -> tuple[list[TvSeason], Optional[int]]:
         """Return (seasons, tvdb_id) for a TV show. Includes season 0 because
         anime movies / OVAs / tie-in specials often live there and users need

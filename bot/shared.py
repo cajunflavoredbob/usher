@@ -34,6 +34,7 @@ from bot.callback_prefixes import (
     RQ_ADMIN_DECLINE,
     RQ_ADMIN_RETRY,
     RQ_INFO_DISMISS,
+    DV_SIMILAR,
     SUBSCRIPTION_ADD,
     FOLLOW_ADD,
     RQ_REMAINING,
@@ -687,7 +688,8 @@ async def run_relink_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> b
 
 
 _GATE_EXEMPT_PREFIXES: Final = frozenset({
-    RQ_INFO_DISMISS, SUBSCRIPTION_ADD, FOLLOW_ADD, FOLLOW_DEL, DIGEST_INFO,
+    RQ_INFO_DISMISS, DV_SIMILAR, SUBSCRIPTION_ADD, FOLLOW_ADD, FOLLOW_DEL,
+    DIGEST_INFO,
     RQ_REMAINING, RQ_ADMIN_APPROVE, RQ_ADMIN_DECLINE, RQ_ADMIN_RETRY,
     ACCESS_APPROVE, ACCESS_IGNORE, ASK_ADMIN,
 })
@@ -757,6 +759,8 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     #    and there is no way to bring the DM back in Telegram once it expires.
     #  - Approve/Ignore on an Access ask DM: Admin-only, and each ask is acted
     #    on once (the ask's status is re-read before anything happens).
+    #  - More like this sits on detail cards, which are not in the history. It
+    #    is read-only: it only sends a new list.
     #  - Ask the Admin sits on a Reporter's repeat DM, which can be hours
     #    old when tapped and cannot be brought back. The handler checks the
     #    tapped message carries that button, and each Ticket is asked once.

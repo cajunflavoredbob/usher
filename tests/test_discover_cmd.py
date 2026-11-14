@@ -5,7 +5,8 @@ from __future__ import annotations
 from seerr import MEDIA_STATUS_AVAILABLE, MediaResult
 from bot import hub
 from bot.discover_cmd import (cmd_trending, dv_category, dv_genre,
-                              dv_genre_type, dv_info, dv_page)
+                              dv_genre_type, dv_info, dv_page,
+                              dv_similar)
 from bot.requests_hub import REQUESTS_HUB
 
 from tests._handler_harness import make_ctx, make_link, make_update
@@ -244,3 +245,70 @@ async def test_genre_results_fetch_failure_retries_that_genre():
     edit = upd.callback_query.edits[0]
     assert "Couldn't fetch the list" in edit["text"]
     assert ("🔁 Try again", "dvr:4:movie:28") in _flat(edit["reply_markup"])
+
+
+# --- More like this -------------------------------------------------------
+
+def _similar_ctx(**user_data):
+    ctx = make_ctx(link=make_link(telegram_id=USER_ID), user_data=user_data)
+    ctx.bot_data["seerr"].similar_titles.return_value = _results(7)
+    return ctx
+
+
+async def test_more_like_this_lists_titles_like_trending():
+    ctx = _similar_ctx(dv_version=2)
+    upd = make_update(callback_data="dvs:tv:555", user_id=USER_ID)
+    await dv_similar(upd, ctx)
+    call = ctx.bot_data["seerr"].similar_titles.call_args
+    assert call.args[:2] == ("tv", 555)
+    sent = upd.callback_query.message.reply_calls[-1]
+    assert "🔁 More like this" in sent["text"]
+    assert "1. " in sent["text"] and "5. " in sent["text"]
+    cbs = _callbacks(sent["reply_markup"])
+    assert "rqfi:movie:100" in cbs
+    assert "dvi:3:movie:100" in cbs and "dvp:3:1" in cbs
+    assert ctx.user_data["dv_version"] == 3
+
+
+async def test_more_like_this_results_open_detail_cards_and_page():
+    ctx = _similar_ctx()
+    await dv_similar(make_update(callback_data="dvs:movie:9", user_id=USER_ID),
+                     ctx)
+    upd = make_update(callback_data="dvp:1:1", user_id=USER_ID)
+    await dv_page(upd, ctx)
+    assert "6. " in upd.callback_query.edits[0]["text"]
+    assert "🔁 More like this" in upd.callback_query.edits[0]["text"]
+
+
+async def test_more_like_this_empty_says_so():
+    ctx = _similar_ctx()
+    ctx.bot_data["seerr"].similar_titles.return_value = []
+    upd = make_update(callback_data="dvs:movie:9", user_id=USER_ID)
+    await dv_similar(upd, ctx)
+    assert "Nothing similar" in upd.callback_query.message.reply_calls[-1]["text"]
+
+
+async def test_more_like_this_fetch_failure_says_so():
+    ctx = _similar_ctx()
+    ctx.bot_data["seerr"].similar_titles.side_effect = RuntimeError("boom")
+    upd = make_update(callback_data="dvs:movie:9", user_id=USER_ID)
+    await dv_similar(upd, ctx)
+    sent = upd.callback_query.message.reply_calls[-1]
+    assert "Couldn't fetch the list" in sent["text"]
+
+
+async def test_more_like_this_refuses_unlinked_users_and_bad_data():
+    ctx = make_ctx(link=None)
+    await dv_similar(make_update(callback_data="dvs:movie:9", user_id=USER_ID),
+                     ctx)
+    ctx = _similar_ctx()
+    for data in ("dvs:person:9", "dvs:movie:x", "dvs:movie"):
+        await dv_similar(make_update(callback_data=data, user_id=USER_ID), ctx)
+    ctx.bot_data["seerr"].similar_titles.assert_not_awaited()
+
+
+def test_detail_card_offers_more_like_this_for_both_types():
+    from bot.media_card import card_keyboard
+    for mt in ("movie", "tv"):
+        r = MediaResult(mt, 77, "T", "2026", None)
+        assert f"dvs:{mt}:77" in _callbacks(card_keyboard(r))
