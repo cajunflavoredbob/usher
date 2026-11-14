@@ -153,6 +153,20 @@ async def test_a_season_row_yields_one_row_per_episode_once(fresh_store):
     tau.get_children_metadata.assert_awaited_with(20, "season")
 
 
+async def test_season_children_without_a_season_number_use_the_rows(
+        fresh_store):
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    season = _item(20, 1700000500, media_type="season", parent_rating_key=7,
+                   parent_title="Breaking Bad", media_index="2")
+    kids = [{"media_type": "episode", "rating_key": 100,
+             "media_index": "4"}]
+    tau = _tautulli([season])
+    tau.get_children_metadata = AsyncMock(return_value=kids)
+    await poll_new_content(_ctx(fresh_store, tautulli=tau))
+    assert await _rows(fresh_store) == [
+        ("episode", 1396, "Breaking Bad", 2, 4)]
+
+
 async def test_a_show_row_expands_its_seasons(fresh_store):
     await fresh_store.set_poller_mark("tautulli_added", MARK)
     show = _item(7, 1700000500, media_type="show", title="Breaking Bad")

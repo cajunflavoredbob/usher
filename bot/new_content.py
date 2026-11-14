@@ -138,6 +138,13 @@ async def _read_fresh(tautulli, since: int) -> list[dict]:
     return items
 
 
+def _with_season(children: list[dict], number) -> list[dict]:
+    """Children lacking parent_media_index take their season's number."""
+    return [c if c.get("parent_media_index") not in (None, "")
+            or number in (None, "") else {**c, "parent_media_index": number}
+            for c in children]
+
+
 async def _expand_episodes(tautulli, item: dict) -> list[tuple[dict, object]]:
     """The episodes under a season or show row as (child, show key) pairs.
     Tautulli's get_children_metadata lists a season's episodes, or a show's
@@ -146,7 +153,9 @@ async def _expand_episodes(tautulli, item: dict) -> list[tuple[dict, object]]:
     if kind == "season":
         show_key = item.get("parent_rating_key")
         return [(c, c.get("grandparent_rating_key") or show_key)
-                for c in await tautulli.get_children_metadata(key, "season")
+                for c in _with_season(
+                    await tautulli.get_children_metadata(key, "season"),
+                    item.get("media_index"))
                 if c.get("media_type", "episode") == "episode"]
     out = []
     for season in await tautulli.get_children_metadata(key, "show"):
@@ -154,7 +163,7 @@ async def _expand_episodes(tautulli, item: dict) -> list[tuple[dict, object]]:
             continue
         kids = await tautulli.get_children_metadata(
             season["rating_key"], "season")
-        for c in kids:
+        for c in _with_season(kids, season.get("media_index")):
             if c.get("media_type", "episode") == "episode":
                 out.append((c, c.get("grandparent_rating_key") or key))
     return out
