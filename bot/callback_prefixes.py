@@ -95,6 +95,8 @@ UNINV_GO: Final = "uninv"             # uninv:<share_id>:<a|p> confirmed removal
 UNINV_KEEP: Final = "uninvk"          # dismiss the /uninvite confirm card
 SHARE_VIEW: Final = "shv"             # shv:<share_id> one Share's view
 SHARE_REMOVE: Final = "shrm"          # shrm:<share_id> Remove -> confirm card
+INV_EXPIRY: Final = "invex"           # invex:<version>:<days> pick an Expiry (0 = never)
+SHARE_EXPIRY: Final = "shex"          # shex:<share_id>[:<days>] Set expiry picker / choice (0 = clear)
 SHARE_MATCHES: Final = "shq"          # shq:<page> Prev/Next of typed /uninvite
                                       # matches (search text in user_data)
 

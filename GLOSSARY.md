@@ -49,6 +49,9 @@ A Share the recipient has not accepted yet.
 Removing a Share, pending or accepted.
 _Avoid_: unshare
 
+**Expiry**:
+The date after which the bot Uninvites a Share by itself. The Admin sets it while sending an Invite or from the Share's view; a Share without one never ends on its own. A pending Invite can have one too.
+
 **Access ask**:
 A stranger's request, sent through the bot, for the Admin to Invite them. It comes from the Link flow when Seerr rejects the person's Plex sign-in, and is open until the Admin approves it (by sending the Invite) or ignores it.
 

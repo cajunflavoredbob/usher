@@ -14,7 +14,8 @@ from telegram.ext import ConversationHandler
 from bot import hub
 from bot.admin_hub import ADMIN_HUB, cmd_admin
 from bot.callback_prefixes import (ADMIN_INVITE, ADMIN_SHARES, ADMIN_STATUS,
-                                   HUB_OPEN, SHARE_MATCHES, SHARE_REMOVE,
+                                   HUB_OPEN, SHARE_EXPIRY, SHARE_MATCHES,
+                                   SHARE_REMOVE,
                                    SHARE_VIEW, UNINV_KEEP)
 from bot.invite_flow import (_INV_KEYS, _invite_conversation, _invite_timeout,
                              admin_shares, cmd_uninvite, invite_cancel,
@@ -527,6 +528,7 @@ async def test_share_view_remove_confirm_removes_and_offers_admin():
     assert "friend@example.com" in edit["text"]
     assert "Accepted." in edit["text"]
     assert _flat(edit["reply_markup"]) == [
+        ("⏳ Set expiry", f"{SHARE_EXPIRY}:71"),
         ("🗑 Remove", f"{SHARE_REMOVE}:71"), ("⬅️ Shares", f"{ADMIN_SHARES}:0")]
 
     rm = make_update(callback_data=f"{SHARE_REMOVE}:71", user_id=ADMIN_ID)
@@ -603,6 +605,7 @@ async def test_uninvite_one_match_shows_view():
     reply = upd.effective_message.reply_calls[-1]
     assert "friend@example.com" in reply["text"]
     assert _flat(reply["reply_markup"]) == [
+        ("⏳ Set expiry", f"{SHARE_EXPIRY}:71"),
         ("🗑 Remove", f"{SHARE_REMOVE}:71"), ("⬅️ Shares", f"{ADMIN_SHARES}:0")]
     ctx.bot_data["plex"].remove_share.assert_not_awaited()
 

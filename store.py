@@ -50,6 +50,23 @@ _LOCKED_MAX_ATTEMPTS = 5
 _LOCKED_BASE_DELAY_S = 0.05
 
 
+@dataclass(frozen=True)
+class ShareExpiry:
+    """The Expiry of one Share (or pending Invite), keyed by its Plex share
+    id. `expires_at` is UTC text, "%Y-%m-%d %H:%M:%S", so it sorts and
+    compares as text. email and username are what the Share listing reported,
+    kept to match the Share after a re-list."""
+    share_id: int
+    email: str
+    username: str
+    expires_at: str
+    admin_reminded: bool
+    holder_reminded: bool
+    last_attempt_at: Optional[str]     # last removal attempt, UTC
+    last_error: Optional[str]          # why it failed; None when it did not
+    last_alerted_at: Optional[str]     # when the Admin was last told, UTC
+
+
 @dataclass
 class Link:
     telegram_id: int
@@ -505,6 +522,25 @@ class UserStore:
                     requester_seerr_id INTEGER,
                     tries INTEGER NOT NULL DEFAULT 0,
                     next_try_at TEXT NOT NULL
+                )
+                """
+            )
+            # Shares (and pending Invites) that expire: one row per Plex
+            # share id. The reminder flags and the last attempt, error and
+            # Admin alert let the expiry job send each reminder once, retry a
+            # failed removal and tell the Admin at most once a day.
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS share_expiries (
+                    share_id INTEGER PRIMARY KEY,
+                    email TEXT NOT NULL DEFAULT '',
+                    username TEXT NOT NULL DEFAULT '',
+                    expires_at TEXT NOT NULL,
+                    admin_reminded INTEGER NOT NULL DEFAULT 0,
+                    holder_reminded INTEGER NOT NULL DEFAULT 0,
+                    last_attempt_at TEXT,
+                    last_error TEXT,
+                    last_alerted_at TEXT
                 )
                 """
             )
@@ -1115,6 +1151,65 @@ class UserStore:
                 return c.execute(
                     "DELETE FROM failed_retries WHERE request_id = ?",
                     (request_id,)).rowcount > 0
+        return await self._run(_do)
+
+    # Share expiries
+
+    async def set_share_expiry(self, share_id: int, email: str, username: str,
+                               expires_at: str) -> None:
+        """Give a Share an Expiry, or move an existing one: the reminders
+        are re-armed and the last attempt, error and alert are forgotten."""
+        def _do() -> None:
+            with self._conn() as c:
+                c.execute(
+                    """
+                    INSERT INTO share_expiries
+                        (share_id, email, username, expires_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(share_id) DO UPDATE SET
+                        email = excluded.email,
+                        username = excluded.username,
+                        expires_at = excluded.expires_at,
+                        admin_reminded = 0, holder_reminded = 0,
+                        last_attempt_at = NULL, last_error = NULL,
+                        last_alerted_at = NULL
+                    """,
+                    (share_id, email or "", username or "", expires_at))
+        await self._run(_do)
+
+    _SHARE_EXPIRY_COLS = (
+        "share_id, email, username, expires_at, admin_reminded, "
+        "holder_reminded, last_attempt_at, last_error, last_alerted_at")
+
+    @staticmethod
+    def _share_expiry_from_row(r) -> ShareExpiry:
+        return ShareExpiry(r[0], r[1], r[2], r[3], bool(r[4]), bool(r[5]),
+                           r[6], r[7], r[8])
+
+    async def get_share_expiry(self, share_id: int) -> Optional[ShareExpiry]:
+        def _do():
+            with self._conn() as c:
+                return c.execute(
+                    f"SELECT {self._SHARE_EXPIRY_COLS} FROM share_expiries "
+                    "WHERE share_id = ?", (share_id,)).fetchone()
+        row = await self._run(_do)
+        return None if row is None else self._share_expiry_from_row(row)
+
+    async def list_share_expiries(self) -> list[ShareExpiry]:
+        """Every Expiry, soonest first."""
+        def _do() -> list[tuple]:
+            with self._conn() as c:
+                return c.execute(
+                    f"SELECT {self._SHARE_EXPIRY_COLS} FROM share_expiries "
+                    "ORDER BY expires_at, share_id").fetchall()
+        return [self._share_expiry_from_row(r) for r in await self._run(_do)]
+
+    async def clear_share_expiry(self, share_id: int) -> bool:
+        def _do() -> bool:
+            with self._conn() as c:
+                return c.execute(
+                    "DELETE FROM share_expiries WHERE share_id = ?",
+                    (share_id,)).rowcount > 0
         return await self._run(_do)
 
     # New-content poller

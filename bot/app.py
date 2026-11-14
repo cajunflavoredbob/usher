@@ -87,6 +87,7 @@ from bot.callback_prefixes import (
     RQ_ADMIN_DECLINE,
     RQ_ADMIN_RETRY,
     LINK_HELP,
+    SHARE_EXPIRY,
     SHARE_REMOVE,
     SHARE_MATCHES,
     SHARE_VIEW,
@@ -123,7 +124,8 @@ from bot.discover_cmd import (cmd_trending, dv_category, dv_genre,
 from bot.invite_flow import (_INV_KEYS, _invite_conversation,
                              admin_inactive, admin_shares, cmd_uninvite,
                              share_matches, share_remove,
-                             share_view, uninvite_cancel, uninvite_go)
+                             share_expiry, share_view, uninvite_cancel,
+                             uninvite_go)
 from bot.digest import (DIGEST_FIRST_DELAY_S, DIGEST_INTERVAL_S,
                         account_notices, digest_info, digest_job,
                         notice_toggle)
@@ -653,6 +655,8 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
                                          pattern=fr"^{ADMIN_INACTIVE}:\d+$"))
     app.add_handler(CallbackQueryHandler(share_view,
                                          pattern=fr"^{SHARE_VIEW}:\d+$"))
+    app.add_handler(CallbackQueryHandler(share_expiry,
+                                         pattern=fr"^{SHARE_EXPIRY}:\d+(:\d+)?$"))
     app.add_handler(CallbackQueryHandler(share_remove,
                                          pattern=fr"^{SHARE_REMOVE}:\d+$"))
     app.add_handler(CallbackQueryHandler(share_matches,

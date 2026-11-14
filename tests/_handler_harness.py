@@ -216,6 +216,10 @@ def make_ctx(*, admin_id: int = 999, user_data: Optional[dict] = None,
         upsert_failed_retry=AsyncMock(return_value="2099-01-01 00:00:00"),
         count_autofix_24h=AsyncMock(return_value=0),
         unlink=AsyncMock(return_value=True),
+        get_share_expiry=AsyncMock(return_value=None),
+        list_share_expiries=AsyncMock(return_value=[]),
+        set_share_expiry=AsyncMock(),
+        clear_share_expiry=AsyncMock(return_value=False),
     )
     bot_data: dict = {
         "admin_id": admin_id,

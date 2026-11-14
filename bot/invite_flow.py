@@ -12,8 +12,10 @@ An invite started from the Hub ends with a back button to it.
 
 The Hub's Shares lists every Share, 8 per page; tapping one shows its view,
 whose Remove revokes it (or cancels a pending invite) after an explicit
-confirmation. /uninvite <text> lands on the same view, or on the matching
-Shares as buttons.
+confirmation. A Share view also sets, changes or clears the Share's Expiry
+(the Share expiry table; the Invite's confirm card picks one too), and the
+Shares list marks each Share that has one. /uninvite <text> lands on the
+same view, or on the matching Shares as buttons.
 
 All of these reuse the admin's own /link Plex token: this surface only exists in
 the bot, and the admin can't meaningfully operate it unlinked anyway. All
@@ -53,8 +55,10 @@ from bot.callback_prefixes import (
     INV_ALL,
     INV_CANCEL,
     INV_DONE,
+    INV_EXPIRY,
     INV_GO,
     INV_LIB,
+    SHARE_EXPIRY,
     SHARE_MATCHES,
     SHARE_REMOVE,
     SHARE_VIEW,
@@ -73,6 +77,7 @@ from bot.shared import (
     record_btn,
     send_typing,
 )
+from bot.share_expiry import EXPIRY_DAYS, expires_at_text, expiry_date_text
 from const import INVITE_FLOW_TIMEOUT_S
 
 logger = logging.getLogger("usher")
@@ -82,7 +87,8 @@ _STALE_INVITE_TOAST = "That invite menu is stale: /invite to start over."
 # inv_version is deliberately NOT here: the stale-menu guard depends on the
 # counter surviving every reset (same lesson as rq_search_version).
 _INV_KEYS = ("inv_email", "inv_sections", "inv_selected", "inv_machine",
-             "inv_server_name", "inv_submitting", "inv_access_ask")
+             "inv_server_name", "inv_submitting", "inv_access_ask",
+             "inv_expiry_days")
 
 
 def _looks_like_email(s: str) -> bool:
@@ -170,6 +176,7 @@ def _invite_conversation() -> ConversationHandler:
                 CallbackQueryHandler(invite_libs_done, pattern=fr"^{INV_DONE}:"),
             ],
             INV_CONFIRM: [
+                CallbackQueryHandler(invite_expiry, pattern=fr"^{INV_EXPIRY}:"),
                 CallbackQueryHandler(invite_send, pattern=fr"^{INV_GO}:"),
             ],
             ConversationHandler.TIMEOUT: [TypeHandler(Update, _invite_timeout)],
@@ -413,24 +420,72 @@ async def invite_libs_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
         await q.answer("Pick at least one library.", show_alert=True)
         return INV_LIBS
     await q.answer()
-    sections = ctx.user_data.get("inv_sections") or []
-    titles = [s.title for s in sections if s.id in selected]
-    email = ctx.user_data.get("inv_email", "?")
+    ctx.user_data["inv_expiry_days"] = 0
     sent = await q.edit_message_text(
-        f"Invite <b>{html.escape(email)}</b> to "
-        f"<b>{html.escape(ctx.user_data.get('inv_server_name', 'Plex'))}</b> "
-        f"with {len(titles)} librar{'y' if len(titles) == 1 else 'ies'}:\n"
-        f"{html.escape(', '.join(titles))}\n\n"
-        "Plex will email them an invite from your account.",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅ Send invite",
-                                 callback_data=f"{INV_GO}:{version}"),
-            InlineKeyboardButton("🛑 Cancel",
-                                 callback_data=f"{INV_CANCEL}:{version}"),
-        ]]),
+        _invite_confirm_text(ctx),
+        reply_markup=_invite_confirm_markup(ctx, version),
         parse_mode="HTML",
     )
     record_btn(ctx.application, update.effective_user.id, sent)
+    return INV_CONFIRM
+
+
+def _invite_confirm_text(ctx: ContextTypes.DEFAULT_TYPE) -> str:
+    selected: set = ctx.user_data.get("inv_selected") or set()
+    sections = ctx.user_data.get("inv_sections") or []
+    titles = [s.title for s in sections if s.id in selected]
+    email = ctx.user_data.get("inv_email", "?")
+    days = ctx.user_data.get("inv_expiry_days") or 0
+    expiry = (f"Ends on {expiry_date_text(expires_at_text(days))}.\n"
+              if days else "")
+    return (
+        f"Invite <b>{html.escape(email)}</b> to "
+        f"<b>{html.escape(ctx.user_data.get('inv_server_name', 'Plex'))}</b> "
+        f"with {len(titles)} librar{'y' if len(titles) == 1 else 'ies'}:\n"
+        f"{html.escape(', '.join(titles))}\n{expiry}\n"
+        "Plex will email them an invite from your account.")
+
+
+def _invite_confirm_markup(ctx: ContextTypes.DEFAULT_TYPE,
+                           version: int) -> InlineKeyboardMarkup:
+    chosen = ctx.user_data.get("inv_expiry_days") or 0
+    picks = [(0, "Never")] + [(d, f"{d} days") for d in EXPIRY_DAYS]
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(("☑ " if d == chosen else "") + label,
+                              callback_data=f"{INV_EXPIRY}:{version}:{d}")
+         for d, label in picks],
+        [InlineKeyboardButton("✅ Send invite",
+                              callback_data=f"{INV_GO}:{version}"),
+         InlineKeyboardButton("🛑 Cancel",
+                              callback_data=f"{INV_CANCEL}:{version}")],
+    ])
+
+
+async def invite_expiry(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """The confirm card's Expiry row (invex:<version>:<days>): remembers the
+    choice and redraws the card. 0 is Never."""
+    q = update.callback_query
+    try:
+        _, version_s, days_s = q.data.split(":")
+        version, days = int(version_s), int(days_s)
+    except (ValueError, IndexError):
+        await q.answer()
+        return INV_CONFIRM
+    if _stale(ctx, version):
+        await q.answer(_STALE_INVITE_TOAST, show_alert=True)
+        return INV_CONFIRM
+    if days != 0 and days not in EXPIRY_DAYS:
+        await q.answer()
+        return INV_CONFIRM
+    await q.answer()
+    ctx.user_data["inv_expiry_days"] = days
+    try:
+        await q.edit_message_text(
+            _invite_confirm_text(ctx),
+            reply_markup=_invite_confirm_markup(ctx, version),
+            parse_mode="HTML")
+    except Exception as exc:
+        logger.debug("invite expiry edit failed (non-fatal)", exc_info=exc)
     return INV_CONFIRM
 
 
@@ -505,14 +560,44 @@ async def _invite_send_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     if ask_id is not None:
         await approve_access_ask(ctx, ask_id)
     lib_word = "library" if len(selected) == 1 else "libraries"
+    note = ""
+    days = ctx.user_data.get("inv_expiry_days") or 0
+    if days:
+        note = await _store_new_expiry(ctx, link.plex_token, machine, email,
+                                       days)
     await end_flow(update, ctx,
                    f"📨 Invite sent to <b>{html.escape(email)}</b> "
                    f"({len(selected)} {lib_word}).\n"
                    "They'll get an email from Plex; once they accept and sign in, "
-                   "Seerr picks them up and /link works for them.",
+                   "Seerr picks them up and /link works for them." + note,
                    hub, parse_mode="HTML")
     _clear(ctx)
     return ConversationHandler.END
+
+
+async def _store_new_expiry(ctx: ContextTypes.DEFAULT_TYPE, token: str,
+                            machine: str, who: str, days: int) -> str:
+    """Store an Expiry against the Share a just-sent Invite created: found by
+    a fresh Share listing, matched on the typed email or username. Returns
+    the line to add to the success message; a failure to find or store it
+    says so, since the Invite itself already went out."""
+    plex: PlexClient = ctx.bot_data["plex"]
+    store: UserStore = ctx.bot_data["store"]
+    want = who.strip().lower()
+    try:
+        shares = await plex.list_shares(token, machine)
+        match = next((s for s in shares
+                      if want in (s.email.lower(), s.username.lower())), None)
+        if match is None:
+            raise LookupError("new Share not in the listing")
+        expires_at = expires_at_text(days)
+        await store.set_share_expiry(match.id, match.email, match.username,
+                                     expires_at)
+    except Exception:
+        logger.exception("storing the new Share's expiry failed")
+        return ("\n⚠️ I couldn't set the expiry: open the Share in Shares "
+                "and tap Set expiry.")
+    return f"\n⏳ Ends on {expiry_date_text(expires_at)}."
 
 
 def _is_already_sharing(exc: Exception) -> bool:
@@ -567,7 +652,16 @@ def _share_label(share: PlexShare) -> str:
     return who if share.accepted else f"⏳ {who} (pending)"
 
 
-def _share_view(share: PlexShare) -> tuple[str, InlineKeyboardMarkup]:
+def _expiry_labels(shares, expiries) -> dict:
+    """Share id -> button text for the Shares that have an Expiry."""
+    by_id = {e.share_id: e for e in expiries}
+    return {s.id: f"{_share_label(s)} ⏳ {expiry_date_text(by_id[s.id].expires_at)}"
+            for s in shares if s.id in by_id}
+
+
+def _share_view(share: PlexShare,
+                expires_at: Optional[str] = None
+                ) -> tuple[str, InlineKeyboardMarkup]:
     lines = [f"👤 <b>{html.escape(_who(share))}</b>"]
     if share.email and share.username:
         lines.append(f"Plex username: {html.escape(share.username)}")
@@ -577,7 +671,11 @@ def _share_view(share: PlexShare) -> tuple[str, InlineKeyboardMarkup]:
         lines.append(f"Libraries: {html.escape(', '.join(share.libraries))}")
     elif share.all_libraries:
         lines.append("Libraries: all")
+    if expires_at:
+        lines.append(f"⏳ Ends on {expiry_date_text(expires_at)}.")
     return "\n".join(lines), InlineKeyboardMarkup([
+        [InlineKeyboardButton("⏳ Set expiry",
+                              callback_data=f"{SHARE_EXPIRY}:{share.id}")],
         [InlineKeyboardButton("🗑 Remove",
                               callback_data=f"{SHARE_REMOVE}:{share.id}")],
         [InlineKeyboardButton("⬅️ Shares", callback_data=f"{ADMIN_SHARES}:0")],
@@ -713,13 +811,15 @@ async def admin_shares(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                        "👥 <b>Shares</b>\nNo one has a Share on your server yet.",
                        ADMIN_HUB, parse_mode="HTML")
         return
+    store: UserStore = ctx.bot_data["store"]
+    labels = _expiry_labels(shares, await store.list_share_expiries())
     lead = ([[InlineKeyboardButton("💤 Inactive",
                                    callback_data=f"{ADMIN_INACTIVE}:0")]]
             if ctx.bot_data.get("tautulli") else [])
     await _edit_recorded(update, ctx, *_share_page(
         shares, _page_of(q.data), ADMIN_SHARES,
         f"👥 <b>Shares</b> ({len(shares)})\nTap one to see it or remove it.",
-        lead_rows=lead))
+        labels=labels, lead_rows=lead))
 
 
 def _last_seen_s(row: Optional[dict]) -> Optional[float]:
@@ -810,9 +910,11 @@ async def share_matches(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                        f'No share matches "{html.escape(query)}" any more.',
                        ADMIN_HUB, parse_mode="HTML")
         return
+    store: UserStore = ctx.bot_data["store"]
     await _edit_recorded(update, ctx, *_share_page(
         matches, _page_of(q.data), SHARE_MATCHES,
-        _matches_header(len(matches), query)))
+        _matches_header(len(matches), query),
+        labels=_expiry_labels(matches, await store.list_share_expiries())))
 
 
 async def _tapped_share(update: Update,
@@ -844,7 +946,59 @@ async def share_view(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     with Remove and "⬅️ Shares"."""
     share = await _tapped_share(update, ctx)
     if share is not None:
-        await _edit_recorded(update, ctx, *_share_view(share))
+        await _edit_recorded(update, ctx, *await _share_view_for(ctx, share))
+
+
+async def _share_view_for(ctx: ContextTypes.DEFAULT_TYPE, share: PlexShare
+                          ) -> tuple[str, InlineKeyboardMarkup]:
+    store: UserStore = ctx.bot_data["store"]
+    row = await store.get_share_expiry(share.id)
+    return _share_view(share, row.expires_at if row else None)
+
+
+async def share_expiry(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """A Share view's Set expiry (shex:<id>) shows the choices; a choice
+    (shex:<id>:<days>) stores the Expiry, and 0 clears it. A choice ends on
+    the Share's view."""
+    share = await _tapped_share(update, ctx)
+    if share is None:
+        return
+    store: UserStore = ctx.bot_data["store"]
+    parts = update.callback_query.data.split(":")
+    if len(parts) < 3:
+        await _edit_recorded(update, ctx,
+                             *await _expiry_picker(store, share))
+        return
+    try:
+        days = int(parts[2])
+    except ValueError:
+        return
+    if days == 0:
+        await store.clear_share_expiry(share.id)
+    elif days in EXPIRY_DAYS:
+        await store.set_share_expiry(share.id, share.email, share.username,
+                                     expires_at_text(days))
+    else:
+        return
+    await _edit_recorded(update, ctx, *await _share_view_for(ctx, share))
+
+
+async def _expiry_picker(store: UserStore, share: PlexShare
+                         ) -> tuple[str, InlineKeyboardMarkup]:
+    row = await store.get_share_expiry(share.id)
+    now = (f"Now ends on {expiry_date_text(row.expires_at)}." if row
+           else "No expiry set.")
+    sid = share.id
+    rows = [[InlineKeyboardButton(f"{d} days",
+                                  callback_data=f"{SHARE_EXPIRY}:{sid}:{d}")
+             for d in EXPIRY_DAYS]]
+    if row:
+        rows.append([InlineKeyboardButton(
+            "Clear expiry", callback_data=f"{SHARE_EXPIRY}:{sid}:0")])
+    rows.append([InlineKeyboardButton(
+        "⬅️ Back", callback_data=f"{SHARE_VIEW}:{sid}")])
+    return (f"⏳ <b>Expiry for {html.escape(_who(share))}</b>\n{now}\n"
+            "Pick how long from today.", InlineKeyboardMarkup(rows))
 
 
 async def share_remove(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -883,11 +1037,14 @@ async def cmd_uninvite(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             f'No share matches "{query}". Nothing changed.')
         return
     if len(matches) == 1:
-        await _reply_recorded(update, ctx, *_share_view(matches[0]))
+        await _reply_recorded(update, ctx,
+                              *await _share_view_for(ctx, matches[0]))
         return
     ctx.user_data[_SHARE_QUERY_KEY] = query
+    store: UserStore = ctx.bot_data["store"]
     await _reply_recorded(update, ctx, *_share_page(
-        matches, 0, SHARE_MATCHES, _matches_header(len(matches), query)))
+        matches, 0, SHARE_MATCHES, _matches_header(len(matches), query),
+        labels=_expiry_labels(matches, await store.list_share_expiries())))
 
 
 async def uninvite_go(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -932,6 +1089,7 @@ async def _uninvite_go_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     except NotFoundAPIError:
         # Already gone (removed elsewhere, or a racing duplicate tap):
         # the desired end state holds, so report it as done.
+        await store.clear_share_expiry(share_id)
         await end_flow(update, ctx, "✅ Already removed.", ADMIN_HUB)
         return
     except Exception as exc:
@@ -940,6 +1098,7 @@ async def _uninvite_go_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                        f"Couldn't remove the share. {user_friendly_message(exc)}",
                        ADMIN_HUB, q.data)
         return
+    await store.clear_share_expiry(share_id)
     await end_flow(update, ctx, "✅ Invite cancelled." if was_pending
                    else "✅ Access removed.", ADMIN_HUB)
 
