@@ -29,6 +29,8 @@ from radarr import RadarrClient
 from seerr import CreatedIssue, PlexTokenInvalidError, SeerrClient
 from settings import SettingsStore
 from sonarr import SonarrClient
+from fix_kinds import (KIND_AUTO_FIX, KIND_MARK_FAILED, KIND_REDOWNLOAD,
+                       OUTCOME_REPEAT)
 from store import UserStore
 
 from bot.callback_prefixes import (
@@ -73,7 +75,7 @@ from bot.shared import (
     try_begin_action,
     user_in_conversation,
 )
-from bot.tickets import _run_arr_action
+from bot.tickets import run_arr_action
 from const import (
     AUTOFIX_TIMEOUT_HOURS,
     EPISODE_BUTTONS_PER_ROW,
@@ -766,8 +768,9 @@ async def ticket_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     return OFFER_AUTOFIX
 
 
-_FIX_KIND_NAMES = {"auto-fix": "An Auto-fix", "redownload": "A Redownload",
-                   "mark failed": "A Mark Failed"}
+_FIX_KIND_NAMES = {KIND_AUTO_FIX: "An Auto-fix",
+                   KIND_REDOWNLOAD: "A Redownload",
+                   KIND_MARK_FAILED: "A Mark Failed"}
 
 
 def _fix_age_text(seconds: int) -> str:
@@ -784,7 +787,7 @@ def _retry_warning(event) -> str:
     kind = _FIX_KIND_NAMES.get(event.kind, "A Fix")
     text = (f"⚠️ {kind} ran on this title {_fix_age_text(event.age_seconds)}, "
             f"and another Auto-fix will likely grab the same file.")
-    if event.outcome == "repeat":
+    if event.outcome == OUTCOME_REPEAT:
         text += " It came back as a repeat."
     return text
 
@@ -949,7 +952,7 @@ async def _submit_ticket_inner(
             lines.append("⚠️ Auto-fix skipped: another fix for this title is already running.")
         else:
             try:
-                result = await _run_arr_action(media, season, episode, radarr, sonarr, action="fix")
+                result = await run_arr_action(media, season, episode, radarr, sonarr, action="fix")
                 if result.status == "failed":
                     lines.append(f"⚠️ Auto-fix didn't run: {result.message}")
                 else:

@@ -15,7 +15,7 @@ from bot.ticket_flow import (_new_ticket_conversation, _ticket_timeout,
                             _submit_ticket, ticket_cancel, ticket_hub_report,
                             ticket_start, ticket_title)
 from bot.shared import TITLE
-from bot.tickets import (_apply_fix, _tk_reply_timeout, cmd_tickets,
+from bot.tickets import (apply_fix, tk_reply_timeout, cmd_tickets,
                          tickets_hub_list, tk_back, tk_close_direct,
                          tk_close_menu, tk_close_with_comment_start, tk_fix,
                          tk_open, tk_reply_cancel, tk_reply_start,
@@ -593,7 +593,7 @@ async def test_fix_from_list_restores_tickets_back_row():
         "Deleted file and triggered re-search.", steps_done=["delete", "search"],
         poll_info={"movie_id": 555})
     upd = _from_list_submenu(make_update(callback_data="tkfd:5", user_id=ADMIN_ID))
-    await _apply_fix(upd, ctx, strategy="redownload")
+    await apply_fix(upd, ctx, strategy="redownload")
     edit = upd.callback_query.edits[-1]
     assert edit["text"].startswith("<b>Ticket #5</b>")
     assert _flat(edit["reply_markup"])[-1] == LIST_BACK
@@ -604,7 +604,7 @@ async def test_fix_from_list_that_did_not_run_offers_try_again_and_ticket_back()
     ctx.bot_data["seerr"].get_issue.return_value = _ticket(id=5)
     ctx.bot_data["radarr"].mark_failed.return_value = FIX_FAILED
     upd = _from_list_submenu(make_update(callback_data="tkfm:5", user_id=ADMIN_ID))
-    await _apply_fix(upd, ctx, strategy="mark_failed")
+    await apply_fix(upd, ctx, strategy="mark_failed")
     edit = upd.callback_query.edits[-1]
     assert edit["text"].startswith("⚠️ Mark Failed for #5 didn't run")
     assert _flat(edit["reply_markup"]) == [("🔁 Try again", "tkfm:5"), LIST_TICKET_BACK]
@@ -614,7 +614,7 @@ async def test_fix_from_list_fetch_failure_offers_try_again_and_ticket_back():
     ctx = make_ctx(admin_id=ADMIN_ID)
     ctx.bot_data["seerr"].get_issue.side_effect = RuntimeError("boom")
     upd = _from_list_submenu(make_update(callback_data="tkfd:5", user_id=ADMIN_ID))
-    await _apply_fix(upd, ctx, strategy="redownload")
+    await apply_fix(upd, ctx, strategy="redownload")
     edit = upd.callback_query.edits[-1]
     assert edit["text"].startswith("Couldn't fetch ticket #5.")
     assert _flat(edit["reply_markup"]) == [("🔁 Try again", "tkfd:5"), LIST_TICKET_BACK]
@@ -625,7 +625,7 @@ async def test_fix_from_list_on_a_whole_season_ends_with_ticket_back_only():
     ctx.bot_data["seerr"].get_issue.return_value = _ticket(
         id=5, media_type="tv", problem_season=1, problem_episode=None)
     upd = _from_list_submenu(make_update(callback_data="tkfd:5", user_id=ADMIN_ID))
-    await _apply_fix(upd, ctx, strategy="redownload")
+    await apply_fix(upd, ctx, strategy="redownload")
     edit = upd.callback_query.edits[-1]
     assert "only works on individual episodes or movies" in edit["text"]
     assert _flat(edit["reply_markup"]) == [LIST_TICKET_BACK]
@@ -635,7 +635,7 @@ async def test_fix_failure_without_list_or_dm_origin_has_ticket_back_only():
     ctx = make_ctx(admin_id=ADMIN_ID)
     ctx.bot_data["seerr"].get_issue.side_effect = RuntimeError("boom")
     upd = make_update(callback_data="tkfd:5", user_id=ADMIN_ID)
-    await _apply_fix(upd, ctx, strategy="redownload")
+    await apply_fix(upd, ctx, strategy="redownload")
     assert _flat(upd.callback_query.edits[-1]["reply_markup"]) == [
         ("⬅️ Ticket", f"{TK_BACK}:5")]
 
@@ -720,7 +720,7 @@ async def test_reply_from_list_cancel_and_timeout_end_with_tickets_back():
     assert reply["text"] == "Cancelled."
     assert _flat(reply["reply_markup"]) == [LIST_BACK]
     await _start_reply_from_list(ctx)
-    await _tk_reply_timeout(make_update(text="x", user_id=ADMIN_ID), ctx)
+    await tk_reply_timeout(make_update(text="x", user_id=ADMIN_ID), ctx)
     kwargs = ctx.bot.send_message.call_args.kwargs
     assert _flat(kwargs["reply_markup"]) == [("🔁 Try again", "tkr:5"), LIST_BACK]
     assert "tk_reply_from_list" not in ctx.user_data
@@ -771,7 +771,7 @@ async def test_fix_from_list_progress_card_stores_no_keyboard():
         "Deleted file and triggered re-search.", steps_done=["delete", "search"],
         poll_info={"movie_id": 555})
     upd = _from_list_submenu(make_update(callback_data="tkfd:5", user_id=ADMIN_ID))
-    await _apply_fix(upd, ctx, strategy="redownload")
+    await apply_fix(upd, ctx, strategy="redownload")
     stored = ctx.bot_data["store"].set_autofix_message.call_args.kwargs["reply_markup"]
     assert stored == ""
 

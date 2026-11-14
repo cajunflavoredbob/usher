@@ -267,7 +267,7 @@ async def test_close_with_comment_start_that_was_force_ended_does_not_set_reply_
         await release.wait()
         return True
 
-    monkeypatch.setattr(tickets, "_require_admin", require_admin)
+    monkeypatch.setattr(tickets, "require_admin", require_admin)
     conv = tickets._ticket_conversation()
     guard_flow_steps(conv)
     close_start = conv.entry_points[1].callback

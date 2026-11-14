@@ -27,6 +27,8 @@ from typing import Callable, Iterator, Optional, TypeVar
 from cryptography.fernet import Fernet, InvalidToken
 
 from const import AUTOFIX_TIMEOUT_HOURS
+from fix_kinds import (KIND_AUTO_FIX, OUTCOME_COMPLETE, OUTCOME_FAILED,
+                       OUTCOME_PENDING, OUTCOME_REPEAT, OUTCOME_TIMEOUT)
 from former_name import legacy_env
 from fix_result import ReleaseFingerprint
 from fsutil import atomic_write_bytes
@@ -793,7 +795,7 @@ class UserStore:
         tmdb_id: int,
         season: Optional[int] = None,
         episode: Optional[int] = None,
-        kind: str = "auto-fix",
+        kind: str = KIND_AUTO_FIX,
     ) -> int:
         """Record a Fix event; returns its id so the caller can tie it to
         the pending fix row (add_pending_autofix event_id=). kind is
@@ -847,9 +849,9 @@ class UserStore:
         def _do():
             with self._conn() as c:
                 c.execute(
-                    "UPDATE autofix_events SET outcome = 'repeat', refunded = ? "
+                    "UPDATE autofix_events SET outcome = ?, refunded = ? "
                     "WHERE pending_id = ?",
-                    (1 if refunded else 0, pending_id),
+                    (OUTCOME_REPEAT, 1 if refunded else 0, pending_id),
                 )
 
         await self._run(_do)
@@ -953,9 +955,10 @@ class UserStore:
                     f"""
                     SELECT {self._PENDING_COLUMNS}
                     FROM pending_autofixes
-                    WHERE status = 'pending'
+                    WHERE status = ?
                     ORDER BY id
-                    """
+                    """,
+                    (OUTCOME_PENDING,),
                 ).fetchall()
 
         rows = await self._run(_do)
@@ -1077,9 +1080,10 @@ class UserStore:
                 pending = c.execute(
                     """
                     DELETE FROM pending_autofixes
-                    WHERE status IN ('complete', 'timeout', 'failed')
+                    WHERE status IN (?, ?, ?)
                       AND started_at < datetime('now', '-7 days')
-                    """
+                    """,
+                    (OUTCOME_COMPLETE, OUTCOME_TIMEOUT, OUTCOME_FAILED),
                 ).rowcount
                 events = c.execute(
                     "DELETE FROM autofix_events WHERE occurred_at < datetime('now', '-30 days')"

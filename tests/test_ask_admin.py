@@ -12,7 +12,7 @@ from bot import autofix_poll
 from bot.ask_admin import ALREADY_SENT, ask_admin
 from bot.autofix_poll import _notify_complete
 from bot.resolve_flow import _resume_resolve_comment, resolve_comment
-from bot.tickets import _apply_fix
+from bot.tickets import apply_fix
 from fix_result import FixResult, ReleaseFingerprint as FP
 from seerr import IssueListItem
 from store import PendingAutofix, UserStore
@@ -192,7 +192,7 @@ async def test_mark_failed_on_that_dm_runs_with_its_own_progress_card(ctx):
     upd = make_update(callback_data="tkfm:7", user_id=ADMIN)
     upd.callback_query.message.reply_markup = kb
     ctx.bot.send_message = AsyncMock(return_value=make_message(message_id=950))
-    await _apply_fix(upd, ctx, strategy="mark_failed")
+    await apply_fix(upd, ctx, strategy="mark_failed")
     ctx.bot_data["radarr"].mark_failed.assert_awaited_once()
     texts = [c.kwargs["text"] for c in ctx.bot.send_message.call_args_list]
     assert any("Mark Failed for #7" in t for t in texts)

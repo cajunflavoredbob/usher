@@ -11,7 +11,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from bot.callback_prefixes import TK_BACK, TK_BACK_DM, TK_BACK_LIST
 from bot.shared import new_ticket_dm_kb
-from bot.tickets import _apply_fix, tk_back, tk_close_menu, tk_fix
+from bot.tickets import apply_fix, tk_back, tk_close_menu, tk_fix
 from fix_result import FixResult
 from seerr import IssueListItem
 from tests._handler_harness import make_ctx, make_update
@@ -55,7 +55,7 @@ def _ctx(result=None, *, mark_failed=False, **ticket_kwargs):
 async def _fix(ctx, data="tkfd:5"):
     upd = make_update(callback_data=data, user_id=ADMIN_ID)
     strategy = "mark_failed" if data.startswith("tkfm") else "redownload"
-    await _apply_fix(upd, ctx, strategy=strategy)
+    await apply_fix(upd, ctx, strategy=strategy)
     return upd
 
 
@@ -231,7 +231,7 @@ async def test_new_ticket_dm_keeps_history_after_a_fix_starts():
     upd = make_update(callback_data="tkfd:5", user_id=ADMIN_ID)
     _from_dm(upd, InlineKeyboardMarkup(
         [[InlineKeyboardButton("⬅️ Back", callback_data=f"{TK_BACK_DM}:5")]]))
-    await _apply_fix(upd, ctx, strategy="redownload")
+    await apply_fix(upd, ctx, strategy="redownload")
     assert _flat(upd.callback_query.edits[-1]["reply_markup"]) == DM_BUTTONS
 
 
@@ -253,7 +253,7 @@ async def test_new_ticket_dm_fix_that_cannot_start_backs_to_dm_buttons():
     upd = _from_dm(make_update(callback_data="tkfd:5", user_id=ADMIN_ID),
                    InlineKeyboardMarkup(
                        [[InlineKeyboardButton("⬅️ Back", callback_data=f"{TK_BACK_DM}:5")]]))
-    await _apply_fix(upd, ctx, strategy="redownload")
+    await apply_fix(upd, ctx, strategy="redownload")
     assert _flat(upd.callback_query.edits[-1]["reply_markup"]) == [
         ("⬅️ Ticket", f"{TK_BACK_DM}:5")]
 
@@ -263,5 +263,5 @@ async def test_ticket_view_card_still_has_no_history_after_a_fix():
     upd = make_update(callback_data="tkfd:5", user_id=ADMIN_ID)
     upd.callback_query.message.reply_markup = InlineKeyboardMarkup(
         [[InlineKeyboardButton("⬅️ Back", callback_data=f"{TK_BACK}:5")]])
-    await _apply_fix(upd, ctx, strategy="redownload")
+    await apply_fix(upd, ctx, strategy="redownload")
     assert _flat(upd.callback_query.edits[-1]["reply_markup"]) == TICKET_BUTTONS

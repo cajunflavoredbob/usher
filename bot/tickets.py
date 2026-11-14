@@ -1,4 +1,4 @@
-"""Ticket management: /tickets, the tk_* callback family, _apply_fix, and the
+"""Ticket management: /tickets, the tk_* callback family, apply_fix, and the
 reply ConversationHandler.
 
 Public entry points:
@@ -8,7 +8,7 @@ Public entry points:
     tk_fix_redownload, tk_fix_mark_failed                callback handlers
   tk_reply_start, tk_close_with_comment_start, tk_reply_text  reply convo
   _ticket_conversation()                                      conversation
-  _run_arr_action(action="fix" | "mark_failed")               arr orchestrator
+  run_arr_action(action="fix" | "mark_failed")               arr orchestrator
 """
 from __future__ import annotations
 
@@ -34,6 +34,7 @@ from telegram.ext import (
     filters,
 )
 
+from fix_kinds import KIND_MARK_FAILED, KIND_REDOWNLOAD
 from fix_result import FixResult
 from http_util import user_friendly_message
 from radarr import RadarrClient
@@ -41,6 +42,7 @@ from seerr import ISSUE_STATUS_RESOLVED, PlexTokenInvalidError, SeerrClient
 from sonarr import SonarrClient
 from store import UserStore
 
+from bot.ask_admin import mark_failed_button
 from bot.callback_prefixes import (
     TICKETS_LIST,
     TK_BACK,
@@ -49,7 +51,6 @@ from bot.callback_prefixes import (
     TK_CLOSE_DIRECT,
     TK_CLOSE_WITH_COMMENT,
     TK_FIX,
-    TK_FIX_MARK_FAILED,
     TK_FIX_REDOWNLOAD,
     TK_OPEN,
     TK_REPLY,
@@ -89,7 +90,7 @@ logger = logging.getLogger("usher")
 MAX_THREAD_COMMENTS = 20
 
 
-async def _require_admin(
+async def require_admin(
     q, ctx: ContextTypes.DEFAULT_TYPE, *, action_label: str,
 ) -> bool:
     """Gate an admin-only callback. Returns True if the caller is the admin;
@@ -479,7 +480,7 @@ async def tk_close_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     except (ValueError, IndexError):
         logger.warning("Unparseable callback data: %r", q.data)
         return
-    if not await _require_admin(q, ctx, action_label="tk_close_menu"):
+    if not await require_admin(q, ctx, action_label="tk_close_menu"):
         return
     kb = InlineKeyboardMarkup([
         [
@@ -501,12 +502,12 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     except (ValueError, IndexError):
         logger.warning("Unparseable callback data: %r", q.data)
         return
-    if not await _require_admin(q, ctx, action_label="tk_fix"):
+    if not await require_admin(q, ctx, action_label="tk_fix"):
         return
     kb = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🔄 Redownload", callback_data=f"{TK_FIX_REDOWNLOAD}:{ticket_id}"),
-            InlineKeyboardButton("🚫 Mark Failed", callback_data=f"{TK_FIX_MARK_FAILED}:{ticket_id}"),
+            mark_failed_button(ticket_id),
         ],
         [InlineKeyboardButton("⬅️ Back", callback_data=f"{_back_prefix(q)}:{ticket_id}")],
     ])
@@ -521,19 +522,19 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def tk_fix_redownload(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Delete current file + trigger search."""
-    await _apply_fix(update, ctx, strategy="redownload")
+    await apply_fix(update, ctx, strategy="redownload")
 
 
 async def tk_fix_mark_failed(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Mark the grab that produced the file as failed → Radarr/Sonarr blocklists + re-searches."""
-    await _apply_fix(update, ctx, strategy="mark_failed")
+    await apply_fix(update, ctx, strategy="mark_failed")
 
 
 @dataclass
 class _FixContext:
     """Resolved context for an admin Fix / Mark Failed action.
 
-    Carries everything _apply_fix needs to dispatch + render: the ticket id
+    Carries everything apply_fix needs to dispatch + render: the ticket id
     (for messages + audit-log + poll-tracking row), the media dict the arr
     clients expect, the season/episode (for label + workflow), and the
     pre-built label for the success/failure DM."""
@@ -544,11 +545,11 @@ class _FixContext:
     label: str
 
 
-# Start of the _resolve_fix_context error that a retry can fix.
+# Start of the resolve_fix_context error that a retry can fix.
 _FETCH_FAILED = "Couldn't fetch ticket"
 
 
-async def _resolve_fix_context(
+async def resolve_fix_context(
     seerr: SeerrClient, ticket_id: int, *, action_name: str,
 ) -> tuple[Optional[_FixContext], Optional[str]]:
     """Fetch the ticket + media title + tvdb_id and return a _FixContext.
@@ -600,7 +601,7 @@ async def _resolve_fix_context(
                        episode=episode, label=label), None
 
 
-async def _enqueue_fix_completion(
+async def enqueue_fix_completion(
     store: UserStore, *, fix: _FixContext, result: FixResult,
     chat_id: int, user_id: int, ticket_url: str, action_name: str = "",
     event_id: Optional[int] = None, auto_blocklisted: bool = False,
@@ -716,7 +717,7 @@ class _ProgressCard:
         self.message_id = None
 
 
-async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy: str) -> None:
+async def apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy: str) -> None:
     """Shared admin-fix path. strategy is 'redownload' or 'mark_failed'.
 
     Once the Fix starts (the ticket resolved and no other fix runs on the
@@ -732,7 +733,7 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
     except (ValueError, IndexError):
         logger.warning("Unparseable callback data: %r", q.data)
         return
-    if not await _require_admin(q, ctx, action_label=f"_apply_fix:{strategy}"):
+    if not await require_admin(q, ctx, action_label=f"apply_fix:{strategy}"):
         return
     # Read before the first edit below strips the keyboard.
     from_list = _opened_from_list(q.message)
@@ -748,7 +749,7 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
     # tapped again while the Seerr calls run.
     await edit_or_send(q, f"⏳ Starting {action_name} for #{ticket_id}...")
 
-    fix, err = await _resolve_fix_context(seerr, ticket_id, action_name=action_name)
+    fix, err = await resolve_fix_context(seerr, ticket_id, action_name=action_name)
     if err is not None:
         fetch_failed = err.startswith(_FETCH_FAILED)
         await _edit_result(q, ctx, err, _fix_end_markup(
@@ -775,7 +776,7 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
         await _restore_ticket_card(q, ctx, ticket_id, from_list, from_dm)
 
         action: FixAction = "fix" if strategy == "redownload" else "mark_failed"
-        result = await _run_arr_action(
+        result = await run_arr_action(
             fix.media, fix.season, fix.episode, radarr, sonarr, action=action,
         )
 
@@ -792,11 +793,12 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
         event_id = await store.log_autofix(
             update.effective_user.id, fix.media["type"], fix.media["tmdb_id"],
             season=fix.season, episode=fix.episode,
-            kind="redownload" if strategy == "redownload" else "mark failed")
+            kind=(KIND_REDOWNLOAD if strategy == "redownload"
+                  else KIND_MARK_FAILED))
         pending_id = None
         if result.should_poll:
             try:
-                pending_id = await _enqueue_fix_completion(
+                pending_id = await enqueue_fix_completion(
                     store, fix=fix, result=result,
                     chat_id=q.message.chat_id,
                     user_id=update.effective_user.id,
@@ -838,7 +840,7 @@ async def tk_close_direct(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     except (ValueError, IndexError):
         logger.warning("Unparseable callback data: %r", q.data)
         return
-    if not await _require_admin(q, ctx, action_label="tk_close_direct"):
+    if not await require_admin(q, ctx, action_label="tk_close_direct"):
         return
     from_list = _opened_from_list(q.message)
     seerr: SeerrClient = ctx.bot_data["seerr"]
@@ -939,7 +941,7 @@ async def tk_close_with_comment_start(update: Update, ctx: ContextTypes.DEFAULT_
     if not try_begin_action(ctx, start_key):
         return ConversationHandler.END
     try:
-        if not await _require_admin(q, ctx, action_label="tk_close_with_comment_start"):
+        if not await require_admin(q, ctx, action_label="tk_close_with_comment_start"):
             return ConversationHandler.END
         # Same text-capture guard as tk_reply_start.
         if user_in_conversation(ctx, update, "issue", "resolve", "request", "invite"):
@@ -1086,7 +1088,7 @@ async def tk_reply_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     return ConversationHandler.END
 
 
-async def _tk_reply_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+async def tk_reply_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Conversation_timeout handler. Clear ticket-reply state so an abandoned
     conversation doesn't leak user_data for the life of the process, and tell
     the user (the flow explicitly solicited text, so silence loses their
@@ -1132,7 +1134,7 @@ def _ticket_conversation() -> ConversationHandler:
             # reject callback-query updates, so the timeout never fired when
             # the flow's last update was a button tap.
             ConversationHandler.TIMEOUT: [
-                TypeHandler(Update, _tk_reply_timeout),
+                TypeHandler(Update, tk_reply_timeout),
             ],
         },
         fallbacks=[CommandHandler("cancel", tk_reply_cancel)],
@@ -1145,7 +1147,7 @@ def _ticket_conversation() -> ConversationHandler:
 FixAction = Literal["fix", "mark_failed"]
 
 
-async def _run_arr_action(
+async def run_arr_action(
     media: dict,
     season: Optional[int],
     episode: Optional[int],

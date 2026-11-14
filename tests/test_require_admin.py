@@ -1,4 +1,4 @@
-"""Tests for bot.tickets._require_admin: admin pass-through, non-admin toast + audit."""
+"""Tests for bot.tickets.require_admin: admin pass-through, non-admin toast + audit."""
 from __future__ import annotations
 
 import logging
@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from bot.tickets import _require_admin
+from bot.tickets import require_admin
 
 
 def _make_q(user_id: int):
@@ -34,7 +34,7 @@ def _make_ctx(admin_id: int):
 async def test_admin_passes_through():
     q = _make_q(user_id=999)
     ctx = _make_ctx(admin_id=999)
-    assert await _require_admin(q, ctx, action_label="any") is True
+    assert await require_admin(q, ctx, action_label="any") is True
     assert q.answers == []  # no toast issued
 
 
@@ -45,7 +45,7 @@ async def test_non_admin_toasts_and_returns_false(caplog):
     q = _make_q(user_id=42)
     ctx = _make_ctx(admin_id=999)
     caplog.set_level(logging.WARNING, logger="usher.audit")
-    assert await _require_admin(q, ctx, action_label="tk_close_direct") is False
+    assert await require_admin(q, ctx, action_label="tk_close_direct") is False
     assert q.answers == [("Admin only.", False)]
     audit_records = [r for r in caplog.records if r.name == "usher.audit"]
     assert audit_records, "expected an audit log entry for the blocked admin callback"
@@ -59,7 +59,7 @@ async def test_missing_admin_id_blocks():
     """Defensive: if admin_id is somehow None, treat all callers as non-admin."""
     q = _make_q(user_id=42)
     ctx = SimpleNamespace(bot_data={})
-    assert await _require_admin(q, ctx, action_label="x") is False
+    assert await require_admin(q, ctx, action_label="x") is False
 
 
 async def test_anonymous_user_blocked():
@@ -67,4 +67,4 @@ async def test_anonymous_user_blocked():
     q = SimpleNamespace(from_user=None, answer=AsyncMock())
     q.answers = []  # type: ignore[attr-defined]
     ctx = _make_ctx(admin_id=999)
-    assert await _require_admin(q, ctx, action_label="x") is False
+    assert await require_admin(q, ctx, action_label="x") is False

@@ -134,13 +134,13 @@ async def test_fix_context_rejects_tv_with_episode_but_null_season():
     seasonNumber filter = every episode in the series, and an episode-only
     match could delete the wrong file."""
     from unittest.mock import AsyncMock
-    from bot.tickets import _resolve_fix_context
+    from bot.tickets import resolve_fix_context
 
     seerr = AsyncMock()
     seerr.get_issue.return_value = SimpleNamespace(
         status=1, media_type="tv", tmdb_id=1, problem_season=None, problem_episode=9)
 
-    fix, err = await _resolve_fix_context(seerr, 42, action_name="Fix")
+    fix, err = await resolve_fix_context(seerr, 42, action_name="Fix")
     assert fix is None
     assert err is not None and "individual episodes" in err
 
@@ -149,7 +149,7 @@ async def test_fix_context_allows_specials_season_zero():
     """Season 0 (specials) with an episode is a valid individual-episode fix
     and must NOT be rejected by the null-season guard."""
     from unittest.mock import AsyncMock
-    from bot.tickets import _resolve_fix_context
+    from bot.tickets import resolve_fix_context
 
     seerr = AsyncMock()
     seerr.get_issue.return_value = SimpleNamespace(
@@ -157,6 +157,6 @@ async def test_fix_context_allows_specials_season_zero():
     seerr.get_media_title.return_value = ("Foo", "2020")
     seerr.get_tv_seasons.return_value = ([], 55)
 
-    fix, err = await _resolve_fix_context(seerr, 42, action_name="Fix")
+    fix, err = await resolve_fix_context(seerr, 42, action_name="Fix")
     assert err is None
     assert fix is not None

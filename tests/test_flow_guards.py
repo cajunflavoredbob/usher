@@ -18,7 +18,7 @@ from bot.shared import (
     unmatched_callback,
     user_in_conversation,
 )
-from bot.tickets import _apply_fix, tk_close_direct
+from bot.tickets import apply_fix, tk_close_direct
 from fix_result import FixResult
 from seerr import IssueListItem
 from tests._handler_harness import make_ctx, make_link, make_update
@@ -58,7 +58,7 @@ async def test_apply_fix_strips_buttons_before_network_calls():
     ctx.bot_data["seerr"].get_issue.return_value = _ticket()
     ctx.bot_data["radarr"].auto_fix.return_value = FixResult.success(
         "ok", steps_done=["delete", "search"], poll_info={"movie_id": 5})
-    await _apply_fix(upd, ctx, strategy="redownload")
+    await apply_fix(upd, ctx, strategy="redownload")
     first = upd.callback_query.edits[0]
     assert "Starting" in first["text"]
     assert first.get("reply_markup") is None
@@ -69,7 +69,7 @@ async def test_apply_fix_refuses_when_media_action_in_flight():
     ctx = make_ctx(admin_id=999)
     ctx.bot_data["seerr"].get_issue.return_value = _ticket(tmdb_id=777)
     ctx.bot_data["inflight_actions"] = {"movie:777"}
-    await _apply_fix(upd, ctx, strategy="mark_failed")
+    await apply_fix(upd, ctx, strategy="mark_failed")
     ctx.bot_data["radarr"].mark_failed.assert_not_called()
     assert "already" in upd.callback_query.edits[-1]["text"]
     # The pre-claimed key must NOT be released by the refused attempt.
@@ -82,7 +82,7 @@ async def test_apply_fix_releases_key_after_run():
     ctx.bot_data["seerr"].get_issue.return_value = _ticket(tmdb_id=777)
     ctx.bot_data["radarr"].auto_fix.return_value = FixResult.success(
         "ok", steps_done=["delete", "search"], poll_info={"movie_id": 5})
-    await _apply_fix(upd, ctx, strategy="redownload")
+    await apply_fix(upd, ctx, strategy="redownload")
     assert "movie:777" not in ctx.bot_data.get("inflight_actions", set())
 
 

@@ -30,7 +30,7 @@ from seerr import (
 
 from bot.callback_prefixes import RQ_ADMIN_APPROVE, RQ_ADMIN_DECLINE, RQ_ADMIN_RETRY
 from bot.shared import coerce_tmdb_id, end_action, try_begin_action
-from bot.tickets import _require_admin
+from bot.tickets import require_admin
 
 logger = logging.getLogger("usher")
 
@@ -143,7 +143,7 @@ async def rq_admin_action(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     except (ValueError, KeyError):
         await q.answer("Couldn't parse that button.", show_alert=True)
         return
-    if not await _require_admin(q, ctx, action_label=f"request_{verb}"):
+    if not await require_admin(q, ctx, action_label=f"request_{verb}"):
         return
     key = f"rqadmin:{request_id}"
     if not try_begin_action(ctx, key):

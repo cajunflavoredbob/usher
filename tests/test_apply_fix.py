@@ -1,4 +1,4 @@
-"""Tests for bot.tickets._apply_fix: admin gate, get_issue resolution,
+"""Tests for bot.tickets.apply_fix: admin gate, get_issue resolution,
 strategy dispatch, FixResult handling (ok/partial/failed), pending-autofix
 enqueue, message rendering."""
 from __future__ import annotations
@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from bot.tickets import _apply_fix
+from bot.tickets import apply_fix
 from fix_result import FixResult
 from seerr import IssueListItem
 from tests._handler_harness import make_ctx, make_update
@@ -39,9 +39,9 @@ async def test_non_admin_blocked_with_toast_and_audit(caplog):
     upd = make_update(callback_data="tkfd:42", user_id=42)  # not admin
     ctx = make_ctx(admin_id=999)
     caplog.set_level(logging.WARNING, logger="usher.audit")
-    await _apply_fix(upd, ctx, strategy="redownload")
+    await apply_fix(upd, ctx, strategy="redownload")
     # Two answer() calls happen: first the empty ack at handler entry,
-    # second the "Admin only." toast from _require_admin.
+    # second the "Admin only." toast from require_admin.
     toast_texts = [text for text, _alert in upd.callback_query.answers]
     assert "Admin only." in toast_texts
     # Audit event
@@ -65,7 +65,7 @@ async def test_movie_redownload_happy_path_enqueues_poller():
         poll_info={"movie_id": 555},
     )
 
-    await _apply_fix(upd, ctx, strategy="redownload")
+    await apply_fix(upd, ctx, strategy="redownload")
 
     # Pending autofix enqueued
     ctx.bot_data["store"].add_pending_autofix.assert_called_once()
@@ -98,7 +98,7 @@ async def test_movie_mark_failed_happy_path():
         steps_done=["blocklist", "delete", "search"],
         poll_info={"movie_id": 555},
     )
-    await _apply_fix(upd, ctx, strategy="mark_failed")
+    await apply_fix(upd, ctx, strategy="mark_failed")
     ctx.bot_data["radarr"].mark_failed.assert_called_once()
     ctx.bot_data["store"].add_pending_autofix.assert_called_once()
     assert "🔧 Mark Failed for #42" in _card_text(ctx)
@@ -111,7 +111,7 @@ async def test_get_issue_failure_surfaces_friendly_message():
     upd = make_update(callback_data="tkfd:42", user_id=999)
     ctx = make_ctx(admin_id=999)
     ctx.bot_data["seerr"].get_issue.side_effect = RuntimeError("seerr-down-noise")
-    await _apply_fix(upd, ctx, strategy="redownload")
+    await apply_fix(upd, ctx, strategy="redownload")
     assert upd.callback_query.edits
     text = upd.callback_query.edits[-1]["text"]
     assert "Couldn't fetch ticket #42" in text
@@ -130,7 +130,7 @@ async def test_whole_season_tv_rejected():
     ctx.bot_data["seerr"].get_issue.return_value = _ticket(
         media_type="tv", season=1, episode=None,
     )
-    await _apply_fix(upd, ctx, strategy="redownload")
+    await apply_fix(upd, ctx, strategy="redownload")
     text = upd.callback_query.edits[-1]["text"]
     assert "only works on individual episodes" in text
     # Neither radarr.auto_fix nor sonarr.auto_fix_episode hit
@@ -154,7 +154,7 @@ async def test_partial_after_blocklist_shows_partial_prefix():
         poll_info={"movie_id": 555},
     )
 
-    await _apply_fix(upd, ctx, strategy="mark_failed")
+    await apply_fix(upd, ctx, strategy="mark_failed")
 
     ctx.bot_data["store"].add_pending_autofix.assert_not_called()
     text = _card_text(ctx)
@@ -174,7 +174,7 @@ async def test_partial_without_search_logs_but_does_not_enqueue():
         "Blocklisted release but search failed: <transient>",
         steps_done=["blocklist", "delete"],
     )
-    await _apply_fix(upd, ctx, strategy="mark_failed")
+    await apply_fix(upd, ctx, strategy="mark_failed")
     ctx.bot_data["store"].log_autofix.assert_called_once()
     ctx.bot_data["store"].add_pending_autofix.assert_not_called()
 
@@ -189,7 +189,7 @@ async def test_arr_failure_no_enqueue():
     ctx.bot_data["radarr"].auto_fix.return_value = FixResult.failed(
         "Movie isn't in Radarr (not monitored)."
     )
-    await _apply_fix(upd, ctx, strategy="redownload")
+    await apply_fix(upd, ctx, strategy="redownload")
     text = upd.callback_query.edits[-1]["text"]
     assert "⚠️ Redownload for #42 didn't run" in text
     ctx.bot_data["store"].add_pending_autofix.assert_not_called()
@@ -201,7 +201,7 @@ async def test_apply_fix_attaches_progress_card_message():
     paints progress onto it."""
     from fix_result import FixResult
     from bot import tickets as tickets_mod
-    from bot.tickets import _apply_fix
+    from bot.tickets import apply_fix
     from unittest.mock import AsyncMock, patch
 
     ctx = make_ctx(admin_id=999)
@@ -215,13 +215,13 @@ async def test_apply_fix_attaches_progress_card_message():
                        poll_info={"series_id": 5, "episode_id": 9})
     ticket = SimpleNamespace(id=12, status=1, media_type="tv", tmdb_id=1399,
                              problem_season=1, problem_episode=2)
-    with patch.object(tickets_mod, "_run_arr_action",
+    with patch.object(tickets_mod, "run_arr_action",
                       AsyncMock(return_value=result)), \
          patch.object(tickets_mod, "_ticket_for_fix",
                       AsyncMock(return_value=(ticket, None)), create=True):
-        # _resolve_fix_context reads the Ticket via seerr.get_issue
+        # resolve_fix_context reads the Ticket via seerr.get_issue
         ctx.bot_data["seerr"].get_issue.return_value = ticket
-        await _apply_fix(upd, ctx, strategy="redownload")
+        await apply_fix(upd, ctx, strategy="redownload")
     ctx.bot_data["store"].set_autofix_message.assert_awaited_once()
     args = ctx.bot_data["store"].set_autofix_message.call_args.args
     assert args[:2] == (41, 88)  # the enqueued row gets the Progress card

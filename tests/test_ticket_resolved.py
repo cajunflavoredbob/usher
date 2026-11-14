@@ -1,7 +1,7 @@
 """A resolved Ticket shows its status, drops Fix and Close, and refuses Fix."""
 from __future__ import annotations
 
-from bot.tickets import _resolve_fix_context, tk_back, tk_open
+from bot.tickets import resolve_fix_context, tk_back, tk_open
 from seerr import IssueListItem
 from tests._handler_harness import make_ctx, make_update
 
@@ -61,7 +61,7 @@ async def test_fix_context_refuses_resolved_ticket():
     ctx = make_ctx(admin_id=999)
     seerr = ctx.bot_data["seerr"]
     seerr.get_issue.return_value = _ticket(status=2)
-    fix, err = await _resolve_fix_context(seerr, 42, action_name="Fix")
+    fix, err = await resolve_fix_context(seerr, 42, action_name="Fix")
     assert fix is None
     assert err is not None and "already resolved" in err
     seerr.get_media_title.assert_not_called()
@@ -72,5 +72,5 @@ async def test_fix_context_allows_open_ticket():
     seerr = ctx.bot_data["seerr"]
     seerr.get_issue.return_value = _ticket(status=1)
     seerr.get_media_title.return_value = ("Foo", "2020")
-    fix, err = await _resolve_fix_context(seerr, 42, action_name="Fix")
+    fix, err = await resolve_fix_context(seerr, 42, action_name="Fix")
     assert err is None and fix is not None

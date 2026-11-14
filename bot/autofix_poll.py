@@ -17,6 +17,8 @@ from typing import Optional
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
+from fix_kinds import (KIND_MARK_FAILED, OUTCOME_COMPLETE, OUTCOME_FAILED,
+                       OUTCOME_TIMEOUT)
 from fix_result import ReleaseFingerprint, compare_fingerprints
 from http_util import NotFoundAPIError, TransientAPIError
 from radarr import RadarrClient
@@ -30,8 +32,8 @@ from bot.progress_card import (maybe_bump_priority, refresh_arr_downloads,
                                resolve_progress_line)
 from bot.shared import (end_action, media_action_key, record_btn,
                         try_begin_action)
-from bot.tickets import (_enqueue_fix_completion, _resolve_fix_context,
-                         _run_arr_action)
+from bot.tickets import (enqueue_fix_completion, resolve_fix_context,
+                         run_arr_action)
 from const import AUTOFIX_TIMEOUT_HOURS
 
 logger = logging.getLogger("usher")
@@ -84,7 +86,7 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 timed_out = True
             if timed_out:
                 try:
-                    await store.mark_autofix_status(fix.id, "timeout")
+                    await store.mark_autofix_status(fix.id, OUTCOME_TIMEOUT)
                 except Exception:
                     logger.exception("couldn't mark fix %d timed out; retrying next tick", fix.id)
                     continue
@@ -98,7 +100,7 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             try:
                 done, extra = await fix.is_complete(radarr, sonarr)
                 if done:
-                    await store.mark_autofix_status(fix.id, "complete")
+                    await store.mark_autofix_status(fix.id, OUTCOME_COMPLETE)
                     repeat = await _detect_repeat(fix, radarr, sonarr)
                     refunded = False
                     if repeat is not None:
@@ -129,7 +131,7 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             except NotFoundAPIError:
                 # Media was deleted from Sonarr/Radarr between enqueue and poll.
                 logger.info("poll: media removed for fix %d; marking failed", fix.id)
-                await store.mark_autofix_status(fix.id, "failed")
+                await store.mark_autofix_status(fix.id, OUTCOME_FAILED)
                 await _notify_media_gone(ctx, fix)
             except TransientAPIError as exc:
                 logger.debug("poll: transient error for fix %d; will retry next tick: %s", fix.id, exc)
@@ -191,7 +193,7 @@ async def _blocklist_on_repeat(ctx, store: UserStore, fix,
         return False
     blocklisted = False  # Mark Failed ran: a later error is not a skip.
     try:
-        fix_ctx, err = await _resolve_fix_context(
+        fix_ctx, err = await resolve_fix_context(
             ctx.bot_data["seerr"], fix.ticket_id, action_name="Mark Failed")
         if err is not None:
             logger.info("blocklist on repeat skipped for #%d: %s", fix.ticket_id, err)
@@ -206,7 +208,7 @@ async def _blocklist_on_repeat(ctx, store: UserStore, fix,
                                         "another fix is running for this title.")
             return False
         try:
-            result = await _run_arr_action(
+            result = await run_arr_action(
                 fix_ctx.media, fix_ctx.season, fix_ctx.episode,
                 ctx.bot_data.get("radarr"), ctx.bot_data.get("sonarr"),
                 action="mark_failed")
@@ -222,11 +224,11 @@ async def _blocklist_on_repeat(ctx, store: UserStore, fix,
             event_id = await store.log_autofix(
                 admin_id, fix_ctx.media["type"], fix_ctx.media["tmdb_id"],
                 season=fix_ctx.season, episode=fix_ctx.episode,
-                kind="mark failed")
+                kind=KIND_MARK_FAILED)
             searching = False
             if result.should_poll:
                 try:
-                    await _enqueue_fix_completion(
+                    await enqueue_fix_completion(
                         store, fix=fix_ctx, result=result, chat_id=fix.chat_id,
                         user_id=fix.user_id, ticket_url=fix.ticket_url,
                         event_id=event_id, auto_blocklisted=True)
