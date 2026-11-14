@@ -331,3 +331,162 @@ async def test_login_cookie_carries_the_version_read_with_the_verified_hash(
     probe = await client.get(
         "/admin", cookies={webui.SESSION_COOKIE: cookie}, allow_redirects=False)
     assert probe.status == 302  # stamped with the old version, now stale
+
+
+# --- ticket 37 items 3-6 ----------------------------------------------------
+
+async def _multipart_post(client, path, parts, cookies):
+    """parts: (name, value, filename or None); a filename makes it a file part."""
+    boundary = "xBOUNDARYx"
+    body = b""
+    for name, value, filename in parts:
+        disp = f'form-data; name="{name}"'
+        ctype = "text/plain"
+        if filename is not None:
+            disp += f'; filename="{filename}"'
+            ctype = "application/octet-stream"
+        body += (f"--{boundary}\r\nContent-Disposition: {disp}\r\n"
+                 f"Content-Type: {ctype}\r\n\r\n{value}\r\n").encode()
+    body += f"--{boundary}--\r\n".encode()
+    return await client.post(
+        path, data=body, cookies=cookies,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        allow_redirects=False)
+
+
+@pytest.mark.parametrize("file_field", ["username", "password"])
+async def test_file_part_login_field_is_a_counted_failed_login(
+        client, file_field):
+    csrf = webui.generate_csrf_token(SECRET)
+    fields = {"username": "admin", "password": "right-password"}
+    parts = [(k, v, "x.bin" if k == file_field else None)
+             for k, v in fields.items()]
+    parts.append(("csrf_token", csrf, None))
+    resp = await _multipart_post(
+        client, "/admin/login", parts, {"usher_csrf": csrf})
+    assert resp.status == 401
+    assert len(webui._ip_throttle._failures) == 1
+    assert webui._throttle._failures == {}
+
+
+async def test_file_part_csrf_field_is_rejected_not_500(client):
+    csrf = webui.generate_csrf_token(SECRET)
+    resp = await _multipart_post(
+        client, "/admin/login",
+        [("username", "admin", None), ("password", "x", None),
+         ("csrf_token", csrf, "x.bin")], {"usher_csrf": csrf})
+    assert resp.status == 403
+
+
+@pytest.mark.parametrize("file_field,status", [
+    ("setup_token", 400), ("username", 400), ("password", 400),
+    ("csrf_token", 403)])
+async def test_setup_file_part_is_refused_not_500(
+        tmp_path, monkeypatch, file_field, status):
+    monkeypatch.delenv("USHER_WEBHOOK_SECRET", raising=False)
+    settings_path = tmp_path / "settings.json"
+    store = webui.SettingsStore(settings_path)
+    app = web.Application()
+    webui.attach_webui(
+        app, settings_store=store, session_secret=SECRET, data_dir=tmp_path,
+        settings_path=settings_path, db_path=tmp_path / "mappings.sqlite",
+        http_port=8765,
+    )
+    token = auth_util.load_or_create_setup_token(tmp_path)
+    csrf = webui.generate_csrf_token(SECRET)
+    fields = {"username": "owner", "password": "p" * 20, "confirm": "p" * 20,
+              "setup_token": token, "csrf_token": csrf}
+    parts = [(k, v, "x.bin" if k == file_field else None)
+             for k, v in fields.items()]
+    async with TestClient(TestServer(app)) as c:
+        resp = await _multipart_post(
+            c, "/admin/setup", parts, {"usher_csrf": csrf})
+        assert resp.status == status
+    assert not store.settings.admin.is_set()
+
+
+async def test_setup_rejects_unencodable_password(tmp_path, monkeypatch):
+    monkeypatch.delenv("USHER_WEBHOOK_SECRET", raising=False)
+    settings_path = tmp_path / "settings.json"
+    store = webui.SettingsStore(settings_path)
+    app = web.Application()
+    webui.attach_webui(
+        app, settings_store=store, session_secret=SECRET, data_dir=tmp_path,
+        settings_path=settings_path, db_path=tmp_path / "mappings.sqlite",
+        http_port=8765,
+    )
+    token = auth_util.load_or_create_setup_token(tmp_path)
+    csrf = webui.generate_csrf_token(SECRET)
+    async with TestClient(TestServer(app)) as c:
+        resp = await _utf7_post(
+            c, "/admin/setup",
+            {"username": "owner", "password": "+2AA-" + "p" * 20,
+             "confirm": "+2AA-" + "p" * 20, "csrf_token": csrf,
+             "setup_token": token}, csrf)
+        assert resp.status == 400
+        assert "cannot be stored" in await resp.text()
+    assert not store.settings.admin.is_set()
+
+
+def test_audit_line_with_a_lone_surrogate_stays_encodable(caplog):
+    caplog.set_level(logging.WARNING, logger="usher.audit")
+    auth_util.audit("probe", user="a\ud800b", ip="\udc80", extra="\ud800")
+    assert caplog.records
+    for r in caplog.records:
+        r.getMessage().encode("utf-8")
+
+
+async def test_over_long_stored_admin_username_can_still_log_in(client):
+    long_name = "a" * (auth_util.MAX_USERNAME_CHARS + 40)
+    client.settings_store.settings.admin.username = long_name
+    # any other over-long name is refused without a per-name key
+    resp = await _post_login(client, long_name + "x", "right-password")
+    assert resp.status == 401
+    assert webui._throttle._failures == {}
+    resp = await _post_login(client, long_name, "right-password")
+    assert resp.status == 302
+
+
+async def test_password_change_with_unencodable_new_password_is_a_400(client):
+    session0 = webui._make_session_cookie(SECRET, "admin", 0)
+    bound = webui.generate_csrf_token(SECRET, session0.rsplit(".", 1)[-1])
+    store = client.settings_store
+    old_hash = store.settings.admin.password_hash
+    resp = await _utf7_post_cookies(
+        client, "/admin/password",
+        {"csrf_token": bound, "current": "right-password",
+         "new": "+2AA-" + "n" * 20, "confirm": "+2AA-" + "n" * 20},
+        {webui.SESSION_COOKIE: session0, "usher_csrf": bound})
+    assert resp.status == 400
+    assert "cannot be stored" in await resp.text()
+    assert store.settings.admin.password_hash == old_hash
+    assert store.settings.admin.password_version == 0
+
+
+async def _utf7_post_cookies(client, path, fields, cookies):
+    boundary = "xBOUNDARYx"
+    body = b""
+    for name, value in fields.items():
+        body += (f"--{boundary}\r\nContent-Disposition: form-data; "
+                 f'name="{name}"\r\nContent-Type: text/plain; '
+                 f"charset=utf-7\r\n\r\n{value}\r\n").encode()
+    body += f"--{boundary}--\r\n".encode()
+    return await client.post(
+        path, data=body, cookies=cookies,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        allow_redirects=False)
+
+
+async def test_password_change_with_a_file_part_is_a_400_not_500(client):
+    session0 = webui._make_session_cookie(SECRET, "admin", 0)
+    bound = webui.generate_csrf_token(SECRET, session0.rsplit(".", 1)[-1])
+    for field in ("current", "new"):
+        parts = [(k, v, "x.bin" if k == field else None) for k, v in
+                 {"current": "right-password", "new": "n" * 20,
+                  "confirm": "n" * 20}.items()]
+        parts.append(("csrf_token", bound, None))
+        resp = await _multipart_post(
+            client, "/admin/password", parts,
+            {webui.SESSION_COOKIE: session0, "usher_csrf": bound})
+        assert resp.status == 400
+    assert client.settings_store.settings.admin.password_version == 0

@@ -153,6 +153,19 @@ async def _read_unauth_form(request: web.Request):
         return None, web.Response(text="Form could not be read.", status=400)
 
 
+def _form_str(form, key: str) -> str:
+    """A text form value, or "" when it is absent or not text (a multipart
+    file part arrives as a FileField, which has no str methods)."""
+    value = form.get(key)
+    return value if isinstance(value, str) else ""
+
+
+def _form_has_non_text(form, *keys: str) -> bool:
+    """True when any named field was sent as something other than text."""
+    return any(form.get(k) is not None and not isinstance(form.get(k), str)
+               for k in keys)
+
+
 def _set_session_cookie(resp, cookie_value: str, *, secure: bool) -> None:
     resp.set_cookie(
         SESSION_COOKIE, cookie_value,
@@ -1176,9 +1189,13 @@ async def setup_post(request: web.Request) -> web.Response:
     form, rejection = await _read_unauth_form(request)
     if rejection is not None:
         return rejection
-    if not validate_csrf(request, form.get(CSRF_FORM_FIELD)):
+    if not validate_csrf(request, _form_str(form, CSRF_FORM_FIELD)):
         audit("setup_csrf_fail", ip=client_ip(request))
         return web.Response(text="CSRF token mismatch.", status=403)
+    if _form_has_non_text(form, "username", "password", "confirm",
+                          "telegram_bot_token", "admin_telegram_id",
+                          "seerr_url", "seerr_api_key", "setup_token"):
+        return web.Response(text="Form fields must be text.", status=400)
 
     setup_token = load_or_create_setup_token(request.app["data_dir"])
     if setup_token == _SETUP_TOKEN_UNREADABLE:
@@ -1186,7 +1203,7 @@ async def setup_post(request: web.Request) -> web.Response:
             text="Setup token file is unreadable; fix its permissions and retry.",
             status=503)
     if setup_token:
-        submitted = (form.get("setup_token") or "").strip()
+        submitted = _form_str(form, "setup_token").strip()
         if not submitted or not safe_compare(submitted, setup_token):
             audit("setup_token_fail", ip=client_ip(request))
             body = _page("Setup", _flash(error="Invalid setup token.") +
@@ -1296,7 +1313,7 @@ async def login_post(request: web.Request) -> web.Response:
     form, rejection = await _read_unauth_form(request)
     if rejection is not None:
         return rejection
-    if not validate_csrf(request, form.get(CSRF_FORM_FIELD)):
+    if not validate_csrf(request, _form_str(form, CSRF_FORM_FIELD)):
         audit("login_csrf_fail", ip=client_ip(request))
         return web.Response(text="CSRF token mismatch.", status=403)
     async with request.app["login_lock"]:
@@ -1309,8 +1326,8 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
     ip = client_ip(request)
     # Throttles key IPv6 by its /64; audit lines keep the full address.
     tip = throttle_address(ip)
-    username = (form.get("username") or "").strip()
-    password = form.get("password") or ""
+    username = _form_str(form, "username").strip()
+    password = _form_str(form, "password")
 
     def _locked_response(locked: float) -> web.Response:
         body = _page("Login", _flash(
@@ -1337,7 +1354,11 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
 
     # An over-long or unencodable username, or an unencodable password, is a
     # failed login that never reaches the per-(ip, username) map or PBKDF2.
-    bad_input = (len(username) > MAX_USERNAME_CHARS
+    # The length cap spares the stored admin username itself: one saved
+    # before the cap existed must still be able to log in.
+    bad_input = ((len(username) > MAX_USERNAME_CHARS
+                  and not (admin.is_set() and username == admin.username))
+                 or _form_has_non_text(form, "username", "password")
                  or not is_utf8_encodable(username)
                  or not is_utf8_encodable(password))
 
@@ -1789,15 +1810,24 @@ async def change_password(request: web.Request) -> web.Response:
     csrf_resp = _csrf_check_or_403(request, form)
     if csrf_resp is not None:
         return csrf_resp
-    current = form.get("current") or ""
-    new = form.get("new") or ""
-    confirm = form.get("confirm") or ""
+    current = _form_str(form, "current")
+    new = _form_str(form, "new")
+    confirm = _form_str(form, "confirm")
     admin = store.settings.admin
     # PBKDF2 off the event loop, as login does: two 600k-iteration runs on
     # the loop would stall the bot and the webhook receiver.
     if not await asyncio.to_thread(verify_password, current, admin.password_hash):
         return web.Response(
             text=_settings_page(store.settings, error="Current password is incorrect.",
+                                active_tab="account",
+                                webhook_url=_webhook_url_from_request(request),
+                                csrf_token=csrf_for_request(request)),
+            content_type="text/html", status=400,
+        )
+    if not is_utf8_encodable(new):
+        return web.Response(
+            text=_settings_page(store.settings,
+                                error="New password has characters that cannot be stored.",
                                 active_tab="account",
                                 webhook_url=_webhook_url_from_request(request),
                                 csrf_token=csrf_for_request(request)),
