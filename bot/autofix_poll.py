@@ -101,7 +101,15 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
             # Poll for completion (dispatch lives on PendingAutofix.is_complete)
             try:
-                done, extra = await fix.is_complete(radarr, sonarr)
+                before = list(fix.expected_episode_ids)
+                try:
+                    done, extra = await fix.is_complete(radarr, sonarr)
+                finally:
+                    if fix.expected_episode_ids != before:
+                        # A vanished sibling was dropped in memory: keep it
+                        # dropped across a restart.
+                        await store.set_autofix_expected_episodes(
+                            fix.id, fix.expected_episode_ids)
                 if done:
                     await store.mark_autofix_status(fix.id, OUTCOME_COMPLETE)
                     repeat = await _detect_repeat(fix, radarr, sonarr)
@@ -444,6 +452,10 @@ async def _notify_complete(ctx: ContextTypes.DEFAULT_TYPE, fix, extra: str = "",
         # The Admin's own repeat offers Mark Failed; a Reporter asks the Admin
         # (not while the bot is already trying a different release).
         is_admin = fix.user_id == ctx.bot_data.get("admin_id")
+        if is_admin:
+            lines.append("")
+            lines.append("⚠️ 🚫 Mark Failed deletes the current file from "
+                         "disk before searching for a replacement.")
         keyboard.append([mark_failed_button(fix.ticket_id) if is_admin
                          else ask_admin_button(fix.ticket_id)])
     try:

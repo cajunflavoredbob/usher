@@ -471,7 +471,8 @@ def _episode_list(episodes: list[tuple[int, int]]) -> str:
 
 async def send_follow_pings(app) -> None:
     """DM each follower one message per show for its not-yet-pinged episodes,
-    then mark those episodes pinged. With the Follow pings switch off nothing
+    marking each show's episodes pinged as its pings go out, so a crash
+    between shows does not ping the earlier ones again. With the Follow pings switch off nothing
     is sent and the episodes are marked anyway (missed events are not
     replayed)."""
     store = app.bot_data["store"]
@@ -481,8 +482,9 @@ async def send_follow_pings(app) -> None:
     enabled = app.bot_data["settings_store"].settings.tg_notify_follows
     shows: dict[int, dict] = {}
     for _id, tmdb_id, title, season, episode in rows:
-        show = shows.setdefault(tmdb_id, {"title": title, "eps": []})
+        show = shows.setdefault(tmdb_id, {"title": title, "eps": [], "ids": []})
         show["eps"].append((season, episode))
+        show["ids"].append(_id)
     if enabled:
         seerr = app.bot_data.get("seerr")
         for tmdb_id, show in shows.items():
@@ -493,6 +495,7 @@ async def send_follow_pings(app) -> None:
                          if followers else None)
             except Exception:
                 logger.exception("Follow ping lookup failed (tmdb=%s)", tmdb_id)
+                await store.mark_pinged(show["ids"])
                 continue
             text = (f"📺 New on the server: <b>{html.escape(show['title'])}</b>"
                     f"\n{_episode_list(show['eps'])}")
@@ -506,7 +509,9 @@ async def send_follow_pings(app) -> None:
                 except Exception:
                     logger.exception("Follow ping to telegram_id=%d failed",
                                      chat_id)
-    await store.mark_pinged([r[0] for r in rows])
+            await store.mark_pinged(show["ids"])
+    else:
+        await store.mark_pinged([r[0] for r in rows])
 
 
 async def poll_new_content(ctx) -> None:

@@ -131,8 +131,13 @@ async def follow_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     # Answer before the lookups: the Seerr retry chain can outlive the
     # callback query. The row goes in first with a placeholder title.
     added = await store.add_follow(user_id, tmdb_id, 0, f"TMDb {tmdb_id}")
-    await q.answer("🔔 Following. I'll ping you for each new episode."
-                   if added else "Already following.")
+    if not added:
+        toast = "Already following."
+    elif _pings_off(ctx):
+        toast = "🔔 Following. New-episode pings are off on this server."
+    else:
+        toast = "🔔 Following. I'll ping you for each new episode."
+    await q.answer(toast)
     await _swap_button(q, tmdb_id, True)
     if not added:
         return
@@ -146,6 +151,12 @@ async def follow_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     label = f"{title} ({year})" if year else title
     await store.set_follow_info(user_id, tmdb_id, tvdb_id or 0, label)
+
+
+def _pings_off(ctx) -> bool:
+    """The Admin has follow pings off: Follows are kept, none is sent."""
+    store = ctx.bot_data.get("settings_store")
+    return store is not None and not store.settings.tg_notify_follows
 
 
 async def follow_del(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -184,6 +195,9 @@ async def _render_follows(update, ctx, reply_method, *, user_id: int) -> None:
     if not follows:
         text = ("You aren't following any shows. Tap ➕ Follow on a show's "
                 "detail card to get a DM for each new episode.")
+        if _pings_off(ctx):
+            text = ("You aren't following any shows. New-episode pings are "
+                    "off on this server, so a Follow would send nothing.")
         await reply_end(ctx, reply_method, text, REQUESTS_HUB, user_id=user_id)
         return
     total = len(follows)

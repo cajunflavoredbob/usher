@@ -6,7 +6,7 @@ import pytest
 from telegram.ext import ConversationHandler
 
 from bot.ticket_flow import ticket_pick_media
-from bot.shared import PICK_TYPE
+from bot.shared import PICK_MEDIA, PICK_TYPE
 from seerr import MediaResult
 from tests._handler_harness import make_ctx, make_link, make_update
 
@@ -148,3 +148,15 @@ async def test_dead_end_leaves_no_stash_that_skips_the_trending_refusal():
     assert state == ConversationHandler.END
     assert "Already available" in upd.effective_message.reply_calls[0]["text"]
     assert "rq_media" not in ctx.user_data
+
+
+async def test_dead_end_with_a_parent_search_keeps_the_stash_for_the_jump():
+    ctx = make_ctx(admin_id=999, user_data={
+        "search_results": {"version": 1, "by_key": {
+            ("movie", 77): MediaResult("movie", 77, "Not In Lib", "2026", None)}},
+        "search_version": 1, "research_parent": "Parent Show",
+    })
+    upd = make_update(callback_data="media:1:movie:77", user_id=42)
+    state = await ticket_pick_media(upd, ctx)
+    assert state == PICK_MEDIA
+    assert ctx.user_data["rq_jump_media"]["tmdb_id"] == 77

@@ -141,3 +141,15 @@ async def test_fix_menu_for_a_movie_skips_the_seerr_media_reads():
     ctx.bot_data["seerr"].get_media_title.assert_not_called()
     ctx.bot_data["seerr"].get_tv_seasons.assert_not_called()
     assert "couldn't check" not in upd.callback_query.edits[-1]["text"]
+
+
+async def test_fix_menu_for_a_whole_season_ticket_shows_the_refusal_only():
+    ctx = _admin_ctx(problem_episode=None)
+    upd = make_update(callback_data="tkf:5", user_id=ADMIN)
+    await tk_fix(upd, ctx)
+    edit = upd.callback_query.edits[-1]
+    assert "only works on individual episodes" in edit["text"]
+    callbacks = [b.callback_data for row in edit["reply_markup"].inline_keyboard
+                 for b in row]
+    assert len(callbacks) == 1 and callbacks[0].endswith(":5")
+    assert not any(c.startswith(("tkfd", "tkfm")) for c in callbacks)

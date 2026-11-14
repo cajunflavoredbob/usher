@@ -519,6 +519,7 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         [InlineKeyboardButton("⬅️ Back", callback_data=f"{_back_prefix(q)}:{ticket_id}")],
     ])
     target = ""
+    refusal = ""
     seerr = ctx.bot_data.get("seerr")
     sonarr = ctx.bot_data.get("sonarr")
     if seerr is not None and sonarr is not None:
@@ -533,10 +534,19 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     fix_ctx.media, fix_ctx.season, fix_ctx.episode, sonarr)
             elif err is not None and err.startswith(_FETCH_FAILED):
                 target = PREVIEW_UNKNOWN
+            elif err is not None:
+                # A whole-season or resolved Ticket: show the refusal the
+                # Fix itself would give, with no Fix choices.
+                refusal = err
         except Exception:
             logger.warning("couldn't preview the Fix target for #%d",
                            ticket_id, exc_info=True)
             target = PREVIEW_UNKNOWN
+    if refusal:
+        await q.edit_message_text(
+            f"🔧 Fix #{ticket_id}\n{refusal}",
+            reply_markup=InlineKeyboardMarkup(kb.inline_keyboard[-1:]))
+        return
     await q.edit_message_text(
         f"🔧 Fix #{ticket_id} - how?\n"
         + (f"{target}\n" if target else "")

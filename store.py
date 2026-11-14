@@ -1748,6 +1748,19 @@ class UserStore:
 
         await self._run(_do)
 
+    async def set_autofix_expected_episodes(self, pending_id: int,
+                                            episode_ids: list[int]) -> None:
+        """Persist the tracked sibling episodes after one was dropped, so a
+        restart does not poll a vanished episode again."""
+
+        def _do():
+            with self._conn() as c:
+                c.execute(
+                    "UPDATE pending_autofixes SET expected_episode_ids = ? "
+                    "WHERE id = ?", (json.dumps(episode_ids), pending_id))
+
+        await self._run(_do)
+
     async def mark_autofix_bumped(self, pending_id: int) -> None:
         def _do():
             with self._conn() as c:

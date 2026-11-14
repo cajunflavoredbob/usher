@@ -528,3 +528,59 @@ async def test_the_admin_without_a_link_still_gets_follow_pings(fresh_store):
     assert await fresh_store.list_followers(SHOW, ADMIN_ID) == [ADMIN_ID]
     ctx = await _polled(fresh_store)
     assert ctx.application.bot.send_message.call_args.kwargs["chat_id"] == ADMIN_ID
+
+
+# --- follow pings off on the server -------------------------------------------
+
+async def test_follow_toast_says_pings_are_off_when_the_switch_is_off(fresh_store):
+    ctx = _store_ctx(fresh_store)
+    ctx.bot_data["seerr"].get_media_title.return_value = ("Show", "2008")
+    ctx.bot_data["settings_store"].settings.tg_notify_follows = False
+    upd = make_update(callback_data=f"folad:{SHOW}", user_id=USER_ID)
+    await follow_add(upd, ctx)
+    toast = upd.callback_query.answers[0][0]
+    assert "pings are off" in toast and "I'll ping you" not in toast
+    ctx.bot_data["settings_store"].settings.tg_notify_follows = True
+    upd = make_update(callback_data=f"folad:{SHOW + 1}", user_id=USER_ID)
+    await follow_add(upd, ctx)
+    assert "I'll ping you" in upd.callback_query.answers[0][0]
+
+
+async def test_empty_follows_list_does_not_promise_pings_when_they_are_off():
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
+    ctx.bot_data["settings_store"].settings.tg_notify_follows = False
+    upd = make_update(callback_data="rqhf", user_id=USER_ID)
+    await _render_follows(upd, ctx, upd.callback_query.message.reply_text,
+                          user_id=USER_ID)
+    text = upd.callback_query.message.reply_calls[0]["text"]
+    assert "pings are off" in text and "to get a DM" not in text
+
+
+# --- pings are marked as each show's go out ------------------------------------
+
+async def test_each_shows_episodes_are_marked_pinged_as_its_pings_go_out(
+        fresh_store):
+    await _link(fresh_store, USER_ID)
+    await fresh_store.add_follow(USER_ID, SHOW, 0, "Breaking Bad")
+    await fresh_store.add_follow(USER_ID, SHOW + 1, 0, "Other Show")
+    await fresh_store.add_new_content("s:1", "episode", SHOW, "Breaking Bad", 1, 1)
+    await fresh_store.add_new_content("s:2", "episode", SHOW + 1, "Other Show", 1, 1)
+    ctx = _app(fresh_store)
+    marked_when_second_sent = []
+    real_mark = fresh_store.mark_pinged
+    calls = []
+
+    async def spy(ids):
+        calls.append(list(ids))
+        await real_mark(ids)
+    fresh_store.mark_pinged = spy
+
+    async def send(**kw):
+        if len(ctx.application.bot.send_message.call_args_list) == 2:
+            marked_when_second_sent.append(len(calls))
+    ctx.application.bot.send_message = AsyncMock(side_effect=send)
+    await send_follow_pings(ctx.application)
+    assert len(calls) == 2 and all(len(c) == 1 for c in calls)
+    # The first show was already marked when the second show's ping went out.
+    assert marked_when_second_sent == [1]
+    assert await fresh_store.list_unpinged_episodes() == []

@@ -506,9 +506,13 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         # An older list's button carries no list version. While a /request is
         # open, a title the latest browse no longer holds must not replace
         # its draft.
+        # With no /trending list on hand the tap is a "Request it instead"
+        # from /issue, which a /trending message would misdescribe.
         await update.effective_message.reply_text(
             "That list is out of date. Run /trending again to pick from "
-            "the new one.")
+            "the new one."
+            if ctx.user_data.get("dv_results") else
+            "Finish or /cancel the open request first.")
         return None
     # A pick from a Hub's list (the tapped message carries the back button)
     # ends back at that Hub; any other pick behaves like a typed /request.

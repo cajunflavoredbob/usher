@@ -38,6 +38,7 @@ logger = logging.getLogger("usher")
 HEADER = "📣 From the Admin"
 _TEXT_KEY = "bc_text"
 _VER_KEY = "bc_ver"
+_SENT_VER_KEY = "bc_sent_ver"  # the preview whose Send was taken
 _BC_KEYS = (_TEXT_KEY,)  # the version counter is never cleared
 _RETRY_AFTER_TRIES = 3
 
@@ -207,6 +208,12 @@ async def broadcast_send(update: Update,
     await q.answer()
     text = ctx.user_data.pop(_TEXT_KEY, None)
     markup = end_markup(ADMIN_HUB)
+    if text:
+        ctx.user_data[_SENT_VER_KEY] = ctx.user_data.get(_VER_KEY)
+    elif ctx.user_data.get(_SENT_VER_KEY) == ctx.user_data.get(_VER_KEY):
+        # A second tap on a preview that is already sending: leave the
+        # Sending note as it is.
+        return ConversationHandler.END
     if not text:
         sent = await edit_or_send(q, "That broadcast has ended. Start again "
                                      "from the Admin Hub.", reply_markup=markup)

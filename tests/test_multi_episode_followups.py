@@ -178,3 +178,29 @@ async def test_episode_file_states_skips_an_episode_sonarr_forgot():
         return httpx.Response(200, json={"seasonNumber": 1, "episodeNumber": 1,
                                          "hasFile": True})
     assert await _client(handler).episode_file_states([501, 502]) == [("S01E01", True)]
+
+
+# --- a dropped sibling stays dropped across a restart ---------------------------
+
+
+async def test_a_dropped_sibling_is_saved_to_the_store(fresh_store):
+    await fresh_store.add_pending_autofix(
+        chat_id=100, user_id=USER, media_type="tv", label="Show S01E01",
+        ticket_id=7, ticket_url="http://seerr.example/issues/7",
+        sonarr_series_id=8, sonarr_episode_id=501,
+        expected_episode_ids=[501, 502, 503])
+    ctx = make_ctx(admin_id=ADMIN)
+    ctx.bot_data["store"] = fresh_store
+
+    async def has_file(eid):
+        if eid == 502:
+            raise _gone()
+        return eid == 501
+    ctx.bot_data["sonarr"] = SimpleNamespace(
+        episode_has_file=has_file, refresh_monitored_downloads=AsyncMock(),
+        episode_file_states=AsyncMock(return_value=[]))
+    ctx.bot_data["radarr"] = None
+    autofix_poll._inflight.clear()
+    await autofix_poll.poll_pending_autofixes(ctx)
+    [row] = await fresh_store.list_pending_autofixes()
+    assert row.expected_episode_ids == [501, 503]

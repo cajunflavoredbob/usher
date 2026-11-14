@@ -355,3 +355,15 @@ async def test_an_old_preview_stays_old_after_a_new_broadcast(fresh_store):
     assert await broadcast_send(upd, ctx) == BC_CONFIRM
     assert upd.callback_query.edits == []
     ctx.bot.send_message.assert_not_called()
+
+
+async def test_a_second_send_tap_leaves_the_sending_note_alone(fresh_store):
+    await _link(fresh_store, 1, 2)
+    ctx, _upd, _ = await _preview(fresh_store)
+    first = _tap(f"{BROADCAST_SEND}:1")
+    await broadcast_send(first, ctx)
+    second = _tap(f"{BROADCAST_SEND}:1")
+    assert await broadcast_send(second, ctx) == ConversationHandler.END
+    assert second.callback_query.edits == []
+    await _drain(ctx)
+    assert ctx.bot.send_message.await_count == 2

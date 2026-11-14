@@ -1134,3 +1134,21 @@ async def test_resume_submit_request_tv_stores_and_names_the_seasons():
     kwargs = ctx.bot_data["store"].add_progress_card.call_args.kwargs
     assert kwargs["seasons"] == [1, 2, 3]
     assert "S1-S3" in kwargs["label"]
+
+
+async def test_request_it_instead_refused_by_an_open_request_says_so():
+    """With no /trending list in play the refusal names the open request, not
+    a /trending list."""
+    from bot.request_flow import request_from_ticket
+    ctx = _trending_ctx(MediaResult("movie", 550, "Fight Club", "1999", 5,
+                                    status=None))
+    ctx.user_data.pop("dv_results", None)
+
+    class _Conv:
+        _conversations = {(100, USER_ID): RQ_CONFIRM}
+
+    ctx.bot_data["conversations"] = {"request": _Conv()}
+    upd = make_update(callback_data="rqfi:movie:999", user_id=USER_ID)
+    assert await request_from_ticket(upd, ctx) is None
+    text = upd.effective_message.reply_calls[0]["text"]
+    assert "/cancel the open request" in text and "/trending" not in text

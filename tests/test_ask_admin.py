@@ -224,3 +224,13 @@ async def test_relink_resume_comment_confirmation_carries_the_button():
     await _resume_resolve_comment(upd, ctx, {"ticket_id": 7, "comment": "c"})
     call = upd.effective_message.reply_calls[0]
     assert _callbacks(call["reply_markup"]) == ["askadm:7"]
+
+
+async def test_the_admins_repeat_dm_says_mark_failed_deletes_the_file():
+    ctx = make_ctx(admin_id=ADMIN)
+    ctx.bot.send_message = AsyncMock(return_value=make_message(message_id=1))
+    await _notify_complete(ctx, _fix(user_id=ADMIN), repeat=FP(release_name="A"))
+    assert "Mark Failed deletes the current file" in ctx.bot.send_message.call_args.kwargs["text"]
+    ctx.bot.send_message = AsyncMock(return_value=make_message(message_id=1))
+    await _notify_complete(ctx, _fix(), repeat=FP(release_name="A"))
+    assert "deletes the current file" not in ctx.bot.send_message.call_args.kwargs["text"]
