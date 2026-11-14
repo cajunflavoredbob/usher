@@ -6,6 +6,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 
+import pytest
+
 from bot import hub
 from bot.digest import (account_notices, digest_info, notice_toggle,
                         run_digest_if_due, send_digest)
@@ -21,6 +23,13 @@ ADMIN_ID = 999
 NOW = datetime(2026, 11, 14, 18, 5, tzinfo=timezone.utc)
 YESTERDAY = "2026-11-13 12:00:00"
 TODAY = "2026-11-14 09:00:00"
+
+
+@pytest.fixture(autouse=True)
+def _restore_hubs(monkeypatch):
+    # register_hub writes the module-level HUBS dict; keep a stub from
+    # leaking into later test files.
+    monkeypatch.setattr(hub, "HUBS", dict(hub.HUBS))
 
 
 async def _link(store, telegram_id):
