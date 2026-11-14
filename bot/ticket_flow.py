@@ -461,12 +461,9 @@ async def ticket_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     # search_results dict.
     current = ctx.user_data.get("search_results") or {}
     if current.get("version") != version:
-        await end_flow(
-            update, ctx, "Search context changed since this keyboard appeared.",
-            _tickets_origin(ctx), TICKETS_REPORT,
-            typed_text=("Search context changed (you started a new /issue search "
-                        "since this keyboard appeared). /issue to pick again."))
-        return ConversationHandler.END
+        # Refuse like every other step: the newer report stays live.
+        await _refuse_stale(update, ctx)
+        return None
     selected = (current.get("by_key") or {}).get((media_type, tmdb_id))
     if selected is None or selected.seerr_media_id is None:
         parent = ctx.user_data.get("research_parent")

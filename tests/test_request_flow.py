@@ -896,7 +896,7 @@ async def test_trending_tap_on_available_movie_toasts_and_keeps_list():
                                     status=MEDIA_STATUS_AVAILABLE))
     upd = make_update(callback_data="rqfi:movie:550", user_id=USER_ID)
     state = await request_from_ticket(upd, ctx)
-    assert state == ConversationHandler.END
+    assert state is None
     assert upd.callback_query.answers == [("", False)]
     assert upd.effective_message.reply_calls[0]["text"] == (
         "Fight Club: Already available in Plex ✅")
@@ -910,7 +910,7 @@ async def test_trending_tap_on_blocklisted_title_toasts():
                                     status=MEDIA_STATUS_BLOCKLISTED))
     upd = make_update(callback_data="rqfi:movie:550", user_id=USER_ID)
     state = await request_from_ticket(upd, ctx)
-    assert state == ConversationHandler.END
+    assert state is None
     assert upd.callback_query.answers == [("", False)]
     assert upd.effective_message.reply_calls[0]["text"] == (
         "Fight Club: That title isn't requestable here 🚫")
@@ -959,3 +959,29 @@ async def test_trending_tap_that_proceeds_sets_the_hub_origin():
     upd = make_update(callback_data="rqfi:movie:550", user_id=USER_ID)
     await request_from_ticket(upd, ctx)
     assert HUB_ORIGIN_KEY not in ctx.user_data  # typed entry: no Hub
+
+
+async def test_trending_refusal_does_not_end_an_open_request_flow():
+    """The refused tap goes through the conversation's real entry point: a
+    /request flow parked at RQ_CONFIRM stays parked."""
+    from telegram.ext import CallbackQueryHandler, CommandHandler
+    from bot.request_flow import request_from_ticket
+    ctx = _trending_ctx(MediaResult("movie", 550, "Fight Club", "1999", 5,
+                                    status=MEDIA_STATUS_AVAILABLE))
+    ctx.user_data["rq_media"] = {"type": "movie", "tmdb_id": 7}
+
+    async def _noop(update, c):
+        return None
+
+    conv = ConversationHandler(
+        entry_points=[CommandHandler("request", _noop),
+                      CallbackQueryHandler(request_from_ticket, pattern=r"^rqfi:")],
+        states={RQ_CONFIRM: [CommandHandler("y", _noop)]}, fallbacks=[],
+        per_user=True, per_chat=True, allow_reentry=True)
+    upd = make_update(callback_data="rqfi:movie:550", user_id=USER_ID)
+    state = await request_from_ticket(upd, ctx)
+    key = (upd.effective_chat.id, USER_ID)
+    conv._conversations[key] = RQ_CONFIRM
+    conv._update_state(state, key)
+    assert conv._conversations[key] == RQ_CONFIRM
+    assert ctx.user_data["rq_media"]["tmdb_id"] == 7

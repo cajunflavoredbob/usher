@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **An old list no longer ends the newer one**: tapping a title on an older /issue search list ended the report you had since started, and tapping an old /trending list entry that is already available ended an open /request. Both now just answer the tap and leave the open flow as it is.
 - **A new /issue report no longer reuses an old draft**: after /issue was cut short (by another command, a Hub button or a timeout), the next report could inherit the old one's season and episode, "Search ... instead" suggestion or Request it instead title. A movie Auto-fix could then record a season and episode, so the warning that a Fix already ran was skipped for 30 days. Every new report now starts from a clean draft.
 - **Follow and Request remaining seasons on cards in a group**: a show's detail card sent in a group chat never offered Follow or Request remaining seasons, even to a Linked user, because Usher looked up the group instead of the user the card is for. It now uses that user, as the Plex watchlist button already did.
 - **Request remaining seasons gets a Progress card**: filing the remaining seasons from a detail card or availability notice, and a Request resumed after relinking Plex, filed the Request but sent no Progress card, so nothing tracked the download or raised its SABnzbd priority. Both now send the same card as a normal Request.

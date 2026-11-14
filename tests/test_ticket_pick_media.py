@@ -52,12 +52,29 @@ async def test_version_mismatch_shows_search_context_changed():
                     seerr_media_id=1),
     ])
     state = await ticket_pick_media(upd, ctx)
-    assert state == ConversationHandler.END
+    # Refused, not ended: the newer report's conversation stays live.
+    assert state is None
     assert upd.callback_query.edits
     text = upd.callback_query.edits[0]["text"]
     assert "Search context changed" in text
-    # No media commitment in user_data
+    # No media commitment in user_data, and the newer search is untouched.
     assert "media" not in ctx.user_data
+    assert ctx.user_data["search_results"]["version"] == 5
+
+
+async def test_older_list_tap_leaves_the_newer_list_working():
+    ctx = make_ctx(admin_id=999)
+    _seed(ctx, version=5, results=[
+        MediaResult(media_type="movie", tmdb_id=42, title="X", year="",
+                    seerr_media_id=1),
+    ])
+    old = make_update(callback_data="media:3:movie:42", user_id=999)
+    assert await ticket_pick_media(old, ctx) is None
+    new = make_update(callback_data="media:5:movie:42", user_id=999)
+    state = await ticket_pick_media(new, ctx)
+    assert state == PICK_TYPE
+    assert ctx.user_data["media"]["tmdb_id"] == 42
+    assert ctx.user_data["season"] is None and ctx.user_data["episode"] is None
 
 
 async def test_no_search_results_at_all_treats_as_mismatch():
@@ -66,7 +83,7 @@ async def test_no_search_results_at_all_treats_as_mismatch():
     upd = make_update(callback_data="media:1:movie:42", user_id=999)
     ctx = make_ctx(admin_id=999)
     state = await ticket_pick_media(upd, ctx)
-    assert state == ConversationHandler.END
+    assert state is None
     assert "Search context changed" in upd.callback_query.edits[0]["text"]
 
 

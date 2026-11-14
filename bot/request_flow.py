@@ -497,11 +497,11 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
             # Answer already spent, so the refusal goes out as a message.
             # The list stays, and so does the Hub origin of any flow the
             # user has open (set_hub_origin only runs once the tap proceeds).
-            # An open /request flow is still ended: returning END from this
-            # re-entered entry point ends its conversation.
+            # An open /request flow stays open too: returning None from this
+            # re-entered entry point leaves its conversation where it is.
             await update.effective_message.reply_text(
                 f"{tapped.title}: {refusal}")
-            return ConversationHandler.END
+            return None
     set_hub_origin(ctx, hub)
     # Another flow may still be parked in a pick state; end everything (this
     # conversation isn't active yet, so it's untouched) so no stale flow can
