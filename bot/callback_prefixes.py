@@ -118,6 +118,13 @@ ADMIN_SHARES: Final = "adms"          # adms:<page> Admin Hub "Shares" (page 0),
 ADMIN_INACTIVE: Final = "admn"        # admn:<page> Shares list "💤 Inactive" (page 0)
                                       # and its Prev/Next (Tautulli linked only)
 ADMIN_STATUS: Final = "admt"          # Admin Hub "Status" (global handler)
+DOWNLOADS_VIEW: Final = "dlv"         # Admin Hub "Downloads" and every Downloads
+                                      # refresh (SABnzbd linked only)
+DOWNLOADS_PAUSE: Final = "dlp"        # Downloads "Pause"
+DOWNLOADS_PAUSE_30: Final = "dlt"     # Downloads "Pause 30 minutes"
+DOWNLOADS_RESUME: Final = "dlr"       # Downloads "Resume"
+DOWNLOADS_LIMIT: Final = "dll"        # dll:<percent> Downloads speed limit,
+                                      # 0 = no limit
 STOP_ASK: Final = "stk"               # stk:<token> a Now playing Stop button
                                       # -> confirm card (Admin, DM only)
 STOP_GO: Final = "stg"                # stg:<token> confirmed Stop, no message

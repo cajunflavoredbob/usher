@@ -43,6 +43,11 @@ from bot.callback_prefixes import (
     ADMIN_INACTIVE,
     ADMIN_SHARES,
     ADMIN_STATUS,
+    DOWNLOADS_LIMIT,
+    DOWNLOADS_PAUSE,
+    DOWNLOADS_PAUSE_30,
+    DOWNLOADS_RESUME,
+    DOWNLOADS_VIEW,
     STOP_ASK,
     STOP_GO,
     STOP_MSG,
@@ -81,6 +86,7 @@ from bot.callback_prefixes import (
 )
 from bot.ticket_flow import _new_ticket_conversation
 from bot.admin_hub import ADMIN_HUB, cmd_admin, refuse_outside_admin_dm
+from bot.downloads import downloads
 from bot.nowplaying import now_playing_section, stop_ask, stop_confirmed
 from bot.alarms import (ALARM_FIRST_DELAY_S, ALARM_INTERVAL_S, check_alarms,
                         status_section as alarms_section)
@@ -563,6 +569,10 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
                                          pattern=fr"^{SHARE_MATCHES}:\d+$"))
     app.add_handler(CallbackQueryHandler(admin_hub_status,
                                          pattern=fr"^{ADMIN_STATUS}$"))
+    app.add_handler(CallbackQueryHandler(
+        downloads,
+        pattern=(fr"^({DOWNLOADS_VIEW}|{DOWNLOADS_PAUSE}|{DOWNLOADS_PAUSE_30}"
+                 fr"|{DOWNLOADS_RESUME}|{DOWNLOADS_LIMIT}:\d+)$")))
     app.add_handler(CallbackQueryHandler(stop_ask,
                                          pattern=fr"^{STOP_ASK}:\w+$"))
     app.add_handler(CallbackQueryHandler(

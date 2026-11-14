@@ -115,3 +115,34 @@ class SabnzbdClient:
                     # Running (post-processing stages)
                     out[nid] = ("postproc", 100, status)
         return out
+
+    async def get_queue_state(self) -> dict:
+        """The queue's global state for the Admin Hub's Downloads view:
+        {paused, speed, speedlimit, speedlimit_abs, mbleft, timeleft,
+        pause_int}, all as SABnzbd reports them (strings, "" when unset)."""
+        data = await self._call("queue", limit=0)
+        q = data.get("queue") or {}
+        return {
+            "paused": bool(q.get("paused")),
+            "speed": str(q.get("speed") or ""),
+            "speedlimit": str(q.get("speedlimit") or ""),
+            "speedlimit_abs": str(q.get("speedlimit_abs") or ""),
+            "mbleft": str(q.get("mbleft") or ""),
+            "timeleft": str(q.get("timeleft") or ""),
+            "pause_int": str(q.get("pause_int") or ""),
+        }
+
+    async def pause(self) -> None:
+        await self._call("pause")
+
+    async def pause_for(self, minutes: int) -> None:
+        await self._call("config", name="set_pause", value=int(minutes))
+
+    async def resume(self) -> None:
+        await self._call("resume")
+
+    async def set_speed_limit(self, percent: int) -> None:
+        """Limit to `percent` of SABnzbd's maximum bandwidth; 0 clears the
+        limit. SABnzbd ignores a percent while no maximum is set."""
+        await self._call("config", name="speedlimit",
+                         value=max(0, min(100, int(percent))))
