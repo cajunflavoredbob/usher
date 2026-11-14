@@ -75,8 +75,12 @@ def _make_ctx(fix: PendingAutofix, *,
 
 
 @pytest.fixture(autouse=True)
-def _clear_inflight():
-    """Ensure each test starts with an empty in-flight set."""
+def _clear_inflight(monkeypatch):
+    """Ensure each test starts with an empty in-flight set, and that the
+    notify helpers _make_ctx overwrites are put back after the test (the
+    monkeypatch records the originals) so they do not leak into other files."""
+    monkeypatch.setattr(autofix_poll, "_notify_complete", autofix_poll._notify_complete)
+    monkeypatch.setattr(autofix_poll, "_notify_timeout", autofix_poll._notify_timeout)
     autofix_poll._inflight.clear()
     yield
     autofix_poll._inflight.clear()
