@@ -731,16 +731,62 @@ async def ticket_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
             remaining_msg = f"\n(Auto-fixes remaining today: {daily_limit - used})"
     else:
         remaining_msg = ""
-    rows = [[
-        InlineKeyboardButton("✅ Try auto-fix", callback_data=f"{TICKET_AUTOFIX_OFFER}:yes"),
-        InlineKeyboardButton("📨 Just report", callback_data=f"{TICKET_AUTOFIX_OFFER}:no"),
-    ]]
+    recent = None
+    if media.get("type") in ("movie", "tv") and "tmdb_id" in media:
+        is_tv = media["type"] == "tv"
+        recent = await store.recent_fix_event(
+            media["type"], media["tmdb_id"],
+            ctx.user_data.get("season") if is_tv else None,
+            episode if is_tv else None,
+        )
+    report_btn = InlineKeyboardButton(
+        "📨 Report to Admin", callback_data=f"{TICKET_AUTOFIX_OFFER}:no")
+    if recent:
+        rows = [[
+            report_btn,
+            InlineKeyboardButton(
+                "Try auto-fix anyway", callback_data=f"{TICKET_AUTOFIX_OFFER}:yes"),
+        ]]
+        question = (
+            f"{_retry_warning(recent)}\n\n"
+            "Try auto-fix anyway? This will delete the file and trigger a new search."
+        )
+    else:
+        rows = [[
+            InlineKeyboardButton(
+                "✅ Try auto-fix", callback_data=f"{TICKET_AUTOFIX_OFFER}:yes"),
+            report_btn,
+        ]]
+        question = "Try to auto-fix? This will delete the file and trigger a new search."
     sent = await update.effective_message.reply_text(
-        f"Try to auto-fix? This will delete the file and trigger a new search.{remaining_msg}",
+        f"{question}{remaining_msg}",
         reply_markup=InlineKeyboardMarkup(rows),
     )
     record_btn(ctx.application, update.effective_user.id, sent)
     return OFFER_AUTOFIX
+
+
+_FIX_KIND_NAMES = {"auto-fix": "An Auto-fix", "redownload": "A Redownload",
+                   "mark failed": "A Mark Failed"}
+
+
+def _fix_age_text(seconds: int) -> str:
+    if seconds < 3600:
+        return "less than an hour ago"
+    if seconds < 86400:
+        hours = seconds // 3600
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    days = seconds // 86400
+    return f"{days} day{'s' if days != 1 else ''} ago"
+
+
+def _retry_warning(event) -> str:
+    kind = _FIX_KIND_NAMES.get(event.kind, "A Fix")
+    text = (f"⚠️ {kind} ran on this title {_fix_age_text(event.age_seconds)}, "
+            f"and another Auto-fix will likely grab the same file.")
+    if event.outcome == "repeat":
+        text += " It came back as a repeat."
+    return text
 
 
 def _has_arr_for_media(ctx: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -761,7 +807,7 @@ async def ticket_offer_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
         return await _submit_ticket(update, ctx, autofix=False)
     rows = [[
         InlineKeyboardButton("⚠️ Yes, delete & re-search", callback_data=f"{TICKET_AUTOFIX_CONFIRM}:yes"),
-        InlineKeyboardButton("No, just report", callback_data=f"{TICKET_AUTOFIX_CONFIRM}:no"),
+        InlineKeyboardButton("No, report to Admin", callback_data=f"{TICKET_AUTOFIX_CONFIRM}:no"),
     ]]
     sent = await q.edit_message_text(
         "⚠️ This will *delete the current file* from disk and trigger a new download. Confirm?",

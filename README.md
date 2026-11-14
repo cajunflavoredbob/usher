@@ -132,10 +132,10 @@ bot:  Type: 🔊 Audio
 user: Audio goes out of sync after about 30 minutes
 bot:  Try to auto-fix? This will delete the file and trigger a new search.
       (Auto-fixes remaining today: 3)
-      [✅ Try auto-fix] [📨 Just report]
+      [✅ Try auto-fix] [📨 Report to Admin]
 user: (taps Try auto-fix)
 bot:  ⚠️ This will delete the current file from disk and trigger a new download. Confirm?
-      [⚠️ Yes, delete & re-search] [No, just report]
+      [⚠️ Yes, delete & re-search] [No, report to Admin]
 user: (taps Yes)
 bot:  ✅ Reported as ticket #14
         🔊 Audio - Solo: A Star Wars Story (2018)
@@ -144,6 +144,8 @@ bot:  ✅ Reported as ticket #14
 
       Use /tickets to manage it.
 ```
+
+If a Fix (Auto-fix, Redownload or Mark Failed, from anyone) already ran on the same movie or episode in the last 30 days, the offer instead warns that another Auto-fix will likely grab the same file, says which Fix ran, how long ago and whether it came back as a repeat, and lists **Report to Admin** first and **Try auto-fix anyway** second.
 
 ## Webhook setup
 

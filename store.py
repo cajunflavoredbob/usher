@@ -96,6 +96,15 @@ class TokenCrypto:
         return self.fernet.decrypt(ciphertext.encode()).decode()
 
 
+@dataclass(frozen=True)
+class RecentFixEvent:
+    """A Fix event on an item: kind ('auto-fix', 'redownload', 'mark
+    failed'), outcome, and how many seconds ago it ran."""
+    kind: str
+    outcome: str
+    age_seconds: int
+
+
 @dataclass
 class PendingAutofix:
     id: int
@@ -795,6 +804,35 @@ class UserStore:
                     """,
                     (telegram_id, media_type, tmdb_id, season, episode, kind),
                 ).lastrowid
+
+        return await self._run(_do)
+
+    async def recent_fix_event(
+        self,
+        media_type: str,
+        tmdb_id: int,
+        season: Optional[int] = None,
+        episode: Optional[int] = None,
+    ) -> Optional[RecentFixEvent]:
+        """The newest Fix event on this item from anyone in the last 30
+        days: a movie by tmdb_id; an episode by tmdb_id, season and episode.
+        None when there is none."""
+        def _do() -> Optional[RecentFixEvent]:
+            with self._conn() as c:
+                row = c.execute(
+                    """
+                    SELECT kind, outcome,
+                           CAST((julianday('now') - julianday(occurred_at)) * 86400
+                                AS INTEGER)
+                    FROM autofix_events
+                    WHERE media_type = ? AND tmdb_id = ?
+                      AND season IS ? AND episode IS ?
+                      AND occurred_at >= datetime('now', '-30 days')
+                    ORDER BY occurred_at DESC, id DESC LIMIT 1
+                    """,
+                    (media_type, tmdb_id, season, episode),
+                ).fetchone()
+            return RecentFixEvent(row[0], row[1], max(0, row[2])) if row else None
 
         return await self._run(_do)
 
