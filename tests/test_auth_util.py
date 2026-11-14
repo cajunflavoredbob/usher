@@ -249,3 +249,19 @@ def test_client_ip_tolerates_request_without_app():
 def test_parse_trusted_proxies_skips_invalid_entries():
     nets = parse_trusted_proxies("198.51.100.0/24, bogus, 192.0.2.5")
     assert len(nets) == 2  # bare IP becomes a /32; bogus dropped
+
+
+def test_throttle_address_keys_ipv6_by_its_64():
+    from auth_util import throttle_address
+    assert throttle_address("2001:db8:1:2::1") == throttle_address(
+        "2001:db8:1:2:ffff:ffff:ffff:ffff")
+    assert throttle_address("2001:db8:1:2::1") != throttle_address(
+        "2001:db8:1:3::1")
+    assert throttle_address("2001:db8:1:2::1") == "2001:db8:1:2::/64"
+
+
+def test_throttle_address_leaves_ipv4_and_junk_alone_and_unmaps_ipv4():
+    from auth_util import throttle_address
+    assert throttle_address("198.51.100.7") == "198.51.100.7"
+    assert throttle_address("::ffff:198.51.100.7") == "198.51.100.7"
+    assert throttle_address("-") == "-"

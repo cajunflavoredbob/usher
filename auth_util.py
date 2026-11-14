@@ -351,6 +351,23 @@ def _warn_untrusted_forwarded(request, peer: str) -> None:
         "TRUSTED_PROXIES to its IP or CIDR.", peer, peer)
 
 
+def throttle_address(ip: str) -> str:
+    """Key for the login throttles: an IPv6 client is keyed by its /64 (one
+    subscriber normally owns a whole /64, so rotating addresses inside it
+    must not mint fresh guesses), an IPv4-mapped IPv6 address by its IPv4
+    address, IPv4 and anything unparseable unchanged. Audit lines keep the
+    full address."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if addr.version == 6:
+        if addr.ipv4_mapped is not None:
+            return str(addr.ipv4_mapped)
+        return str(ipaddress.ip_network((addr, 64), strict=False))
+    return ip
+
+
 def client_ip(request) -> str:
     """Client IP for throttling/audit. The socket peer is the only value an
     attacker can't choose, so X-Forwarded-For is honored ONLY when the peer

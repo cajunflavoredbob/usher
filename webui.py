@@ -50,6 +50,7 @@ from auth_util import (
     attach_csrf_cookie,
     audit,
     client_ip,
+    throttle_address,
     safe_compare,
     clear_setup_token,
     csrf_for_request,
@@ -1306,6 +1307,8 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
 
     ip = client_ip(request)
+    # Throttles key IPv6 by its /64; audit lines keep the full address.
+    tip = throttle_address(ip)
     username = (form.get("username") or "").strip()
     password = form.get("password") or ""
 
@@ -1317,6 +1320,10 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
                             headers={"Retry-After": str(int(locked))})
 
     admin = store.settings.admin
+    # Read together, before any await: the verified hash and the version the
+    # cookies carry must belong to the same password.
+    stored_hash = admin.password_hash
+    stored_version = admin.password_version
     secret = request.app["session_secret"]
     # A valid known-device cookie (set on an earlier successful login for
     # this admin username and password_version) moves the attempt from the
@@ -1326,7 +1333,7 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
     # expired or mismatched cookie counts as absent.
     device_id = (_verify_device_cookie(
         secret, request.cookies.get(DEVICE_COOKIE),
-        admin.username, admin.password_version) if admin.is_set() else None)
+        admin.username, stored_version) if admin.is_set() else None)
 
     # An over-long or unencodable username, or an unencodable password, is a
     # failed login that never reaches the per-(ip, username) map or PBKDF2.
@@ -1345,13 +1352,13 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
         # username-rotating flood would otherwise dodge the per-(ip,username)
         # lockout and drive unbounded PBKDF2 work on the event loop. Every
         # username goes through it, so there is no username oracle.
-        ip_locked = _ip_throttle.is_locked(ip)
+        ip_locked = _ip_throttle.is_locked(tip)
         if ip_locked is not None:
             audit("login_throttled_ip", ip=ip, seconds_left=int(ip_locked))
             return _locked_response(ip_locked)
 
         # Then the tighter per-(ip, username) lockout.
-        throttle_key = None if bad_input else f"{ip}|{username.lower()}"
+        throttle_key = None if bad_input else f"{tip}|{username.lower()}"
         locked = (_throttle.is_locked(throttle_key)
                   if throttle_key is not None else None)
         if locked is not None:
@@ -1364,16 +1371,24 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
     # Constant-work verification: run PBKDF2 even on a wrong username so
     # response timing can't enumerate the admin username. Off the event loop
     # (600k iterations) so it can't stall the webhook receiver / bot HTTP.
-    stored = admin.password_hash if username_ok else _TIMING_EQUALIZER_HASH
+    stored = stored_hash if username_ok else _TIMING_EQUALIZER_HASH
     password_ok = (False if bad_input else
                    await asyncio.to_thread(verify_password, password, stored))
+    if username_ok and password_ok and admin.password_hash != stored_hash:
+        # The password changed while this attempt was verifying: the cookies
+        # would carry the new version for a password that is already dead.
+        # Refuse without counting it against the client.
+        audit("login_fail_password_changed", user=username, ip=ip)
+        body = _page("Login", _flash(error="Invalid credentials.") +
+                     '<p><a href="/admin/login">Try again</a></p>')
+        return web.Response(text=body, content_type="text/html", status=401)
     if not (username_ok and password_ok):
         if device_id is not None:
             _device_throttle.record_failure(device_id)
         else:
             if throttle_key is not None:
                 _throttle.record_failure(throttle_key)
-            _ip_throttle.record_failure(ip)
+            _ip_throttle.record_failure(tip)
         audit("login_fail", user=username or "-", ip=ip)
         body = _page("Login", _flash(error="Invalid credentials.") +
                      '<p><a href="/admin/login">Try again</a></p>')
@@ -1383,12 +1398,12 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
         _device_throttle.record_success(device_id)
     else:
         _throttle.record_success(throttle_key)
-        _ip_throttle.record_success(ip)
+        _ip_throttle.record_success(tip)
     audit("login_success", user=username, ip=ip)
 
     # PBKDF2 auto-upgrade: if the stored hash uses a stale
     # iteration count, rehash with the current count and persist.
-    stored_iters = iterations_of(admin.password_hash)
+    stored_iters = iterations_of(stored_hash)
     if stored_iters and stored_iters < PBKDF2_ITERATIONS and not restart_pending():
         try:
             admin.password_hash = hash_password(password)
@@ -1402,7 +1417,7 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
 
     secure = request_is_secure(request)
     cookie = _make_session_cookie(request.app["session_secret"], username,
-                                  store.settings.admin.password_version)
+                                  stored_version)
     resp = web.HTTPFound("/admin")
     _set_session_cookie(resp, cookie, secure=secure)
     # Known-device marker: kept across logout (it marks the browser, not the
@@ -1410,7 +1425,7 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
     # a password change (the password_version it carries no longer matches).
     _set_device_cookie(resp, _make_device_cookie(
         request.app["session_secret"], username,
-        store.settings.admin.password_version, device_id), secure=secure)
+        stored_version, device_id), secure=secure)
     # Rotate CSRF cookie after privilege change, bound to the NEW session
     # cookie's signature so it validates on the first authenticated POST.
     new_binding = cookie.rsplit(".", 1)[-1]
@@ -1804,12 +1819,16 @@ async def change_password(request: web.Request) -> web.Response:
     if restart_pending():
         return web.Response(text="Usher is restarting; try again in a moment.",
                             status=503)
-    admin.password_hash = new_hash
-    # Sign out every other session: a stolen cookie must die when the
-    # admin rotates the password in response to it. The current session
-    # is kept by re-issuing it at the new version below.
-    admin.password_version += 1
-    await store.save_async()
+    # The write waits for any login in flight (it holds login_lock from its
+    # hash read to its cookie), so no login can verify the old password and
+    # then stamp the new version.
+    async with request.app["login_lock"]:
+        admin.password_hash = new_hash
+        # Sign out every other session: a stolen cookie must die when the
+        # admin rotates the password in response to it. The current session
+        # is kept by re-issuing it at the new version below.
+        admin.password_version += 1
+        await store.save_async()
     audit("password_changed", user=user, ip=client_ip(request))
     # Re-issue THIS session at the new version so the admin who changed the
     # password isn't logged out mid-page. The session signature changes, so
