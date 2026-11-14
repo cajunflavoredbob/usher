@@ -337,3 +337,30 @@ async def test_old_shape_request_watches_gets_the_seasons_column(
     assert sorted(map(str, (r["seasons"] for r in rows))) == ["None", "[2]"]
     with sqlite3.connect(tmp_db_path) as c:
         assert c.execute("PRAGMA user_version").fetchone()[0] == UserStore.SCHEMA_VERSION
+
+
+async def test_newest_link_wins_not_the_largest_telegram_id(fresh_store: UserStore):
+    import sqlite3
+    big, small = 900000001, 100000002
+    await fresh_store.link_with_plex(telegram_id=big, seerr_id=7,
+                                     seerr_display="U", plex_token="t1",
+                                     plex_uuid="u1", plex_username="shared")
+    await fresh_store.link_with_plex(telegram_id=small, seerr_id=7,
+                                     seerr_display="U", plex_token="t2",
+                                     plex_uuid="u2", plex_username="shared")
+    # Make the order unambiguous at one-second timestamp resolution.
+    with sqlite3.connect(fresh_store.path) as c:
+        c.execute("UPDATE user_mapping SET linked_at = datetime('now', '-1 hour')"
+                  " WHERE telegram_id = ?", (big,))
+    assert (await fresh_store.find_by_seerr_id(7)).telegram_id == small
+    assert (await fresh_store.find_by_plex_username("shared")).telegram_id == small
+
+
+async def test_old_ticket_escalations_are_pruned(fresh_store: UserStore):
+    import sqlite3
+    assert await fresh_store.claim_ticket_escalation(5)
+    with sqlite3.connect(fresh_store.path) as c:
+        c.execute("UPDATE ticket_escalations SET escalated_at = "
+                  "datetime('now', '-200 days')")
+    await fresh_store.prune_autofix_history()
+    assert await fresh_store.claim_ticket_escalation(5)

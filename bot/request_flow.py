@@ -1086,14 +1086,19 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             dropped_note = (f"\n({_summarize_seasons(dropped)} was already "
                             "available or requested, so Seerr skipped it.)")
     approved = created.status == REQUEST_STATUS_APPROVED
+    # Promise a DM only when the Admin has Request updates to requesters on.
+    settings_store = ctx.bot_data.get("settings_store")
+    dms_on = (settings_store is None
+              or settings_store.settings.tg_notify_requester)
     if approved:
         text = (f"✅ Approved: <b>{html.escape(label)}</b> is being grabbed."
-                f"{html.escape(dropped_note)}\n"
-                "I'll DM you when it's available.")
+                f"{html.escape(dropped_note)}"
+                + ("\nI'll DM you when it's available." if dms_on else ""))
     else:
         text = (f"📨 Requested: <b>{html.escape(label)}</b>."
                 f"{html.escape(dropped_note)}\n"
-                "Waiting for approval. I'll DM you when it moves.")
+                "Waiting for approval."
+                + (" I'll DM you when it moves." if dms_on else ""))
     # The result stays on the flow message, with the way back to the Hub.
     sent = await edit_or_send(q, text, parse_mode="HTML",
                               reply_markup=end_markup(REQUESTS_HUB))

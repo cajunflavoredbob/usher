@@ -37,6 +37,12 @@ logger = logging.getLogger("usher." + __name__)
 
 T = TypeVar("T")
 
+# Fix history is kept this long, and the repeat check looks back the same
+# window: shortening one without the other would blind the retry warning.
+AUTOFIX_HISTORY_DAYS = 30
+# "Ask the Admin" claims are dropped after this long (see the prune).
+TICKET_ESCALATION_KEEP_DAYS = 90
+
 # Locked-DB retry budget. Total worst-case sleep = 50+100+200+400+800 = 1550ms.
 _LOCKED_MAX_ATTEMPTS = 5
 _LOCKED_BASE_DELAY_S = 0.05
@@ -472,7 +478,7 @@ class UserStore:
                            plex_token_enc, plex_uuid, plex_username
                     FROM user_mapping
                     WHERE seerr_id = ?
-                    ORDER BY rowid DESC
+                    ORDER BY linked_at DESC, rowid DESC
                     LIMIT 1
                     """,
                     (seerr_id,),
@@ -496,8 +502,10 @@ class UserStore:
         """Lookup by Plex username (case-insensitive). Maps Seerr webhook
         payloads (which carry reportedBy_username) back to a linked TG user.
         Nothing stops two Telegram accounts from linking the same Plex
-        account; ORDER BY rowid DESC makes the winner deterministic (newest
-        link) instead of whichever row SQLite happens to return first.
+        account; ordering on linked_at (refreshed on every re-link) makes
+        the newest link win instead of whichever row SQLite returns first.
+        telegram_id is the rowid, so ordering on rowid alone would pick the
+        largest Telegram id.
         """
         if not plex_username:
             return None
@@ -510,7 +518,7 @@ class UserStore:
                            plex_token_enc, plex_uuid, plex_username
                     FROM user_mapping
                     WHERE LOWER(plex_username) = LOWER(?)
-                    ORDER BY rowid DESC
+                    ORDER BY linked_at DESC, rowid DESC
                     LIMIT 1
                     """,
                     (plex_username,),
@@ -850,10 +858,11 @@ class UserStore:
                     FROM autofix_events
                     WHERE media_type = ? AND tmdb_id = ?
                       AND season IS ? AND episode IS ?
-                      AND occurred_at >= datetime('now', '-30 days')
+                      AND occurred_at >= datetime('now', ?)
                     ORDER BY occurred_at DESC, id DESC LIMIT 1
                     """,
-                    (media_type, tmdb_id, season, episode),
+                    (media_type, tmdb_id, season, episode,
+                     f"-{AUTOFIX_HISTORY_DAYS} days"),
                 ).fetchone()
             return RecentFixEvent(row[0], row[1], max(0, row[2])) if row else None
 
@@ -1103,8 +1112,16 @@ class UserStore:
                     (OUTCOME_COMPLETE, OUTCOME_TIMEOUT, OUTCOME_FAILED),
                 ).rowcount
                 events = c.execute(
-                    "DELETE FROM autofix_events WHERE occurred_at < datetime('now', '-30 days')"
+                    "DELETE FROM autofix_events WHERE occurred_at < datetime('now', ?)",
+                    (f"-{AUTOFIX_HISTORY_DAYS} days",),
                 ).rowcount
+                # Escalations are keyed by Seerr's ticket id alone; a new
+                # Seerr install reuses ids, so an old claim must not block
+                # "Ask the Admin" on a new Ticket forever.
+                c.execute(
+                    "DELETE FROM ticket_escalations WHERE escalated_at < datetime('now', ?)",
+                    (f"-{TICKET_ESCALATION_KEEP_DAYS} days",),
+                )
                 return pending, events
 
         return await self._run(_do)
