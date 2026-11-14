@@ -967,11 +967,14 @@ class UserStore:
 
         return await self._run(_do)
 
-    async def pop_subscribers(self, media_type: str, tmdb_id: int) -> list[int]:
-        """All telegram_ids subscribed to a title, deleting the rows in the
-        same transaction (one-shot semantics: re-adds, auto-fix
-        replacements, and per-episode rescans can re-fire MEDIA_AVAILABLE,
-        and a consumed subscription must not fire twice)."""
+    async def pop_subscribers(self, media_type: str, tmdb_id: int,
+                              admin_id: Optional[int] = None) -> list[int]:
+        """Telegram ids subscribed to a title who currently have a Link (or
+        are the Admin, who may have none), deleting their rows in the same
+        transaction (one-shot semantics: re-adds, auto-fix replacements, and
+        per-episode rescans can re-fire MEDIA_AVAILABLE, and a consumed
+        subscription must not fire twice). An unlinked person's rows are
+        kept, unsent, so a re-link brings them back."""
 
         def _do() -> list[int]:
             with self._conn() as c:
@@ -979,12 +982,15 @@ class UserStore:
                     """
                     SELECT DISTINCT telegram_id FROM availability_subs
                     WHERE media_type = ? AND tmdb_id = ?
+                      AND (telegram_id IN (SELECT telegram_id FROM user_mapping)
+                           OR telegram_id = ?)
                     """,
-                    (media_type, tmdb_id),
+                    (media_type, tmdb_id, admin_id),
                 ).fetchall()
-                c.execute(
-                    "DELETE FROM availability_subs WHERE media_type = ? AND tmdb_id = ?",
-                    (media_type, tmdb_id),
+                c.executemany(
+                    "DELETE FROM availability_subs "
+                    "WHERE media_type = ? AND tmdb_id = ? AND telegram_id = ?",
+                    [(media_type, tmdb_id, r[0]) for r in rows],
                 )
                 return [r[0] for r in rows]
 
@@ -1103,16 +1109,22 @@ class UserStore:
                     (telegram_id,)).fetchall()
         return await self._run(_do)
 
-    async def list_followers(self, tmdb_id: int) -> list[int]:
-        """Telegram ids with an active Follow on a show."""
+    async def list_followers(self, tmdb_id: int,
+                             admin_id: Optional[int] = None) -> list[int]:
+        """Telegram ids with an active Follow on a show who currently have a
+        Link (or are the Admin, who may have none). An unlinked person's
+        Follows stay stored, so a re-link brings them back."""
         def _do() -> list[int]:
             with self._conn() as c:
                 return [r[0] for r in c.execute(
                     """
                     SELECT telegram_id FROM follows
-                    WHERE tmdb_id = ? AND removed = 0 ORDER BY id
+                    WHERE tmdb_id = ? AND removed = 0
+                      AND (telegram_id IN (SELECT telegram_id FROM user_mapping)
+                           OR telegram_id = ?)
+                    ORDER BY id
                     """,
-                    (tmdb_id,)).fetchall()]
+                    (tmdb_id, admin_id)).fetchall()]
         return await self._run(_do)
 
     # Failed-Request auto-retry
@@ -1395,6 +1407,24 @@ class UserStore:
                     (telegram_id,),
                 )
                 return cur.rowcount > 0
+
+        return await self._run(_do)
+
+    async def unlink_plex_username(self, plex_username: str) -> list[int]:
+        """Unlink every Link whose Plex username matches (case-insensitive);
+        returns the telegram ids unlinked."""
+        if not plex_username:
+            return []
+
+        def _do() -> list[int]:
+            with self._conn() as c:
+                ids = [r[0] for r in c.execute(
+                    "SELECT telegram_id FROM user_mapping "
+                    "WHERE LOWER(plex_username) = LOWER(?)",
+                    (plex_username,)).fetchall()]
+                c.executemany("DELETE FROM user_mapping WHERE telegram_id = ?",
+                              [(i,) for i in ids])
+                return ids
 
         return await self._run(_do)
 

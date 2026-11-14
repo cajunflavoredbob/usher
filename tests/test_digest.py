@@ -78,6 +78,16 @@ async def test_only_opted_in_linked_users_get_the_digest(fresh_store):
     assert [c.kwargs["chat_id"] for c in _sends(ctx)] == [1]
 
 
+async def test_an_unlinked_user_gets_no_digest(fresh_store):
+    await _link(fresh_store, 1)
+    await fresh_store.set_pref(1, "digest", True)
+    await fresh_store.unlink(1)
+    await _seed(fresh_store)
+    ctx = _ctx(fresh_store)
+    assert await send_digest(ctx.application, NOW) == 0
+    assert _sends(ctx) == []
+
+
 async def test_digest_lists_yesterdays_rows_grouped_movies_then_shows(fresh_store):
     await _link(fresh_store, 1)
     await fresh_store.set_pref(1, "digest", True)

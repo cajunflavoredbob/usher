@@ -135,7 +135,16 @@ async def test_available_webhook_triggers_fanout():
 
 # --- real-store round trip ----------------------------------------------------
 
+async def _link(store, telegram_id):
+    await store.link_with_plex(
+        telegram_id=telegram_id, seerr_id=telegram_id, seerr_display="U",
+        plex_token="tok", plex_uuid=f"u{telegram_id}",
+        plex_username=f"p{telegram_id}")
+
+
 async def test_store_subscription_round_trip(fresh_store):
+    await _link(fresh_store, 1)
+    await _link(fresh_store, 2)
     assert await fresh_store.add_subscription(1, "movie", 550, "Fight Club")
     assert not await fresh_store.add_subscription(1, "movie", 550, "Fight Club")
     assert await fresh_store.add_subscription(2, "movie", 550, "Fight Club")
@@ -277,3 +286,24 @@ async def test_client_get_media_url_reads_media_info(monkeypatch):
     assert await client.get_media_url("tv", 1399) is None
     assert seen[0].endswith("/movie/550") and seen[1].endswith("/tv/1399")
     await client.close()
+
+
+async def test_an_unlinked_subscriber_gets_no_notice_and_keeps_the_row(
+        fresh_store):
+    await _link(fresh_store, 1)
+    await _link(fresh_store, 2)
+    await fresh_store.add_subscription(1, "movie", 550, "Fight Club")
+    await fresh_store.add_subscription(2, "movie", 550, "Fight Club")
+    await fresh_store.unlink(2)
+    assert await fresh_store.pop_subscribers("movie", 550) == [1]
+    # The unlinked person's row survives and fires after a re-link.
+    assert len(await fresh_store.list_subscriptions(2)) == 1
+    await _link(fresh_store, 2)
+    assert await fresh_store.pop_subscribers("movie", 550) == [2]
+
+
+async def test_the_admin_without_a_link_still_gets_subscription_notices(
+        fresh_store):
+    await fresh_store.add_subscription(ADMIN_ID, "movie", 550, "Fight Club")
+    assert await fresh_store.pop_subscribers("movie", 550) == []
+    assert await fresh_store.pop_subscribers("movie", 550, ADMIN_ID) == [ADMIN_ID]

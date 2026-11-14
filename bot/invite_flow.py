@@ -1056,19 +1056,55 @@ async def cmd_uninvite(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         labels=_expiry_labels(matches, await store.list_share_expiries())))
 
 
+async def _holder_username(store: UserStore, plex: PlexClient, token: str,
+                           share_id: int) -> str:
+    """The Plex username of an accepted Share's holder, read before the Share
+    goes: from the Share listing, else the Expiry row's stored username.
+    Empty when neither names one (a pending Invite has no username)."""
+    try:
+        machine_id, _ = await plex.get_owned_server(token)
+        for share in await plex.list_shares(token, machine_id):
+            if share.id == share_id:
+                return (share.username or "") if share.accepted else ""
+    except Exception:
+        logger.debug("holder lookup by listing failed", exc_info=True)
+    row = await store.get_share_expiry(share_id)
+    return (row.username or "") if row is not None else ""
+
+
 async def remove_share_and_forget(store: UserStore, plex: PlexClient,
                                   token: str, share_id: int) -> bool:
-    """The one Share removal: revoke the Share (or cancel a pending Invite)
-    and drop its Expiry row. Returns True when Plex already had no such Share
-    (the row is dropped then too); any other failure is raised with the row
-    kept. Used by /uninvite, the Share view and the Expiry job."""
+    """The one Share removal: revoke the Share (or cancel a pending Invite),
+    drop its Expiry row, and unlink the holder (their /link dies with their
+    Plex access, so Follow pings, Subscription notices and the Digest stop).
+    The holder is the Link whose Plex username matches the Share's, the same
+    match the expiry reminder uses; no match leaves every Link as it is.
+    Returns True when Plex already had no such Share (the row is dropped then
+    too); any other failure is raised with the row kept. Used by /uninvite,
+    the Share view and the Expiry job."""
+    holder = await _holder_username(store, plex, token, share_id)
     try:
         await plex.remove_share(token, share_id)
     except NotFoundAPIError:
         await store.clear_share_expiry(share_id)
+        await _unlink_holder(store, holder, share_id)
         return True
     await store.clear_share_expiry(share_id)
+    await _unlink_holder(store, holder, share_id)
     return False
+
+
+async def _unlink_holder(store: UserStore, holder: str, share_id: int) -> None:
+    if not holder:
+        return
+    try:
+        ids = await store.unlink_plex_username(holder)
+    except Exception:
+        logger.exception("unlinking the holder of share %s failed", share_id)
+        return
+    if ids:
+        logger.info("Unlinked %d Link(s) after removing share %s",
+                    len(ids), share_id)
 
 
 async def uninvite_go(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:

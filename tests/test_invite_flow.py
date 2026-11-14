@@ -732,3 +732,70 @@ def test_admin_hub_handlers_registered():
         found = re.search(
             rf"CallbackQueryHandler\({handler},\s*pattern={pattern}\)", src)
         assert found and found.start() < last, handler
+
+
+# --- removing a Share unlinks its holder ---------------------------------------
+
+async def _linked(store, telegram_id, plex_username):
+    await store.link_with_plex(
+        telegram_id=telegram_id, seerr_id=telegram_id, seerr_display="U",
+        plex_token="tok", plex_uuid=f"u{telegram_id}",
+        plex_username=plex_username)
+
+
+def _plex_with_share(share):
+    plex = AsyncMock()
+    plex.get_owned_server.return_value = ("machine-1", "server1")
+    plex.list_shares.return_value = [share]
+    return plex
+
+
+async def test_removing_a_share_unlinks_its_holder_and_keeps_follows(fresh_store):
+    from bot.invite_flow import remove_share_and_forget
+    await _linked(fresh_store, 5, "Friend")
+    await _linked(fresh_store, 6, "other")
+    await fresh_store.add_follow(5, 1396, 0, "Show")
+    await fresh_store.set_pref(5, "digest", True)
+    share = PlexShare(id=71, email="friend@example.com", username="friend",
+                      accepted=True, all_libraries=True)
+    await remove_share_and_forget(fresh_store, _plex_with_share(share),
+                                  "tok", 71)
+    assert await fresh_store.get(5) is None
+    assert await fresh_store.get(6) is not None
+    assert await fresh_store.list_followers(1396) == []
+    assert await fresh_store.list_digest_users() == []
+    assert len(await fresh_store.list_follows(5)) == 1  # row kept for a re-link
+
+
+async def test_removing_a_pending_invite_leaves_links_alone(fresh_store):
+    from bot.invite_flow import remove_share_and_forget
+    await _linked(fresh_store, 5, "friend")
+    share = PlexShare(id=71, email="friend@example.com", username="friend",
+                      accepted=False, all_libraries=True)
+    await remove_share_and_forget(fresh_store, _plex_with_share(share),
+                                  "tok", 71)
+    assert await fresh_store.get(5) is not None
+
+
+async def test_a_share_with_no_matching_link_unlinks_nobody(fresh_store):
+    from bot.invite_flow import remove_share_and_forget
+    await _linked(fresh_store, 5, "someone_else")
+    share = PlexShare(id=71, email="friend@example.com", username="friend",
+                      accepted=True, all_libraries=True)
+    await remove_share_and_forget(fresh_store, _plex_with_share(share),
+                                  "tok", 71)
+    assert await fresh_store.get(5) is not None
+
+
+async def test_a_failed_removal_keeps_the_link(fresh_store):
+    from bot.invite_flow import remove_share_and_forget
+    await _linked(fresh_store, 5, "friend")
+    share = PlexShare(id=71, email="friend@example.com", username="friend",
+                      accepted=True, all_libraries=True)
+    plex = _plex_with_share(share)
+    plex.remove_share.side_effect = RuntimeError("boom")
+    try:
+        await remove_share_and_forget(fresh_store, plex, "tok", 71)
+    except RuntimeError:
+        pass
+    assert await fresh_store.get(5) is not None

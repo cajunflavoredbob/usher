@@ -177,7 +177,8 @@ async def fan_out_availability(app, media_type: str, tmdb_id: int,
         return
     store: UserStore = app.bot_data["store"]
     try:
-        subscribers = await store.pop_subscribers(media_type, tmdb_id)
+        subscribers = await store.pop_subscribers(
+            media_type, tmdb_id, app.bot_data.get("admin_id"))
     except Exception:
         logger.exception("subscription fan-out lookup failed")
         return

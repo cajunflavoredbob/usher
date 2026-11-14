@@ -20,6 +20,13 @@ ADMIN_ID = 999
 SHOW = 1396
 
 
+async def _link(store, telegram_id):
+    await store.link_with_plex(
+        telegram_id=telegram_id, seerr_id=telegram_id, seerr_display="U",
+        plex_token="tok", plex_uuid=f"u{telegram_id}",
+        plex_username=f"p{telegram_id}")
+
+
 def _store_ctx(store):
     """A handler ctx over a real store whose `get` says USER_ID is Linked."""
     store.get = AsyncMock(return_value=make_link(telegram_id=USER_ID))
@@ -63,6 +70,7 @@ async def test_follow_tap_swaps_the_button_to_unfollow(fresh_store):
 
 async def test_unfollow_sets_removed_and_swaps_back(fresh_store):
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    await _link(fresh_store, USER_ID)
     await fresh_store.add_follow(USER_ID, SHOW, 0, "Show")
     ctx = _store_ctx(fresh_store)
     upd = make_update(callback_data=f"foldl:{SHOW}", user_id=USER_ID)
@@ -84,6 +92,8 @@ async def test_follow_gated_for_unlinked():
 
 
 async def test_store_follow_is_unique_per_user_and_show(fresh_store):
+    await _link(fresh_store, 1)
+    await _link(fresh_store, 2)
     assert await fresh_store.add_follow(1, SHOW, 0, "A") is True
     assert await fresh_store.add_follow(1, SHOW, 0, "A") is False
     assert await fresh_store.add_follow(2, SHOW, 0, "A") is True
@@ -198,6 +208,7 @@ async def test_first_poll_sets_the_mark_and_records_nothing(fresh_store):
 
 async def test_poller_records_each_import_once_and_keeps_its_mark(fresh_store):
     await fresh_store.set_poller_mark("sonarr_history", "2026-11-14T09:00:00Z")
+    await _link(fresh_store, USER_ID)
     await fresh_store.add_follow(USER_ID, SHOW, 0, "Breaking Bad")
     sonarr = _sonarr([_rec(1, 1, 1, "2026-11-14T10:00:00Z"),
                       _rec(2, 1, 2, "2026-11-14T10:05:00Z")])
@@ -238,6 +249,7 @@ async def test_a_failing_source_keeps_its_mark(fresh_store):
 
 async def _poll_once(store, *, sonarr):
     await store.set_poller_mark("sonarr_history", "2026-11-14T09:00:00Z")
+    await _link(store, USER_ID)
     await store.add_follow(USER_ID, SHOW, 0, "Breaking Bad")
     ctx = _app(store, sonarr=sonarr)
     await poll_new_content(ctx)
@@ -405,6 +417,7 @@ async def _polled(store, *, follows=True, records=None):
 
 
 async def test_two_imports_in_one_poll_send_one_ping_with_watch_now(fresh_store):
+    await _link(fresh_store, USER_ID)
     await fresh_store.add_follow(USER_ID, SHOW, 0, "Breaking Bad")
     ctx = await _polled(fresh_store)
     send = ctx.application.bot.send_message
@@ -417,6 +430,7 @@ async def test_two_imports_in_one_poll_send_one_ping_with_watch_now(fresh_store)
 
 
 async def test_an_episode_is_never_pinged_twice(fresh_store):
+    await _link(fresh_store, USER_ID)
     await fresh_store.add_follow(USER_ID, SHOW, 0, "Breaking Bad")
     ctx = await _polled(fresh_store)
     await poll_new_content(ctx)
@@ -430,6 +444,7 @@ async def test_an_episode_is_never_pinged_twice(fresh_store):
 
 
 async def test_a_later_episode_gets_its_own_ping(fresh_store):
+    await _link(fresh_store, USER_ID)
     await fresh_store.add_follow(USER_ID, SHOW, 0, "Breaking Bad")
     ctx = await _polled(fresh_store, records=[_rec(1, 1, 1)])
     await fresh_store.add_new_content("sonarr:2", "episode", SHOW,
@@ -440,6 +455,7 @@ async def test_a_later_episode_gets_its_own_ping(fresh_store):
 
 
 async def test_the_follow_pings_switch_off_sends_none(fresh_store):
+    await _link(fresh_store, USER_ID)
     await fresh_store.add_follow(USER_ID, SHOW, 0, "Breaking Bad")
     ctx = await _polled(fresh_store, follows=False)
     assert ctx.application.bot.send_message.await_count == 0
@@ -450,7 +466,10 @@ async def test_the_follow_pings_switch_off_sends_none(fresh_store):
 
 
 async def test_only_followers_of_that_show_are_pinged(fresh_store):
+    await _link(fresh_store, USER_ID)
     await fresh_store.add_follow(USER_ID, SHOW, 0, "Breaking Bad")
+    await _link(fresh_store, 7)
+    await _link(fresh_store, 8)
     await fresh_store.add_follow(7, 555, 0, "Other")
     await fresh_store.add_follow(8, SHOW, 0, "Breaking Bad")
     await fresh_store.remove_follow(8, SHOW)
@@ -487,3 +506,25 @@ async def test_empty_follows_list_hint():
     await _render_follows(upd, ctx, upd.callback_query.message.reply_text,
                           user_id=USER_ID)
     assert "aren't following" in upd.callback_query.message.reply_calls[0]["text"]
+
+
+# --- Unlinked people get no pings ---------------------------------------------
+
+async def test_an_unlinked_follower_gets_no_ping_and_a_relink_restores_it(
+        fresh_store):
+    await _link(fresh_store, USER_ID)
+    await fresh_store.add_follow(USER_ID, SHOW, 0, "Breaking Bad")
+    await fresh_store.unlink(USER_ID)
+    assert await fresh_store.list_followers(SHOW) == []
+    ctx = await _polled(fresh_store)
+    assert ctx.application.bot.send_message.await_count == 0
+    await _link(fresh_store, USER_ID)
+    assert await fresh_store.list_followers(SHOW) == [USER_ID]
+
+
+async def test_the_admin_without_a_link_still_gets_follow_pings(fresh_store):
+    await fresh_store.add_follow(ADMIN_ID, SHOW, 0, "Breaking Bad")
+    assert await fresh_store.list_followers(SHOW) == []
+    assert await fresh_store.list_followers(SHOW, ADMIN_ID) == [ADMIN_ID]
+    ctx = await _polled(fresh_store)
+    assert ctx.application.bot.send_message.call_args.kwargs["chat_id"] == ADMIN_ID

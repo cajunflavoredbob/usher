@@ -460,7 +460,8 @@ async def send_follow_pings(app) -> None:
         seerr = app.bot_data.get("seerr")
         for tmdb_id, show in shows.items():
             try:
-                followers = await store.list_followers(tmdb_id)
+                followers = await store.list_followers(
+                    tmdb_id, app.bot_data.get("admin_id"))
                 watch = (await watch_now_button(seerr, "tv", tmdb_id)
                          if followers else None)
             except Exception:
