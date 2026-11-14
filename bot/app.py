@@ -32,7 +32,7 @@ from sabnzbd import SabnzbdClient
 from sonarr import SonarrClient
 from store import TokenCrypto, UserStore
 from webhook import attach_webhook, start_http_server
-from webui import attach_webui
+from webui import attach_webui, set_token_rejected
 from _version import __version__ as USHER_VERSION
 
 from bot.autofix_poll import poll_pending_autofixes
@@ -871,19 +871,35 @@ def _encryption_key_path(data_dir: Path) -> Path:
 
 async def _run_setup_only(settings_store: SettingsStore, session_secret: bytes,
                           data_dir: Path, settings_path: Path, db_path: str,
-                          http_port: int, http_bind: str) -> None:
+                          http_port: int, http_bind: str,
+                          token_rejected: bool = False) -> None:
     """Run a webui-only server until the user completes setup (then exit so the
-    container restarts and main() picks up the configured-mode path)."""
-    logger.warning(
-        "Bot is NOT configured (telegram_bot_token / admin_telegram_id missing). "
-        "Running in SETUP-ONLY mode. Open http://<host>:%d/admin to finish setup.",
-        http_port,
-    )
+    container restarts and main() picks up the configured-mode path). With
+    token_rejected the bot is configured but Telegram refused its token: the
+    panel stays up until the token is changed."""
+    boot_token = settings_store.settings.telegram_bot_token
+    if token_rejected:
+        set_token_rejected(True)
+        logger.error(
+            "Telegram rejected the bot token. The bot is not running; the Admin page "
+            "stays up at http://<host>:%d/admin. Save a new token there to restart.",
+            http_port,
+        )
+    else:
+        logger.warning(
+            "Bot is NOT configured (telegram_bot_token / admin_telegram_id missing). "
+            "Running in SETUP-ONLY mode. Open http://<host>:%d/admin to finish setup.",
+            http_port,
+        )
     web_app = web.Application(client_max_size=ADMIN_UPLOAD_MAX_BYTES)
 
     async def _on_settings_changed() -> None:
         register_log_secret(settings_store.settings.telegram_bot_token)
-        if settings_store.settings.is_bot_configured():
+        if token_rejected:
+            if settings_store.settings.telegram_bot_token != boot_token:
+                logger.info("Bot token changed; exiting in 2s to restart into full mode")
+                schedule_clean_exit(2.0)
+        elif settings_store.settings.is_bot_configured():
             logger.info("Setup complete; exiting in 2s so container restarts into full mode")
             schedule_clean_exit(2.0)
 
@@ -917,8 +933,13 @@ def _run_polling(app: Application) -> None:
         app.run_polling(drop_pending_updates=True)
     except InvalidToken:
         logger.error("Telegram rejected the bot token. Check the token in the Admin "
-                     "page (Settings) and restart.")
-        sys.exit(1)
+                     "page (Settings).")
+        bot_data = app.bot_data
+        asyncio.run(_run_setup_only(
+            bot_data["settings_store"], bot_data["session_secret"], bot_data["data_dir"],
+            bot_data["settings_path"], bot_data["db_path"], bot_data["http_port"], bot_data["http_bind"],
+            token_rejected=True,
+        ))
 
 
 def main() -> None:

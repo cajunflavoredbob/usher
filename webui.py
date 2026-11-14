@@ -627,6 +627,16 @@ def _flash(message: str = "", error: str = "") -> str:
 TAB_KEYS = ("telegram", "seerr", "autofix", "sabnzbd", "webhook", "account")
 
 
+# Set by bot/app.py when Telegram rejected the bot token at startup: the
+# Telegram tab then says so, above the form that fixes it.
+_token_rejected = False
+
+
+def set_token_rejected(value: bool) -> None:
+    global _token_rejected
+    _token_rejected = value
+
+
 def _settings_page(
     s: Settings,
     *,
@@ -674,10 +684,15 @@ def _settings_page(
     fail_chk = " checked" if s.tg_notify_admin_failed else ""
     iss_chk = " checked" if s.tg_notify_issues else ""
     subscriptions_chk = " checked" if s.tg_notify_subscriptions else ""
+    token_rejected_note = (
+        '<div class="error">Telegram rejected the bot token, so the bot is not running. '
+        'Enter a valid token below and Save; Usher then restarts.</div>'
+        if _token_rejected else "")
     telegram_form = f"""
 <form id="telegram-form" method="POST" action="/admin/telegram">
   {csrf}
   <h2>Telegram</h2>
+  {token_rejected_note}
   <div class="note">Changing the bot token or admin ID restarts the container.</div>
   <label>Bot Token <span class="note">from @BotFather</span></label>
   {_secret_field("telegram_bot_token", s.telegram_bot_token, required=True)}
