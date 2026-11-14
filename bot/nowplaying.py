@@ -21,14 +21,13 @@ from http_util import user_friendly_message
 
 from bot.admin_hub import refuse_outside_admin_dm
 from bot.callback_prefixes import ADMIN_STATUS, STOP_ASK, STOP_GO, STOP_MSG
+from bot.playback import DECISIONS
 from bot.shared import edit_or_send, record_btn
 
 logger = logging.getLogger("usher")
 
 DEFAULT_STOP_MESSAGE = "The server admin stopped this stream."
 MAX_SESSIONS = 20
-_DECISIONS = {"direct play": "direct play", "copy": "direct stream",
-              "transcode": "transcode"}
 
 
 def _token(session_id) -> str:
@@ -45,7 +44,7 @@ def _title(s: dict) -> str:
 
 def _decision(s: dict) -> str:
     raw = str(s.get("transcode_decision") or "").strip().lower()
-    return _DECISIONS.get(raw, raw)
+    return DECISIONS.get(raw, raw)
 
 
 def _sessions(activity: dict) -> list[dict]:

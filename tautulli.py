@@ -2,8 +2,8 @@
 
 Every command goes to `/api/v2?apikey=..&cmd=..` and answers the envelope
 `{"response": {"result", "message", "data"}}`. `call` unwraps it and raises
-the project's API errors on an error result, so callers (the later features
-use it for their own commands) only see `data`.
+the project's API errors on an error result, so callers
+(each Tautulli command a feature uses) only see `data`.
 """
 from __future__ import annotations
 

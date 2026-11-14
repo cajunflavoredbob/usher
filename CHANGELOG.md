@@ -57,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix results name the service problem ("Radarr isn't responding") instead of an exception class.
 - The relink button reads "Sign in to Plex again", and Request confirmations promise a DM only when Request updates to requesters are on.
 - The Ask the Admin DM warns that Mark Failed deletes the current file.
+- README and /help now list Now playing, Popular here this week, /mystats, the Reporter's playback details, Ask the Admin, Follows, the Digest, Coming this week, Downloads, Broadcast and access asks. The privacy line names every plex.tv use, and the Docker note says `WEBHOOK_BIND=127.0.0.1` needs host networking or a proxy on the same host.
 - README, Unraid template and `.env.example`: corrected first-run and webhook-secret steps, the full list of Seerr events to enable, and what `USHER_ENCRYPTION_KEY` does. The Unraid template now restarts the container after Usher's own restarts.
 - The release workflow refuses a tag that disagrees with `_version.py`; a manual run builds without publishing.
 

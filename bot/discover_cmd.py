@@ -269,7 +269,7 @@ async def trending_hub(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_trending(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """/trending [movies|tv|upcoming] — defaults to the mixed trending list."""
+    """/trending [movies|tv|upcoming]: defaults to the mixed trending list."""
     if not await _may_browse(ctx, update.effective_user.id):
         await update.effective_message.reply_text(NOT_LINKED_MSG)
         return

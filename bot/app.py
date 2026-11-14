@@ -396,7 +396,10 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             "  /tickets - report a problem or check on your tickets\n"
             "  /help - show this\n\n"
             "(/link, /unlink, /issue, /requests, /trending and /subscriptions "
-            "still work when typed.)",
+            "still work when typed.)\n"
+            "(/mystats shows your watch stats when Tautulli is linked.)\n"
+            "Requests also holds follows and what's coming this week; "
+            "/account holds Notices (daily digest, automatic follows).",
             parse_mode="Markdown",
         )
         return
@@ -421,6 +424,10 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "(/link, /unlink, /issue, /requests, /trending and /subscriptions "
         "still work when typed.)",
         "(/invite, /uninvite and /status still work when typed.)",
+        "(/mystats shows your watch stats when Tautulli is linked.)",
+        "Requests also holds follows and what's coming this week; /account "
+        "holds Notices (daily digest, automatic follows); /admin also holds "
+        "Now playing (via Status), Broadcast and Downloads.",
     ]
     await update.effective_message.reply_text(
         "\n".join(lines), parse_mode="HTML"

@@ -509,12 +509,12 @@ class UserStore:
         "autofix_events": [
             ("season",  "ALTER TABLE autofix_events ADD COLUMN season INTEGER"),
             ("episode", "ALTER TABLE autofix_events ADD COLUMN episode INTEGER"),
-            # Schema 4 (unreleased): what Fix ran ('auto-fix', 'redownload',
+            # Schema 4: what Fix ran ('auto-fix', 'redownload',
             # 'mark failed'; older rows read as auto-fix), how it ended
             # ('pending', 'complete', 'repeat', 'timeout', 'failed'), whether
             # the Reporter got the use back, and the pending fix row it ties
-            # to. A database already stamped 4 by an earlier build gets them
-            # here too, since the reconcile adds any missing column.
+            # to. A database already stamped 4 gets them here too, since the
+            # reconcile adds any missing column.
             ("kind",     "ALTER TABLE autofix_events ADD COLUMN kind TEXT NOT NULL DEFAULT 'auto-fix'"),
             ("outcome",  "ALTER TABLE autofix_events ADD COLUMN outcome TEXT NOT NULL DEFAULT 'pending'"),
             ("refunded", "ALTER TABLE autofix_events ADD COLUMN refunded INTEGER NOT NULL DEFAULT 0"),

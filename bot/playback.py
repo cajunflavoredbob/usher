@@ -20,8 +20,10 @@ logger = logging.getLogger("usher." + __name__)
 # History rows fetched when the match is made here (episodes), newest first.
 _HISTORY_ROWS = 200
 
-_DECISIONS = {"direct play": "Direct play", "copy": "Direct stream",
-              "transcode": "Transcode"}
+# Tautulli's transcode_decision values, as lowercase words. Now playing shows
+# them as they are; the Ticket lines capitalize the first letter.
+DECISIONS = {"direct play": "direct play", "copy": "direct stream",
+             "transcode": "transcode"}
 
 
 def _int(v) -> Optional[int]:
@@ -57,7 +59,7 @@ def _format(row: dict, stream: dict) -> list[str]:
         return v if v not in (None, "") else row.get(key)
 
     decision = str(get("transcode_decision") or "").strip().lower()
-    decision = _DECISIONS.get(decision, decision.capitalize())
+    decision = DECISIONS.get(decision, decision).capitalize()
     parts = []
     player = str(get("player") or "").strip()
     platform = str(get("platform") or "").strip()

@@ -10,7 +10,8 @@ A Telegram bot and web admin panel that sit in front of a Plex server and its [S
 - **Subscriptions**: the bell button on a title's detail card asks to be told when it becomes available. A Subscription is one-shot: the first availability notice uses it up. Availability notices (the Requester's DM and Subscription notices) carry a ▶️ Watch now button that opens the title in Plex once Seerr has its link. `/subscriptions` lists and removes a User's own.
 - **Tickets**: `/tickets` opens the Tickets Hub, with buttons to report a problem and to list open Tickets: a User sees their own, the Admin sees everyone's. A Ticket records the title, an Issue type (Video, Audio, Subtitles or Other) and, for TV, its Scope: one episode or one whole season. Replies post back to Seerr as comments, and Tickets can be closed from Telegram.
 - **Fixes**: the Admin can start a Fix from a Ticket. **Redownload** deletes the file and searches again. **Mark failed** blocklists the current release when one is found, deletes the file, then searches again. Progress shows on a Progress card, and the chat where the Fix was started is told when the new file lands, or when it times out.
-- **Auto-fix**: for Video / Audio / Subtitles Tickets, the Reporter can start a Redownload themselves on one episode or movie, gated by the Admin's allowlist and daily limit (see [Auto-fix details](#auto-fix-details)).
+- **Auto-fix**: for Video / Audio / Subtitles Tickets, the Reporter can start a Redownload themselves on one episode or movie, gated by the Admin's allowlist and daily limit (see [Auto-fix details](#auto-fix-details)). If the replacement is the same release that was removed, the Progress card says so and the day's use is given back to the Reporter, who can tap Ask the Admin to try a different release (one DM to the Admin, once per Ticket). An optional switch makes Usher run Mark failed by itself on a Reporter's repeat. When a Fix already ran on the same title in the last 30 days, the offer warns first.
+- **Tautulli**: with Tautulli linked in the panel, Usher adds Now playing on the Admin's Status (who is watching, with a Stop button per stream, with or without a message to the viewer), the Reporter's playback details on the Admin's Ticket DM and Ticket card (player, platform, direct play or transcode, codecs, date; never shown to the Reporter), Popular here this week in `/trending` (the server's most watched titles over 7 days, titles only), `/mystats` (and a My stats button in the Trending list: your plays and watch time for 7 and 30 days, and your most watched titles), the Inactive Shares list, and Tautulli's recently added list as the source for Follows and the Digest.
 - **Shares**: the Admin can `/invite` someone to the Plex server by email or Plex username, choosing the Libraries to share, and `/uninvite` them. The Admin Hub also has a Share list, where each Share can be viewed and removed. With Tautulli linked, its 💤 Inactive button lists the Shares that haven't watched anything for a set number of days (60 by default, changed in the panel's Tautulli tab) or never, and each opens the usual Share view with Remove. An Invite is a Share the recipient has not accepted yet, and `/uninvite` removes either kind.
 - **Access asks**: when someone's Plex sign-in is rejected by Seerr during Link, the failure message offers 🙋 Ask for access. They see what the Admin will get (Telegram name, Plex username and email) and tap Send. The Admin gets a DM with ✅ Approve and 🚫 Ignore, which also says whether that email already has a Share. Approve opens the Invite flow at the Library picker with the email filled in (cancelling it leaves the ask open); once the Invite is sent, the person gets a message to accept it in Plex and link again. Ignore marks the ask ignored and tells the person nothing. Limits: one open ask per person, no new ask for 7 days after an Ignore, at most 10 open asks, and asks older than 30 days are deleted.
 - **Broadcast**: the Admin Hub's 📣 Broadcast asks for a message, shows a preview with Send and Cancel, then sends it as plain text (so `*` or `<` arrive as typed) under a "📣 From the Admin" header to every Linked user except the Admin, at about 25 messages a second. The preview becomes a report of how many got it and how many couldn't be reached (a user who blocked the bot counts as not reached). Each recipient is recorded as it is sent, so a restart carries on without repeats. The message is limited to 3500 characters.
@@ -32,13 +33,13 @@ The bot's command menu lists the Hubs plus `/help`. A Hub is a command that open
 |---|---|---|
 | `/request` | everyone | **Requests Hub**: New request, My requests, Trending, Subscriptions, Follows, Coming this week. `/request <title>` skips the Hub and starts a Request for that title. |
 | `/tickets` | everyone | **Tickets Hub**: Report a problem, and My tickets (Open tickets for the Admin). |
-| `/account` | everyone | **Account Hub**: Link, or Unlink once linked. |
+| `/account` | everyone | **Account Hub**: Link, or Unlink once linked, and 🔔 Notices (daily digest, automatic follows). |
 | `/help` | everyone | The command list. For the Admin it also shows connection status. |
 | `/admin` | the Admin only (extra menu entry in the Admin's chat) | **Admin Hub**: Invite, Shares (the Share list), Status, Broadcast, and Downloads when SABnzbd is connected. DM only. |
 
 Every command that is not in the menu still works when typed, including the ones that take an argument:
 
-- Everyone: `/link`, `/unlink`, `/issue` (report a problem), `/requests`, `/trending [movies|tv|upcoming]`, `/subscriptions`.
+- Everyone: `/link`, `/unlink`, `/issue` (report a problem), `/requests`, `/trending [movies|tv|upcoming]`, `/subscriptions`, `/mystats` (with Tautulli linked).
 - Admin only, and only in a DM with the bot: `/invite [email or Plex username]`, `/uninvite <email or username>`, `/status` (connection status). Anyone else gets "Admin only."
 
 ## How it works
@@ -221,7 +222,7 @@ Because users sign in with Plex, Usher authenticates to Seerr **as the user** (v
 - The Telegram side uses long-polling, so no public URL is required.
 - Seerr reaches Usher over your LAN for webhooks; nothing needs to be exposed publicly.
 - Plex tokens are encrypted at rest (Fernet) in the local SQLite DB.
-- Usher talks only to the Telegram API, your Seerr, your *arr stack, SABnzbd and Tautulli if you connect them, and Plex's auth API. Nothing else.
+- Usher talks only to the Telegram API, your Seerr, your *arr stack, SABnzbd and Tautulli if you connect them, and plex.tv (Plex sign-in, the Plex server's Shares, invites and online status). Nothing else.
 
 ## Securing the admin UI
 
@@ -237,7 +238,10 @@ segment, and Usher logs a startup warning saying so. Recommended setups:
   client-forgeable) and every request behind the proxy shares one throttle
   bucket: fail-safe, but set the variable for correct behavior.
 - **Loopback-only**: set `WEBHOOK_BIND=127.0.0.1` and reach the admin UI via
-  an SSH tunnel; point Seerr's webhook at the same loopback address.
+  an SSH tunnel; point Seerr's webhook at the same loopback address. In Docker
+  with published ports this makes the port unreachable, so use it only with
+  host networking (`--network host`) or with a reverse proxy running on the
+  same host as the container.
 
 ## Troubleshooting
 
