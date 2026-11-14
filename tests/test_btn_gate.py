@@ -162,6 +162,49 @@ async def test_gate_blocks_expired_latest():
     assert "expired" in upd.callback_query.answers[0].lower()
 
 
+def _prune_after_expiry(app):
+    """Backdate every entry past the TTL, then run the hourly sweep (by
+    recording a button for an unrelated user once the sweep is due)."""
+    old = (datetime.now(timezone.utc) - timedelta(seconds=BTN_TTL_SECONDS + 60)).isoformat()
+    for entries in app.bot_data["btn_msgs"].values():
+        for e in entries:
+            e["sent_at"] = old
+    app.bot_data["_btn_msgs_pruned_at"] = datetime.now(timezone.utc) - timedelta(hours=2)
+    record_btn(app, 7, _make_message(9))
+
+
+@pytest.mark.parametrize("prefix", ["tkfm", "uninv"])
+async def test_stale_menu_stays_refused_after_the_hourly_prune(prefix):
+    """The prune must not empty a user's history: an empty one means 'no
+    record yet' and the gate allows it, reviving an expired menu."""
+    app = _make_app()
+    record_btn(app, 42, _make_message(1001))
+    record_btn(app, 42, _make_message(1002))
+    _prune_after_expiry(app)
+    assert [e["message_id"] for e in app.bot_data["btn_msgs"][42]] == [1002]
+    upd = _make_update(42, 1002, data=f"{prefix}:9")
+    with pytest.raises(ApplicationHandlerStop):
+        await global_btn_gate(upd, _Ctx(app))
+    assert "expired" in upd.callback_query.answers[0].lower()
+
+
+async def test_prune_still_drops_unparseable_only_history():
+    app = _make_app()
+    record_btn(app, 42, _make_message(1001))
+    app.bot_data["_btn_msgs_pruned_at"] = datetime.now(timezone.utc) - timedelta(hours=2)
+    app.bot_data["btn_msgs"][42][0]["sent_at"] = "not a date"
+    record_btn(app, 7, _make_message(9))
+    assert 42 not in app.bot_data["btn_msgs"]
+
+
+async def test_new_user_without_history_is_still_allowed_after_a_prune():
+    app = _make_app()
+    record_btn(app, 42, _make_message(1001))
+    _prune_after_expiry(app)
+    upd = _make_update(user_id=55, message_id=1, data="tkfm:9")
+    await global_btn_gate(upd, _Ctx(app))  # no raise
+
+
 async def test_gate_ignores_other_users():
     app = _make_app()
     record_btn(app, 42, _make_message(1001))

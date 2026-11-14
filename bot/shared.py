@@ -494,15 +494,22 @@ def _prune_btn_history(app, history: dict) -> None:
     app.bot_data["_btn_msgs_pruned_at"] = now
     for uid in list(history):
         fresh = []
+        newest = None
         for e in history[uid]:
             try:
                 sent = datetime.fromisoformat(e["sent_at"])
             except (KeyError, TypeError, ValueError):
                 continue  # unparseable entry: drop it
+            newest = e
             if (now - sent).total_seconds() <= BTN_TTL_SECONDS:
                 fresh.append(e)
         if fresh:
             history[uid] = fresh
+        elif newest is not None:
+            # Keep the newest stale entry: an empty history means "no record
+            # yet" and the gate allows it, which would turn an expired menu
+            # back into a live one. With it kept the gate answers "expired".
+            history[uid] = [newest]
         else:
             history.pop(uid, None)
 
