@@ -946,7 +946,7 @@ _CONVERSATION_USER_DATA_KEYS = (
     "link_active_loop", "link_retry_ok", "hub_origin",
     "media", "search_results", "seasons", "season",
     "episode", "issue_type", "description",
-    "search_version", "submitting_ticket",
+    "submitting_ticket",
     "research_parent", "_pending_autofix_id",
     "awaiting_comment_for",
 ) + _RQ_KEYS + (

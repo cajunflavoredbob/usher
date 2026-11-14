@@ -101,11 +101,50 @@ def _tickets_origin(ctx) -> Optional[str]:
 
 # Keys the /issue flow owns. Never clear() user_data: the request, invite and
 # discover version counters and relink_resume must survive, or a restarted
-# counter lets an older confirm card pass the version check.
+# counter lets an older confirm card pass the version check. The same goes
+# for this flow's own search_version: it is deliberately not listed here, so
+# every button of an ended flow stays stale for the next one.
 _ISSUE_KEYS = ("media", "search_results", "seasons", "season", "episode",
                "issue_type", "description", "research_parent",
-               "search_version", "submitting_ticket", "rq_jump_media",
+               "submitting_ticket", "rq_jump_media",
                "_pending_autofix_id", "hub_origin")
+
+
+def _current_version(ctx) -> int:
+    return ctx.user_data.get("search_version") or 0
+
+
+def _bump_version(ctx) -> int:
+    version = _current_version(ctx) + 1
+    ctx.user_data["search_version"] = version
+    return version
+
+
+def _split_cb(data: str) -> tuple[Optional[int], list[str]]:
+    """Split "prefix:version[:arg...]" into (version, args). The version is
+    None when the callback has none or it is not a number."""
+    parts = (data or "").split(":")
+    try:
+        return int(parts[1]), parts[2:]
+    except (ValueError, IndexError):
+        return None, parts[2:]
+
+
+async def _refuse_stale(update, ctx) -> None:
+    """End message for a tap on a menu from an older report. The newer
+    report's own state is left alone (the caller returns None)."""
+    await end_flow(
+        update, ctx, "Search context changed since this keyboard appeared.",
+        _tickets_origin(ctx), TICKETS_REPORT,
+        typed_text=("Search context changed (you started a new /issue search "
+                    "since this keyboard appeared). /issue to pick again."))
+
+
+async def _is_stale(update, ctx, version: Optional[int]) -> bool:
+    if version is not None and version == _current_version(ctx):
+        return False
+    await _refuse_stale(update, ctx)
+    return True
 
 
 def _clear_issue_state(ctx) -> None:
@@ -125,8 +164,7 @@ async def _ticket_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     as a wrong search suggestion in the next /issue)."""
     hub = _tickets_origin(ctx)
     for key in ("media", "search_results", "seasons", "season", "episode",
-                "issue_type", "description", "research_parent",
-                "search_version"):
+                "issue_type", "description", "research_parent"):
         ctx.user_data.pop(key, None)
     # Without a notice, text typed after the timeout hits a bot that forgot
     # the conversation and answers nothing at all.
@@ -179,7 +217,7 @@ def _new_ticket_conversation() -> ConversationHandler:
             ],
             PICK_MEDIA: [
                 CallbackQueryHandler(ticket_pick_media, pattern=fr"^{TICKET_MEDIA}:"),
-                CallbackQueryHandler(ticket_research_parent, pattern=fr"^{TICKET_RESEARCH_PARENT}$"),
+                CallbackQueryHandler(ticket_research_parent, pattern=fr"^{TICKET_RESEARCH_PARENT}:"),
             ],
             PICK_SEASON: [CallbackQueryHandler(ticket_pick_season, pattern=fr"^{TICKET_SEASON}:")],
             PICK_EPISODE: [
@@ -200,7 +238,7 @@ def _new_ticket_conversation() -> ConversationHandler:
         },
         fallbacks=[
             CommandHandler("cancel", ticket_cancel),
-            CallbackQueryHandler(ticket_cancel, pattern=fr"^{TICKET_CANCEL}$"),
+            CallbackQueryHandler(ticket_cancel, pattern=fr"^{TICKET_CANCEL}:"),
         ],
         per_user=True,
         per_chat=True,
@@ -214,6 +252,9 @@ def _new_ticket_conversation() -> ConversationHandler:
 async def ticket_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     # A typed /issue is never a Hub flow, even if a Hub left its mark behind.
     set_hub_origin(ctx, None)
+    # A restart makes every button of the earlier report stale, even before
+    # this one runs a search.
+    _bump_version(ctx)
     if await require_seerr(update, ctx) is None:
         return ConversationHandler.END
     # Full link gate at flow ENTRY: the old check only tested
@@ -248,6 +289,7 @@ async def ticket_hub_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     await q.answer()
     force_end_flow_conversations(ctx, update)
     set_hub_origin(ctx, TICKETS_HUB)
+    _bump_version(ctx)
     if await require_seerr(update, ctx,
                            reply_markup=end_markup(TICKETS_HUB)) is None:
         return ConversationHandler.END
@@ -322,8 +364,7 @@ async def _show_search_results(
     # Bump the search-results version. callback_data carries it so a rapid
     # /issue reentry that overwrites search_results doesn't make the
     # in-flight pick pull the wrong tmdb_id from the new dict.
-    version = (ctx.user_data.get("search_version") or 0) + 1
-    ctx.user_data["search_version"] = version
+    version = _bump_version(ctx)
 
     # Build the keyboard: keycap-emoji buttons (1️⃣ 2️⃣ …), 3 per row max.
     # Three per row keeps each button wide enough to tap comfortably while
@@ -349,14 +390,15 @@ async def _show_search_results(
         if parent:
             ctx.user_data["research_parent"] = parent
 
-    cancel_btn = InlineKeyboardButton("🛑 Cancel", callback_data=TICKET_CANCEL)
+    cancel_btn = InlineKeyboardButton(
+        "🛑 Cancel", callback_data=f"{TICKET_CANCEL}:{version}")
     if parent:
         # Flush the last partial row, then parent on its own row, then Cancel.
         if last_partial_row:
             rows.append(last_partial_row)
         rows.append([InlineKeyboardButton(
             f'🔍 Search "{parent}" instead',
-            callback_data=TICKET_RESEARCH_PARENT,
+            callback_data=f"{TICKET_RESEARCH_PARENT}:{version}",
         )])
         rows.append([cancel_btn])
     else:
@@ -394,6 +436,9 @@ async def ticket_research_parent(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
     """Re-run the search with the parent show name derived from the prior query."""
     q = update.callback_query
     await q.answer()
+    version, _ = _split_cb(q.data)
+    if await _is_stale(update, ctx, version):
+        return None
     parent = ctx.user_data.get("research_parent")
     if not parent:
         await end_flow(update, ctx, "Lost search context.", _tickets_origin(ctx), TICKETS_REPORT,
@@ -440,7 +485,7 @@ async def ticket_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
             )
             rows.append([InlineKeyboardButton(
                 f'🔍 Search "{parent}" instead',
-                callback_data=TICKET_RESEARCH_PARENT,
+                callback_data=f"{TICKET_RESEARCH_PARENT}:{version}",
             )])
         # Not in the library is exactly what /request exists for: offer the
         # jump. The tap enters the request conversation (its entry point
@@ -507,13 +552,14 @@ async def _show_season_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     for s in seasons:
         # Season 0 is the Specials bucket; "S0" reads like a glitch.
         btn_label = "Specials" if s.season_number == 0 else f"S{s.season_number}"
-        row.append(InlineKeyboardButton(btn_label, callback_data=f"{TICKET_SEASON}:{s.season_number}"))
+        row.append(InlineKeyboardButton(btn_label, callback_data=f"{TICKET_SEASON}:{_current_version(ctx)}:{s.season_number}"))
         if len(row) == SEASON_BUTTONS_PER_ROW:
             rows.append(row)
             row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton("🛑 Cancel", callback_data=TICKET_CANCEL)])
+    rows.append([InlineKeyboardButton(
+        "🛑 Cancel", callback_data=f"{TICKET_CANCEL}:{_current_version(ctx)}")])
     label = ctx.user_data["media"]["title"]
     if ctx.user_data["media"]["year"]:
         label += f" ({ctx.user_data['media']['year']})"
@@ -533,8 +579,11 @@ async def _show_season_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
 async def ticket_pick_season(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
+    version, args = _split_cb(q.data)
+    if await _is_stale(update, ctx, version):
+        return None
     try:
-        season = int(q.data.split(":")[1])
+        season = int(args[0])
     except (ValueError, IndexError):
         await end_flow(update, ctx, "Couldn't parse season.", _tickets_origin(ctx), TICKETS_REPORT,
                        typed_text="Couldn't parse season. /issue to start over.")
@@ -551,7 +600,8 @@ async def ticket_pick_season(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     return await _show_episode_page(update, ctx, season, ep_count, page=0)
 
 
-def _episode_page_keyboard(season: int, ep_count: int, page: int) -> InlineKeyboardMarkup:
+def _episode_page_keyboard(season: int, ep_count: int, page: int,
+                           version: int) -> InlineKeyboardMarkup:
     """One page of episode buttons. Paginated: Telegram rejects reply markup
     past 100 buttons, and long-running seasons (anime, soaps) can top that,
     which used to kill the flow and strand a dead season keyboard."""
@@ -562,7 +612,7 @@ def _episode_page_keyboard(season: int, ep_count: int, page: int) -> InlineKeybo
     rows: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
     for ep in range(start, end + 1):
-        row.append(InlineKeyboardButton(f"E{ep}", callback_data=f"{TICKET_EPISODE}:{ep}"))
+        row.append(InlineKeyboardButton(f"E{ep}", callback_data=f"{TICKET_EPISODE}:{version}:{ep}"))
         if len(row) == EPISODE_BUTTONS_PER_ROW:
             rows.append(row)
             row = []
@@ -572,13 +622,16 @@ def _episode_page_keyboard(season: int, ep_count: int, page: int) -> InlineKeybo
         nav: list[InlineKeyboardButton] = []
         if page > 0:
             nav.append(InlineKeyboardButton(
-                "⬅️ Earlier", callback_data=f"{TICKET_EPISODE_PAGE}:{page - 1}"))
+                "⬅️ Earlier",
+                callback_data=f"{TICKET_EPISODE_PAGE}:{version}:{page - 1}"))
         if page < last_page:
             nav.append(InlineKeyboardButton(
-                "➡️ Later", callback_data=f"{TICKET_EPISODE_PAGE}:{page + 1}"))
+                "➡️ Later",
+                callback_data=f"{TICKET_EPISODE_PAGE}:{version}:{page + 1}"))
         rows.append(nav)
-    rows.append([InlineKeyboardButton("📦 Whole season", callback_data=f"{TICKET_EPISODE}:0")])
-    rows.append([InlineKeyboardButton("🛑 Cancel", callback_data=TICKET_CANCEL)])
+    rows.append([InlineKeyboardButton("📦 Whole season", callback_data=f"{TICKET_EPISODE}:{version}:0")])
+    rows.append([InlineKeyboardButton(
+        "🛑 Cancel", callback_data=f"{TICKET_CANCEL}:{version}")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -588,7 +641,8 @@ async def _show_episode_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     season_label = "Specials" if season == 0 else f"Season {season}"
     sent = await q.edit_message_text(
         f"{season_label} - which episode?",
-        reply_markup=_episode_page_keyboard(season, ep_count, page),
+        reply_markup=_episode_page_keyboard(
+            season, ep_count, page, _current_version(ctx)),
     )
     record_btn(ctx.application, update.effective_user.id, sent)
     return PICK_EPISODE
@@ -597,8 +651,11 @@ async def _show_episode_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
 async def ticket_episode_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
+    version, args = _split_cb(q.data)
+    if await _is_stale(update, ctx, version):
+        return None
     try:
-        page = int(q.data.split(":")[1])
+        page = int(args[0])
     except (ValueError, IndexError):
         await end_flow(update, ctx, "Couldn't parse selection.", _tickets_origin(ctx), TICKETS_REPORT,
                        typed_text="Couldn't parse selection. /issue to start over.")
@@ -617,8 +674,11 @@ async def ticket_episode_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
 async def ticket_pick_episode(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
+    version, args = _split_cb(q.data)
+    if await _is_stale(update, ctx, version):
+        return None
     try:
-        ep = int(q.data.split(":")[1])
+        ep = int(args[0])
     except (ValueError, IndexError):
         await end_flow(update, ctx, "Couldn't parse episode.", _tickets_origin(ctx), TICKETS_REPORT,
                        typed_text="Couldn't parse episode. /issue to start over.")
@@ -631,12 +691,13 @@ async def ticket_pick_episode(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
 async def _show_type_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     type_buttons = [
-        InlineKeyboardButton(f"{e} {n}", callback_data=f"{ISSUE_TYPE}:{i}")
+        InlineKeyboardButton(f"{e} {n}", callback_data=f"{ISSUE_TYPE}:{_current_version(ctx)}:{i}")
         for i, (e, n) in ISSUE_TYPES.items()
     ]
     rows = [type_buttons[i:i + TYPE_BUTTONS_PER_ROW]
             for i in range(0, len(type_buttons), TYPE_BUTTONS_PER_ROW)]
-    rows.append([InlineKeyboardButton("🛑 Cancel", callback_data=TICKET_CANCEL)])
+    rows.append([InlineKeyboardButton(
+        "🛑 Cancel", callback_data=f"{TICKET_CANCEL}:{_current_version(ctx)}")])
     media = ctx.user_data["media"]
     label = media["title"]
     if media.get("year"):
@@ -665,8 +726,11 @@ async def _show_type_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
 async def ticket_pick_type(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
+    version, args = _split_cb(q.data)
+    if await _is_stale(update, ctx, version):
+        return None
     try:
-        issue_type = int(q.data.split(":")[1])
+        issue_type = int(args[0])
     except (ValueError, IndexError):
         await end_flow(update, ctx, "Couldn't parse selection.", _tickets_origin(ctx), TICKETS_REPORT,
                        typed_text="Couldn't parse selection. /issue to start over.")
@@ -742,13 +806,16 @@ async def ticket_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
             ctx.user_data.get("season") if is_tv else None,
             episode if is_tv else None,
         )
+    version = _current_version(ctx)
     report_btn = InlineKeyboardButton(
-        "📨 Report to Admin", callback_data=f"{TICKET_AUTOFIX_OFFER}:no")
+        "📨 Report to Admin",
+        callback_data=f"{TICKET_AUTOFIX_OFFER}:{version}:no")
     if recent:
         rows = [[
             report_btn,
             InlineKeyboardButton(
-                "Try auto-fix anyway", callback_data=f"{TICKET_AUTOFIX_OFFER}:yes"),
+                "Try auto-fix anyway",
+                callback_data=f"{TICKET_AUTOFIX_OFFER}:{version}:yes"),
         ]]
         question = (
             f"{_retry_warning(recent)}\n\n"
@@ -757,7 +824,8 @@ async def ticket_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     else:
         rows = [[
             InlineKeyboardButton(
-                "✅ Try auto-fix", callback_data=f"{TICKET_AUTOFIX_OFFER}:yes"),
+                "✅ Try auto-fix",
+                callback_data=f"{TICKET_AUTOFIX_OFFER}:{version}:yes"),
             report_btn,
         ]]
         question = "Try to auto-fix? This will delete the file and trigger a new search."
@@ -805,13 +873,16 @@ def _has_arr_for_media(ctx: ContextTypes.DEFAULT_TYPE) -> bool:
 async def ticket_offer_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
-    choice = q.data.split(":")[1]
+    version, args = _split_cb(q.data)
+    if await _is_stale(update, ctx, version):
+        return None
+    choice = args[0] if args else ""
     if choice == "no":
         await q.edit_message_text("Got it. Submitting your report without auto-fix.")
         return await _submit_ticket(update, ctx, autofix=False)
     rows = [[
-        InlineKeyboardButton("⚠️ Yes, delete & re-search", callback_data=f"{TICKET_AUTOFIX_CONFIRM}:yes"),
-        InlineKeyboardButton("No, report to Admin", callback_data=f"{TICKET_AUTOFIX_CONFIRM}:no"),
+        InlineKeyboardButton("⚠️ Yes, delete & re-search", callback_data=f"{TICKET_AUTOFIX_CONFIRM}:{version}:yes"),
+        InlineKeyboardButton("No, report to Admin", callback_data=f"{TICKET_AUTOFIX_CONFIRM}:{version}:no"),
     ]]
     sent = await q.edit_message_text(
         "⚠️ This will *delete the current file* from disk and trigger a new download. Confirm?",
@@ -825,7 +896,10 @@ async def ticket_offer_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
 async def ticket_confirm_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
-    choice = q.data.split(":")[1]
+    version, args = _split_cb(q.data)
+    if await _is_stale(update, ctx, version):
+        return None
+    choice = args[0] if args else ""
     if choice == "no":
         await q.edit_message_text("Skipping auto-fix. Submitting your report.")
         return await _submit_ticket(update, ctx, autofix=False)
@@ -1071,9 +1145,17 @@ async def _resume_submit_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
 RELINK_RESUME_EXECUTORS["submit_ticket"] = _resume_submit_ticket
 
 
-async def ticket_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    if update.callback_query:
-        await update.callback_query.answer("Cancelled")
+async def ticket_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Optional[int]:
+    q = update.callback_query
+    if q:
+        # A Cancel on a superseded message must not end the newer report. A
+        # bare /cancel (no button) carries no version and always cancels.
+        version, _ = _split_cb(q.data)
+        if version is not None and version != _current_version(ctx):
+            await q.answer()
+            await _refuse_stale(update, ctx)
+            return None
+        await q.answer("Cancelled")
     await end_flow(update, ctx, "Cancelled.", _tickets_origin(ctx),
                    typed_text="Cancelled. /issue to start over.")
     _clear_issue_state(ctx)
