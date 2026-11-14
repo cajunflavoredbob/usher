@@ -193,9 +193,9 @@ def test_request_is_secure_xfp_ignored_from_untrusted_peer():
 
 
 def test_request_is_secure_xfp_honored_from_trusted_proxy():
-    req = _fake_request(cookies={}, scheme="http", remote="10.0.0.2",
+    req = _fake_request(cookies={}, scheme="http", remote="198.51.100.2",
                         headers={"X-Forwarded-Proto": "https"},
-                        trusted_proxies="10.0.0.2/32")
+                        trusted_proxies="198.51.100.2/32")
     assert request_is_secure(req) is True
 
 
@@ -205,40 +205,40 @@ def test_request_is_not_secure_default():
 
 
 def test_client_ip_uses_remote_when_no_xff():
-    req = _fake_request(cookies={}, remote="10.0.0.5")
-    assert client_ip(req) == "10.0.0.5"
+    req = _fake_request(cookies={}, remote="198.51.100.5")
+    assert client_ip(req) == "198.51.100.5"
 
 
 def test_client_ip_ignores_xff_without_trusted_proxy():
     """Throttle-bypass guard: rotating XFF must not change the key."""
-    req = _fake_request(cookies={}, remote="10.0.0.5",
-                        headers={"X-Forwarded-For": "203.0.113.7, 10.0.0.5"})
-    assert client_ip(req) == "10.0.0.5"
+    req = _fake_request(cookies={}, remote="198.51.100.5",
+                        headers={"X-Forwarded-For": "203.0.113.7, 198.51.100.5"})
+    assert client_ip(req) == "198.51.100.5"
 
 
 def test_client_ip_from_trusted_proxy_takes_rightmost_untrusted():
     """A client-prepended spoof stays left of the hop the proxy appended;
     walking right-to-left past trusted hops must land on the real client."""
-    req = _fake_request(cookies={}, remote="10.0.0.2",
-                        headers={"X-Forwarded-For": "1.1.1.1, 203.0.113.7, 10.0.0.2"},
-                        trusted_proxies="10.0.0.0/24")
+    req = _fake_request(cookies={}, remote="198.51.100.2",
+                        headers={"X-Forwarded-For": "1.1.1.1, 203.0.113.7, 198.51.100.2"},
+                        trusted_proxies="198.51.100.0/24")
     assert client_ip(req) == "203.0.113.7"
 
 
 def test_client_ip_all_trusted_hops_falls_back_to_peer():
-    req = _fake_request(cookies={}, remote="10.0.0.2",
-                        headers={"X-Forwarded-For": "10.0.0.9"},
-                        trusted_proxies="10.0.0.0/24")
-    assert client_ip(req) == "10.0.0.2"
+    req = _fake_request(cookies={}, remote="198.51.100.2",
+                        headers={"X-Forwarded-For": "198.51.100.9"},
+                        trusted_proxies="198.51.100.0/24")
+    assert client_ip(req) == "198.51.100.2"
 
 
 def test_client_ip_garbage_xff_hop_falls_back_to_peer():
     """A non-IP hop from a trusted proxy must not leak into throttle keys or
     audit lines; the socket peer is returned instead."""
-    req = _fake_request(cookies={}, remote="10.0.0.2",
+    req = _fake_request(cookies={}, remote="198.51.100.2",
                         headers={"X-Forwarded-For": "not-an-ip"},
-                        trusted_proxies="10.0.0.0/24")
-    assert client_ip(req) == "10.0.0.2"
+                        trusted_proxies="198.51.100.0/24")
+    assert client_ip(req) == "198.51.100.2"
 
 
 def test_client_ip_tolerates_request_without_app():
@@ -247,5 +247,5 @@ def test_client_ip_tolerates_request_without_app():
 
 
 def test_parse_trusted_proxies_skips_invalid_entries():
-    nets = parse_trusted_proxies("10.0.0.0/24, bogus, 192.168.1.5")
+    nets = parse_trusted_proxies("198.51.100.0/24, bogus, 192.0.2.5")
     assert len(nets) == 2  # bare IP becomes a /32; bogus dropped

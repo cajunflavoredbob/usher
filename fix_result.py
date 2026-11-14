@@ -1,11 +1,11 @@
 """Result of a multi-step auto-fix / mark-failed orchestration.
 
 Status:
-  ok      — all steps succeeded
-  partial — some work happened (e.g. blocklist + delete) but search failed,
+  ok      : all steps succeeded
+  partial : some work happened (e.g. blocklist + delete) but search failed,
             or vice versa. Caller should still surface what worked and
             enqueue the autofix poller if `should_poll` is True.
-  failed  — first step failed; nothing happened that the user needs to know
+  failed  : first step failed; nothing happened that the user needs to know
             about beyond the message.
 """
 from __future__ import annotations

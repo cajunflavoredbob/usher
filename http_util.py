@@ -1,8 +1,8 @@
 """Shared HTTP utilities: structured API exceptions, retry-on-transient,
 and a user-friendly message helper for surfacing API errors to humans.
 
-Single exception hierarchy across all four API clients so bot.py can handle
-them uniformly. Retry policy is idempotency-aware: idempotent requests
+Single exception hierarchy across all the API clients so the bot can
+handle them uniformly. Retry policy is idempotency-aware: idempotent requests
 (GET/HEAD/PUT/DELETE) retry on any transient failure (429/5xx + connection/
 timeout); non-idempotent requests (POST/PATCH) retry ONLY when the request
 provably never reached the server (pre-send connect errors) or was rejected

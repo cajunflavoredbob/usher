@@ -1,4 +1,4 @@
-"""Release fingerprint (#45): the pure comparison, the arr clients reading a
+"""Release fingerprint: the pure comparison, the arr clients reading a
 before-fingerprint around a Fix, the schema 4 migration, and the poller's
 repeat wording."""
 from __future__ import annotations

@@ -232,8 +232,9 @@ class SettingsStore:
         if not s.webhook_secret:
             s.webhook_secret = secrets.token_urlsafe(32)
             logger.warning(
-                "Auto-generated webhook_secret. Copy it from /admin (Webhook tab) "
-                "into your Seerr webhook 'Authorization' header before Seerr can deliver events."
+                "Auto-generated webhook_secret. Before Seerr can deliver events, "
+                "generate a new one in /admin (Webhook tab), copy it, Save, and "
+                "paste it into your Seerr webhook 'Authorization' header."
             )
             self._write(s)
 

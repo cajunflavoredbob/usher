@@ -149,8 +149,8 @@ def format_media_label(
     Examples:
       Inception                            -> "Inception"
       Inception (2010)                     -> "Inception (2010)"
-      Mating Season (2026) - S01           -> "Mating Season (2026) - S01"
-      Mating Season (2026) - S01E08        -> "Mating Season (2026) - S01E08"
+      Example Show (2026) - S01           -> "Example Show (2026) - S01"
+      Example Show (2026) - S01E08        -> "Example Show (2026) - S01E08"
 
     Used by /tickets list, ticket-detail header, /issue summary, and the
     auto-fix completion / abandoned DMs so the format never drifts.
@@ -670,7 +670,7 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     # the iterable we're inspecting.
     entries = list(ctx.application.bot_data.get("btn_msgs", {}).get(user_id, []))
     if not entries:
-        return  # no record yet -- allow (gradual rollout)
+        return  # no record yet (new user, or since a restart) -- allow
 
     msg_id = q.message.message_id
     chat_id = getattr(q.message, "chat_id", None)
@@ -998,4 +998,4 @@ def new_ticket_dm_kb(ticket_id: int, resolved: bool = False) -> InlineKeyboardMa
 
 
 # The underscore-prefix alias block (`_foo = foo`) was removed in 0.12.0
-#: one naming convention, the unprefixed public names.
+# in favor of one naming convention: the unprefixed public names.

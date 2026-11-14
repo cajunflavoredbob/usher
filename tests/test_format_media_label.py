@@ -15,12 +15,12 @@ def test_title_and_year():
 
 
 def test_title_year_season():
-    assert format_media_label("Mating Season", "2026", season=1) == "Mating Season (2026) - S01"
+    assert format_media_label("Example Show", "2026", season=1) == "Example Show (2026) - S01"
 
 
 def test_title_year_season_episode():
-    assert format_media_label("Mating Season", "2026", season=1, episode=8) == \
-        "Mating Season (2026) - S01E08"
+    assert format_media_label("Example Show", "2026", season=1, episode=8) == \
+        "Example Show (2026) - S01E08"
 
 
 def test_title_only_season_no_year():

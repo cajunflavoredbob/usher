@@ -274,7 +274,7 @@ class SeerrClient:
         public_url: Optional[str] = None,
     ):
         self.base_url = base_url.rstrip("/")
-        # public_url is used only for user-facing links (e.g. the "View:" URL
+        # public_url is used only for user-facing links (e.g. a Ticket link
         # sent in Telegram). API calls always use base_url. Falls back to
         # base_url when not set so existing setups keep working.
         self.public_url = (public_url.rstrip("/") if public_url else self.base_url)

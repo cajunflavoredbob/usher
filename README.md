@@ -80,17 +80,17 @@ docker compose up -d
 
 ## First-run setup
 
-1. Grab the first-run setup token from the logs:
+1. Open `http://<your-server>:8765/admin`. The first visit creates a one-time setup token and writes it to the logs (and to `/data/setup_token`):
    ```sh
    docker logs usher | grep "setup token"
    ```
-2. Open `http://<your-server>:8765/admin`, enter the setup token, and complete the wizard:
+2. Enter the setup token and complete the wizard:
+   - **Panel account**: the username and password you will sign in to `/admin` with
    - **Telegram bot token** (from `@BotFather`)
    - **Admin Telegram user ID** (DM `@userinfobot`)
    - **Seerr URL** + **API key** (Seerr → Settings → General)
-   - Optionally Radarr/Sonarr URLs + API keys for auto-fix
 
-   The container restarts into full mode when setup finishes.
+   The container restarts into full mode when setup finishes. Radarr, Sonarr and the other services are set up afterwards on their tabs in `/admin`.
 3. In `@BotFather` → `/setprivacy` → select your bot → **Disable** (lets the bot see `/issue` in group chats).
 4. Configure the Seerr webhook (see [Webhook setup](#webhook-setup)).
 
@@ -151,9 +151,9 @@ If a Fix (Auto-fix, Redownload or Mark Failed, from anyone) already ran on the s
 
 Usher receives events from Seerr so Ticket comments and resolutions, and Request updates, reach the user in Telegram.
 
-1. In `/admin` → **Webhook** tab, copy the webhook URL and the secret (use **Show**/**Copy**; **Generate** rolls a new one). A secret is mandatory and auto-generated on first run, and Usher rejects unauthenticated webhook POSTs.
+1. In `/admin` → **Webhook** tab, copy the webhook URL. A secret is mandatory and Usher rejects unauthenticated webhook POSTs. The panel never shows a saved secret again, so click **Generate**, **Copy** the new secret, then **Save**.
 2. In Seerr → Settings → Notifications → **Webhook**: set the URL, paste the secret into the **Authorization Header** field, and enable the **Issue Reported**, **Issue Comment**, and **Issue Resolved** events, plus the Request events: Request Pending Approval, Request Approved, Request Automatically Approved, Request Available, Request Declined and Request Processing Failed (Usher handles all of them; leaving one off drops that notification type, and /status lists the missing ones).
-3. Use the Webhook tab's **Test** button to confirm the round-trip.
+3. Use the Webhook tab's **Test** button to confirm Usher's receiver accepts the saved secret, then use Seerr's own **Test** button on its webhook page to confirm Seerr can reach Usher with it.
 
 Seerr reaches Usher on its LAN address and port. No public URL is required, but Seerr must be able to reach the Usher port.
 
@@ -174,8 +174,8 @@ Configuration is managed in the `/admin` web admin panel and persisted to `/data
 | `RADARR_URL` / `RADARR_API_KEY` | no | Enables movie auto-fix when both set |
 | `SONARR_URL` / `SONARR_API_KEY` | no | Enables TV auto-fix when both set |
 | `ALLOWED_AUTOFIX_TELEGRAM_IDS` | no | Comma-separated Telegram IDs allowed to auto-fix. Defaults to admin only. |
-| `USHER_WEBHOOK_SECRET` | no | Auto-generated on first run if unset; copy it into Seerr's webhook Authorization header |
-| `USHER_ENCRYPTION_KEY` | no | Fernet key for encrypting stored Plex tokens. Auto-generated to `/data/encryption.key` if unset |
+| `USHER_WEBHOOK_SECRET` | no | Auto-generated on first run if unset. To put a known value in Seerr, set it here, or generate one on the panel's Webhook tab |
+| `USHER_ENCRYPTION_KEY` | no | Fernet key for encrypting stored Plex tokens. Unlike the settings above, it is read at every start and never saved: once you set it, keep it set, or every Link stops decrypting. Unset, a key is generated once and kept in `/data/encryption.key` |
 
 Runtime/path overrides: `DATA_DIR` (default `/data`), `STORE_PATH` (mappings DB), `WEBHOOK_PORT` (default `8765`), `WEBHOOK_BIND` (default `0.0.0.0`), `TRUSTED_PROXIES` (comma-separated IPs/CIDRs of reverse proxies allowed to set `X-Forwarded-For`/`X-Forwarded-Proto`; unset by default, so those headers are ignored).
 
@@ -238,10 +238,10 @@ segment, and Usher logs a startup warning saying so. Recommended setups:
 
 | Symptom | Likely cause |
 |---|---|
-| Can't reach `/admin` | Check the container is up and port `8765` is mapped/reachable; first run prints a setup token in the logs |
+| Can't reach `/admin` | Check the container is up and port `8765` is mapped/reachable; the first visit to `/admin` prints a setup token in the logs and writes it to `/data/setup_token` |
 | Bot doesn't respond in groups | `@BotFather` → `/setprivacy` → select bot → **Disable** |
 | `/link` fails after Plex approval | The user's Plex account isn't shared in Seerr: invite them in Seerr first |
-| Webhook events not arriving | Secret mismatch (copy it from the Webhook tab into Seerr's Authorization header), or Seerr can't reach the Usher port; use the Webhook **Test** button |
+| Webhook events not arriving | Secret mismatch (generate a new one on the Webhook tab, copy it, Save, and paste it into Seerr's Authorization header), or Seerr can't reach the Usher port; use Seerr's webhook **Test** button |
 | Auto-fix not offered | Telegram ID not in the allowlist, Issue type is "Other", or today's limit is hit |
 | Auto-fix says "not in Radarr/Sonarr" | The media isn't managed by *arr: add it there first |
 | `/status` shows ❌ for a service | Check the URL is reachable from inside the container (use an IP, not `localhost`) |

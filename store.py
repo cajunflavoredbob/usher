@@ -982,7 +982,7 @@ class UserStore:
         # One bad item must not kill the batch: a single corrupt row (garbage
         # JSON in expected_episode_ids, wrong types) previously raised here
         # on every poll tick, permanently stopping ALL completion/timeout DMs
-        #. Skip and log the bad row; process the rest.
+        # for everyone. Skip and log the bad row; process the rest.
         out: list[PendingAutofix] = []
         for r in rows:
             try:

@@ -198,7 +198,7 @@ def attach_webhook(
             return web.Response(status=200, text="ok")
         # ISSUE_REOPENED lands here too: deliberately unhandled for now
         # (notifying the reporter on reopen is a product decision, not an
-        # oversight -- see the tracked backlog).
+        # oversight).
         logger.info("Webhook received notification_type=%s (unhandled)", nt)
         return web.Response(status=200, text="ok")
 

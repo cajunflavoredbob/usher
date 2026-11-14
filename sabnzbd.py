@@ -8,7 +8,6 @@ download client's item id (SABnzbd's nzo_id) via their queue records.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import httpx
 

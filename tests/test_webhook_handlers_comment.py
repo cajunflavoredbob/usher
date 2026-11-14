@@ -158,7 +158,7 @@ async def test_scope_line_from_extra_array():
 
 
 async def test_scope_line_falls_back_to_api_when_payload_has_none():
-    """Live regression (ticket #47): the comment webhook carries no `extra`
+    """Regression: the comment webhook carries no `extra`
     array, so the scope fell through to "All seasons" and contradicted the
     create DM, which correctly said Season 6, Episode 9. The handler must now
     resolve the ticket's real scope instead of guessing."""

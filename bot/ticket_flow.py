@@ -1018,7 +1018,7 @@ async def _submit_ticket_inner(
                             lines.append(f"{prefix} Auto-fix: {result.message}")
                             lines.append("(Couldn't enqueue completion notification.)")
                     else:
-                        # No search step ran — there's nothing to poll for.
+                        # No search step ran, so there's nothing to poll for.
                         lines.append(f"⚠️ Auto-fix: {result.message}")
             finally:
                 end_action(ctx, media_key)

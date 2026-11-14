@@ -1,4 +1,4 @@
-"""Admin Request DM buttons (#26): which DMs get Approve / Decline / Retry /
+"""Admin Request DM buttons: which DMs get Approve / Decline / Retry /
 Open in Seerr, and what a tap does (status check first, edit in place,
 error line on a Seerr failure, Admin only)."""
 from __future__ import annotations
@@ -276,7 +276,7 @@ async def test_in_flight_slot_released_after_tap():
     assert "rqadmin:12" not in ctx.bot_data.get("inflight_actions", set())
 
 
-# --- The Admin's own failed Request (#43) ------------------------------------
+# --- The Admin's own failed Request ------------------------------------
 
 def _admin_requested_app():
     app = _app()

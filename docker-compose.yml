@@ -16,4 +16,4 @@ services:
     # (see "Securing the admin UI" in the README):
     #   environment:
     #     USHER_ENCRYPTION_KEY: ${USHER_ENCRYPTION_KEY}
-    #     TRUSTED_PROXIES: "172.18.0.0/16"
+    #     TRUSTED_PROXIES: "<your reverse proxy's IP or CIDR>"

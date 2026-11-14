@@ -1160,8 +1160,8 @@ async def run_arr_action(
 ) -> FixResult:
     """Run the configured Arr action against the media. `action="fix"` is the
     plain delete+search (Auto-fix); `action="mark_failed"` adds the blocklist
-    step (Mark Failed). Returns FixResult — see fix_result.py for the
-    ok/partial/failed status semantics and should_poll heuristic."""
+    step (Mark Failed). Returns FixResult (see fix_result.py for the
+    ok/partial/failed status semantics and should_poll heuristic)."""
     op_label = "Auto-fix" if action == "fix" else "Mark Failed"
     try:
         if media["type"] == "movie":

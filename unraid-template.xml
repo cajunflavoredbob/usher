@@ -14,8 +14,11 @@
   <WebUI>http://[IP]:[PORT:8765]/admin</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/cajunflavoredbob/usher/main/unraid-template.xml</TemplateURL>
   <Icon>https://raw.githubusercontent.com/cajunflavoredbob/usher/main/icon.png</Icon>
-  <Date>2026-08-16</Date>
-  <Changes>### v0.13.0&#xD;
+  <Date>2026-11-14</Date>
+  <Changes>### Since v0.13.0&#xD;
+- Request updates and Progress cards, Subscriptions, Auto-fix repeat handling and more: see the project CHANGELOG&#xD;
+&#xD;
+### v0.13.0&#xD;
 - Security, reliability, and UX hardening: see the project CHANGELOG for details&#xD;
 &#xD;
 ### v0.12.x&#xD;
@@ -26,6 +29,7 @@
 &#xD;
 ### v0.8.0&#xD;
 - All settings moved to the admin web UI. No environment variables required to install -- start the container, open the web UI, finish setup.</Changes>
+  <ExtraParams>--restart unless-stopped</ExtraParams>
   <Requires/>
   <DonateText/>
   <DonateLink/>
@@ -34,7 +38,7 @@
 **Setup**&#xD;
 1. Install the container (no environment variables needed)&#xD;
 2. Click the **WebUI** button on the container card (or open `http://&lt;unraid-ip&gt;:8765/admin`)&#xD;
-3. The first-run page collects: admin username + password, Telegram bot token (from @BotFather), your Telegram user ID (DM @userinfobot to get yours), and Seerr URL + API key&#xD;
+3. The first visit prints a one-time setup token to the container log (also saved as `setup_token` in App Data); paste it into the page. The first-run page then collects: admin username + password, Telegram bot token (from @BotFather), your Telegram user ID (DM @userinfobot to get yours), and Seerr URL + API key&#xD;
 4. Save -- the container restarts and the bot comes online&#xD;
 5. Log in and configure Radarr/Sonarr, auto-fix allowlist, webhook secret, etc.&#xD;
 6. In Telegram, DM `/setprivacy` to @BotFather, select your bot, choose **Disable** (lets the bot see commands in group chats)&#xD;
@@ -46,11 +50,11 @@
 - Restore from backup (container restarts automatically)&#xD;
 - Change admin password&#xD;
 &#xD;
-**Enable comment-reply notifications (optional)**&#xD;
+**Enable Ticket and Request notifications**&#xD;
 1. In Seerr, go to Settings → Notifications → Webhook&#xD;
 2. Webhook URL: `http://&lt;unraid-ip&gt;:8765/webhook/seerr`&#xD;
-3. Authorization Header: paste the Webhook Secret from the Usher web UI (mandatory -- Usher rejects deliveries without it)&#xD;
-4. Enable the **Issue Reported**, **Issue Comment**, and **Issue Resolved** notification types&#xD;
+3. Authorization Header: in the Usher web UI's Webhook tab, click Generate, Copy, then Save, and paste the secret here (mandatory -- Usher rejects deliveries without it)&#xD;
+4. Enable the **Issue Reported**, **Issue Comment** and **Issue Resolved** notification types, plus Request Pending Approval, Request Approved, Request Automatically Approved, Request Available, Request Declined and Request Processing Failed&#xD;
 5. Click "Test" to confirm Usher receives it&#xD;
 &#xD;
 See the [project page](https://github.com/cajunflavoredbob/usher) for full docs.</Description>

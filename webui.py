@@ -5,9 +5,10 @@ Routes (auth middleware covers everything except setup/login):
   GET/POST /admin/login      -- session login
   POST     /admin/logout
   GET      /admin            -- settings page
-  POST     /admin/telegram | /admin/seerr | /admin/autofix | /admin/webhook
+  POST     /admin/telegram | /admin/seerr | /admin/autofix | /admin/sabnzbd
+           | /admin/tautulli | /admin/webhook
                              -- save one settings tab each
-  POST     /admin/test/{telegram|seerr|autofix|webhook}
+  POST     /admin/test/{telegram|seerr|autofix|sabnzbd|tautulli|webhook}
                              -- connection tests (JSON)
   GET      /admin/seerr/newplex-warning          -- banner state (JSON)
   POST     /admin/seerr/newplex-warning/dismiss
@@ -1009,7 +1010,8 @@ async def setup_get(request: web.Request) -> web.Response:
         token_field = """
   <h2>Setup Token</h2>
   <p class="note">Paste the one-time token from the container logs:
-  <code>docker logs usher | grep "setup token"</code></p>
+  <code>docker logs usher | grep "setup token"</code>
+  (it is also in <code>setup_token</code> in the data folder).</p>
   <label>Setup token</label>
   <input type="text" name="setup_token" required autocomplete="off">
 """
@@ -2208,8 +2210,8 @@ async def auth_middleware(request: web.Request, handler) -> web.Response:
         return await handler(request)
 
     def _no_store(resp: web.StreamResponse) -> web.StreamResponse:
-        # /admin responses embed the bot token and every API key as form
-        # values; an intermediary or disk cache must never persist them.
+        # /admin pages carry the session's CSRF token and the settings in
+        # force; an intermediary or disk cache must never persist them.
         resp.headers.setdefault("Cache-Control", "no-store")
         return resp
 

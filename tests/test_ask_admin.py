@@ -1,4 +1,4 @@
-"""Ask the Admin to try a different release (#46): the offer on a repeat DM
+"""Ask the Admin to try a different release: the offer on a repeat DM
 and after a comment, the one-per-Ticket Admin DM with Mark Failed first, and
 the escalation surviving a restart."""
 from __future__ import annotations

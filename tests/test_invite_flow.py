@@ -198,11 +198,11 @@ async def test_uninvite_pending_invite_wording():
 
 async def test_invite_cancel_stale_version_toasts():
     """Cancel on a superseded card must not kill the active invite."""
-    ctx = _plex_ctx(user_data={"inv_version": 2, "inv_email": "x@y.zz"})
+    ctx = _plex_ctx(user_data={"inv_version": 2, "inv_email": "draft@example.com"})
     upd = make_update(callback_data="invx:1", user_id=ADMIN_ID)
     state = await invite_cancel(upd, ctx)
     assert state is None
-    assert ctx.user_data.get("inv_email") == "x@y.zz"  # draft survives
+    assert ctx.user_data.get("inv_email") == "draft@example.com"  # draft survives
     assert any(alert for _, alert in upd.callback_query.answers)
 
     live = make_update(callback_data="invx:2", user_id=ADMIN_ID)

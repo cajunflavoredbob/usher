@@ -1,4 +1,4 @@
-"""Tests for #24: once an admin Fix starts, the Ticket card shows the Ticket
+"""Once an admin Fix starts, the Ticket card shows the Ticket
 again with its buttons and the Fix's working state, result and download
 progress go on a separate new Progress card. A Fix that can't start leaves
 its reason and "⬅️ Ticket" on the Ticket card."""
@@ -215,7 +215,7 @@ async def test_admin_fix_enqueues_its_action_name_for_the_poller():
     assert ctx.bot_data["store"].add_pending_autofix.call_args.kwargs["action_name"] == "Redownload"
 
 
-# --- a Fix on a new-Ticket DM keeps its History row (#39) ------------------------------
+# --- a Fix on a new-Ticket DM keeps its History row ------------------------------
 
 DM_BUTTONS = TICKET_BUTTONS + [("📜 History", "tkopen:5")]
 
