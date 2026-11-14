@@ -1,7 +1,8 @@
 """The new-content poller and Follow pings.
 
 One job, every 15 minutes. It reads what Radarr and Sonarr imported since
-its last stored mark (`GET /history/since`, `downloadFolderImported`), records
+its last stored mark (`GET /history/since`, `downloadFolderImported`; or
+Tautulli's recently added list when Tautulli is linked), records
 each import once in the new_content table, then sends the Follow pings: new
 episodes are grouped per user and show into one DM with Watch now, and an
 episode is pinged once however many polls or restarts pass (the row's pinged
@@ -11,12 +12,14 @@ from __future__ import annotations
 
 import html
 import logging
+import time
 from datetime import datetime, timezone
 
 from telegram import InlineKeyboardMarkup
 
 from bot.follows import follow_button
 from bot.shared import watch_now_button
+from tautulli import ids_from_guids
 
 logger = logging.getLogger("usher")
 
@@ -24,6 +27,9 @@ NEW_CONTENT_INTERVAL_S = 15 * 60
 NEW_CONTENT_FIRST_DELAY_S = 90
 RADARR_MARK = "radarr_history"
 SONARR_MARK = "sonarr_history"
+TAUTULLI_MARK = "tautulli_added"
+TAUTULLI_PAGE = 50
+TAUTULLI_MAX_PAGES = 5
 
 
 def _now_iso() -> str:
@@ -85,6 +91,69 @@ async def _poll_sonarr(store, sonarr) -> None:
     await store.set_poller_mark(SONARR_MARK, _latest(records, since))
 
 
+def _int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _added_at(row: dict) -> int:
+    return _int(row.get("added_at")) or 0
+
+
+async def _poll_tautulli(store, tautulli) -> None:
+    """Record what Tautulli lists as recently added since its mark (epoch
+    seconds). Items without a TMDb id are skipped; an episode takes its
+    show's ids from the show's metadata. The mark moves only after the
+    items were stored, so a failure reads them again next time."""
+    raw = await store.get_poller_mark(TAUTULLI_MARK)
+    if raw is None:
+        await store.set_poller_mark(TAUTULLI_MARK, str(int(time.time())))
+        return
+    since = int(raw)
+    items: list[dict] = []
+    for page in range(TAUTULLI_MAX_PAGES):
+        rows = await tautulli.get_recently_added(
+            count=TAUTULLI_PAGE, start=page * TAUTULLI_PAGE)
+        fresh = [r for r in rows if _added_at(r) > since]
+        items.extend(fresh)
+        if len(fresh) < TAUTULLI_PAGE:
+            break
+    show_ids: dict = {}
+    for item in sorted(items, key=_added_at):
+        kind = item.get("media_type")
+        key = item.get("rating_key")
+        if kind not in ("movie", "episode") or key is None:
+            continue
+        if kind == "movie":
+            tmdb, _tvdb = ids_from_guids(item)
+            if tmdb is None and not item.get("guids"):
+                tmdb, _tvdb = ids_from_guids(await tautulli.get_metadata(key))
+            if not tmdb:
+                continue
+            await store.add_new_content(
+                f"tautulli:{key}", "movie", tmdb, item.get("title") or "?")
+            continue
+        show_key = item.get("grandparent_rating_key")
+        season = _int(item.get("parent_media_index"))
+        number = _int(item.get("media_index"))
+        if show_key is None or season is None or number is None:
+            continue
+        if show_key not in show_ids:
+            show_ids[show_key] = ids_from_guids(
+                await tautulli.get_metadata(show_key))
+        tmdb, tvdb = show_ids[show_key]
+        if not tmdb:
+            continue
+        await store.add_new_content(
+            f"tautulli:{key}", "episode", tmdb,
+            item.get("grandparent_title") or "?", season, number,
+            tvdb_id=tvdb or 0)
+    await store.set_poller_mark(
+        TAUTULLI_MARK, str(max([since, *(_added_at(r) for r in items)])))
+
+
 def _episode_list(episodes: list[tuple[int, int]]) -> str:
     labels = [f"S{s:02d}E{e:02d}" for s, e in sorted(episodes)]
     if len(labels) == 1:
@@ -136,8 +205,26 @@ async def poll_new_content(ctx) -> None:
     source that fails keeps its mark and is read again next time."""
     app = ctx.application
     store = app.bot_data["store"]
-    for key, client, poll in (("radarr", app.bot_data.get("radarr"), _poll_radarr),
-                              ("sonarr", app.bot_data.get("sonarr"), _poll_sonarr)):
+    tautulli = app.bot_data.get("tautulli")
+    if tautulli is not None:
+        # Tautulli replaces the arr history; keep the arr marks at now so
+        # unlinking it later does not replay what Tautulli already recorded.
+        sources = (("tautulli", tautulli, _poll_tautulli),)
+        try:
+            for mark in (RADARR_MARK, SONARR_MARK):
+                await store.set_poller_mark(mark, _now_iso())
+        except Exception:
+            logger.warning("Could not move the arr marks", exc_info=True)
+    else:
+        sources = (("radarr", app.bot_data.get("radarr"), _poll_radarr),
+                   ("sonarr", app.bot_data.get("sonarr"), _poll_sonarr))
+        try:
+            if await store.get_poller_mark(TAUTULLI_MARK) is not None:
+                await store.set_poller_mark(TAUTULLI_MARK,
+                                            str(int(time.time())))
+        except Exception:
+            logger.warning("Could not move the Tautulli mark", exc_info=True)
+    for key, client, poll in sources:
         if client is None:
             continue
         try:

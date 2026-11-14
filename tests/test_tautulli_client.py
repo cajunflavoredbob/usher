@@ -163,3 +163,24 @@ async def test_get_history_returns_the_rows_and_get_stream_data_the_dict():
     assert await c.get_history(user_id=1) == [{"row_id": 4}]
     assert await c.get_stream_data(4) == {"transcode_decision": "copy"}
     await c.close()
+
+
+async def test_get_recently_added_sends_count_and_start_and_unwraps_rows():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["cmd"] == "get_recently_added"
+        assert request.url.params["count"] == "50"
+        assert request.url.params["start"] == "50"
+        return httpx.Response(200, json=_ok(
+            {"recently_added": [{"rating_key": "1"}, "junk"]}))
+
+    c = _client(handler)
+    assert await c.get_recently_added(count=50, start=50) == [
+        {"rating_key": "1"}]
+    await c.close()
+
+
+def test_ids_from_guids_reads_tmdb_and_tvdb_in_either_form():
+    from tautulli import ids_from_guids
+    assert ids_from_guids({"guids": ["imdb://tt1", "tmdb://550", "tvdb://9"]}) == (550, 9)
+    assert ids_from_guids({"guid": "com.plexapp.agents.thetvdb://81189?lang=en"}) == (None, 81189)
+    assert ids_from_guids({"guids": ["imdb://tt1"]}) == (None, None)

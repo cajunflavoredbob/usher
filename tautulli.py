@@ -118,6 +118,14 @@ class TautulliClient:
         rows = data.get("data") if isinstance(data, dict) else None
         return [r for r in (rows or []) if isinstance(r, dict)]
 
+    async def get_recently_added(self, count: int = 50, start: int = 0) -> list:
+        """Recently added items (newest first), unwrapped from the
+        `{"recently_added": [...]}` block. Each row has `media_type`,
+        `rating_key`, `added_at` (epoch seconds as text) and `guids`."""
+        data = await self.call("get_recently_added", count=count, start=start)
+        rows = data.get("recently_added") if isinstance(data, dict) else None
+        return [r for r in (rows or []) if isinstance(r, dict)]
+
     async def get_stream_data(self, row_id) -> dict:
         """How one history row was streamed (player, platform,
         transcode_decision, codecs)."""
@@ -147,6 +155,26 @@ class TautulliClient:
 
 _TMDB_GUID = re.compile(
     r"^(?:tmdb://|com\.plexapp\.agents\.themoviedb://)(\d+)")
+
+
+_TVDB_GUID = re.compile(
+    r"^(?:tvdb://|com\.plexapp\.agents\.thetvdb://)(\d+)")
+
+
+def ids_from_guids(meta: dict) -> tuple[Optional[int], Optional[int]]:
+    """(tmdb_id, tvdb_id) found in a row's guids; each None when absent."""
+    guids = list(meta.get("guids") or [])
+    if meta.get("guid"):
+        guids.append(meta["guid"])
+    tmdb = tvdb = None
+    for g in guids:
+        m = _TMDB_GUID.match(str(g))
+        if m and tmdb is None:
+            tmdb = int(m.group(1))
+        m = _TVDB_GUID.match(str(g))
+        if m and tvdb is None:
+            tvdb = int(m.group(1))
+    return tmdb, tvdb
 
 
 def tmdb_id_from_metadata(meta: dict) -> Optional[int]:

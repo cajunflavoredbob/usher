@@ -1027,8 +1027,8 @@ class UserStore:
                               tvdb_id: int = 0,
                               added_at: Optional[str] = None) -> bool:
         """Record one import. False when this source record was already
-        recorded, or (for an episode) the same episode already has a row, so
-        an upgrade import never pings twice."""
+        recorded, or the same movie or episode already has a row (from either
+        source), so an upgrade import never pings twice."""
         def _do() -> bool:
             with self._conn() as c:
                 if media_type == "episode" and c.execute(
@@ -1037,6 +1037,10 @@ class UserStore:
                         AND tmdb_id = ? AND season = ? AND episode = ?
                         """,
                         (tmdb_id, season, episode)).fetchone():
+                    return False
+                if media_type == "movie" and c.execute(
+                        "SELECT 1 FROM new_content WHERE media_type = 'movie' "
+                        "AND tmdb_id = ?", (tmdb_id,)).fetchone():
                     return False
                 cur = c.execute(
                     """
