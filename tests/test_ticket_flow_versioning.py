@@ -295,4 +295,5 @@ async def test_new_issue_keeps_the_interrupted_submit_resume_marker():
     upd = make_update(text="x", user_id=USER_ID)
     assert await run_relink_resume(upd, ctx) is True
     texts = [c["text"] for c in upd.effective_message.reply_calls]
-    assert any("didn't auto-submit" in t for t in texts)
+    assert any("didn't send the earlier report" in t for t in texts)
+    assert not any("Picking up" in t for t in texts)

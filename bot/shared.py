@@ -715,7 +715,11 @@ async def run_relink_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> b
     executor = RELINK_RESUME_EXECUTORS.get(marker.get("kind"))
     if executor is None:
         return False
-    await update.effective_message.reply_text("▶️ Picking up where you left off...")
+    # A superseded resume (a newer report replaced the one it holds) sends its
+    # own one-line notice and resumes nothing, so it skips this promise.
+    if not (marker.get("payload") or {}).get("superseded"):
+        await update.effective_message.reply_text(
+            "▶️ Picking up where you left off...")
     await executor(update, ctx, marker.get("payload") or {})
     return True
 

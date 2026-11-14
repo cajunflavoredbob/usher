@@ -146,13 +146,17 @@ def _clear_issue_state(ctx, *, keep_resume: bool = False) -> None:
         ctx.user_data.pop(key, None)
     # A resume marker for this flow's own submit is stale once the flow ends;
     # markers other flows left (a Request, a Ticket reply) stay. A NEW report
-    # keeps it (keep_resume): when the re-link finishes, the resume then tells
-    # the user the interrupted report was not auto-submitted, instead of the
-    # report vanishing without a word.
+    # keeps it (keep_resume), flagged superseded: when the re-link finishes,
+    # the resume then only tells the user the earlier report was not sent
+    # (whether or not the new report is still open), instead of the report
+    # vanishing without a word or being submitted from the new draft.
     marker = ctx.user_data.get("relink_resume")
-    if (not keep_resume and isinstance(marker, dict)
-            and marker.get("kind") == "submit_ticket"):
-        ctx.user_data.pop("relink_resume", None)
+    if isinstance(marker, dict) and marker.get("kind") == "submit_ticket":
+        if not keep_resume:
+            ctx.user_data.pop("relink_resume", None)
+        else:
+            marker["payload"] = {**(marker.get("payload") or {}),
+                                 "superseded": True}
 
 
 async def _ticket_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1148,9 +1152,16 @@ async def _resume_submit_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     """Relink-resume executor: re-run the submit that was gated by a revoked
     token. The draft is still in user_data (the gate didn't clear it), and
     _submit_ticket's own guard handles the case where it got clobbered."""
-    # If the user started a NEW /issue while re-linking, user_data now holds
-    # that conversation's half-built draft; auto-submitting it would file a
-    # partial report.
+    # A new /issue or Report a problem since the interrupted submit marked the
+    # marker superseded: the draft in user_data is now that report's (or gone),
+    # so submitting would file a partial report or say the link is incomplete.
+    # One honest line instead, whether or not the new report is still open.
+    if payload.get("superseded"):
+        await update.effective_message.reply_text(
+            "You started a new /issue since then, so I didn't send the "
+            "earlier report. /issue to report it again."
+        )
+        return
     if user_in_conversation(ctx, update, "issue"):
         await update.effective_message.reply_text(
             "You've started a new /issue since then, so I didn't auto-submit "
