@@ -12,6 +12,7 @@ from telegram.ext import Application
 from seerr import SeerrClient
 from store import UserStore
 
+from bot.auto_retry import enqueue_failed_request, wait_words
 from bot.callback_prefixes import TK_OPEN, TK_REPLY
 from bot.follows import notice_markup
 from bot.playback import playback_lines
@@ -565,6 +566,17 @@ async def handle_seerr_media(app: Application, payload: dict) -> None:
     elif requester_is_admin and admin_id:
         requester_chat_id = admin_id
     requester_dmed = False
+    if nt == "MEDIA_FAILED":
+        # Queue the automatic retry first so both DMs can say when it comes.
+        wait_s = await enqueue_failed_request(
+            app, request_id, coerce_tmdb_id(media.get("tmdbId")),
+            media.get("media_type"), requester_chat_id, requester_seerr_id)
+        if wait_s is not None:
+            when = wait_words(wait_s)
+            if requester_line:
+                requester_line += f" Usher will try again {when}."
+            if admin_line:
+                admin_line += f"\nAuto-retry is on: next try {when}."
     if requester_line and requester_chat_id:
         # The Admin's own failed Request: the admin DM below is skipped for
         # them, so their requester DM carries Retry and Open in Seerr.

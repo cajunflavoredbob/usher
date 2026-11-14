@@ -740,6 +740,7 @@ def _settings_page(
     follows_chk = " checked" if s.tg_notify_follows else ""
     digest_dm_chk = " checked" if s.tg_notify_digest else ""
     digest_on_chk = " checked" if s.digest_enabled else ""
+    auto_retry_chk = " checked" if s.auto_retry_failed else ""
     token_rejected_note = (
         '<div class="error">Telegram rejected the bot token, so the bot is not running. '
         'Enter a valid token below and Save; Usher then restarts.</div>'
@@ -773,6 +774,12 @@ def _settings_page(
   <label class="inline-check"><input type="checkbox" name="digest_enabled"{digest_on_chk}> Send the daily Digest</label>
   <label>Digest hour <span class="note">0 to 23, the server's local time</span></label>
   <input type="text" name="digest_hour" value="{int(s.digest_hour)}" inputmode="numeric" pattern="[0-9]+" required>
+
+  <h2>Failed Requests</h2>
+  <div class="note">When a Request fails to download, Usher retries it in Seerr by itself after 1 hour, then 6 hours, then every 24 hours, and stops as soon as it is no longer failed. The Requester is told when the next try is, and again if every try failed.</div>
+  <label class="inline-check"><input type="checkbox" name="auto_retry_failed"{auto_retry_chk}> Retry failed Requests automatically</label>
+  <label>Number of tries <span class="note">1 to 5</span></label>
+  <input type="text" name="auto_retry_tries" value="{int(s.auto_retry_tries)}" inputmode="numeric" pattern="[0-9]+" required>
 
   <h2>Alarms</h2>
   <div class="note">DMs to the admin when something needs attention, checked every 5 minutes, once for each new problem and once when it clears.</div>
@@ -1437,17 +1444,19 @@ async def telegram_post(request: web.Request) -> web.Response:
     thresholds = {}
     for name, label, top in (("low_disk_percent", "Low disk percent", 100),
                              ("low_disk_gb", "Low disk GB", None),
-                             ("digest_hour", "Digest hour", 23)):
+                             ("digest_hour", "Digest hour", 23),
+                             ("auto_retry_tries", "Number of tries", 5)):
         if form.get(name) is None:   # field not sent: keep the saved value
             thresholds[name] = getattr(s, name)
             continue
         raw = str(form.get(name)).strip()
+        low = 1 if name == "auto_retry_tries" else 0
         try:
             v = int(raw)
-            if v < 0 or (top is not None and v > top):
+            if v < low or (top is not None and v > top):
                 raise ValueError
         except ValueError:
-            bound = f" from 0 to {top}" if top is not None else ""
+            bound = f" from {low} to {top}" if top is not None else ""
             return web.Response(
                 text=_settings_page(
                     s, error=f"{label} must be a whole number{bound}.",
@@ -1464,6 +1473,8 @@ async def telegram_post(request: web.Request) -> web.Response:
     s.low_disk_gb = thresholds["low_disk_gb"]
     s.digest_hour = thresholds["digest_hour"]
     s.digest_enabled = form.get("digest_enabled") is not None
+    s.auto_retry_tries = thresholds["auto_retry_tries"]
+    s.auto_retry_failed = form.get("auto_retry_failed") is not None
     for flag in ("alarm_health", "alarm_disk", "alarm_plex"):
         setattr(s, flag, form.get(flag) is not None)
     for flag in ("tg_notify_requester", "tg_notify_admin_requests",

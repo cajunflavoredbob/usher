@@ -102,6 +102,8 @@ from bot.broadcast import (_BC_KEYS, _broadcast_conversation,
                            cancel_broadcast_tasks, resume_broadcasts)
 from bot.downloads import downloads
 from bot.nowplaying import now_playing_section, stop_ask, stop_confirmed
+from bot.auto_retry import (AUTO_RETRY_FIRST_DELAY_S, AUTO_RETRY_INTERVAL_S,
+                            auto_retry_job)
 from bot.alarms import (ALARM_FIRST_DELAY_S, ALARM_INTERVAL_S, check_alarms,
                         status_section as alarms_section)
 from bot.access_asks import (access_ask_cancel, access_ask_ignore,
@@ -698,6 +700,12 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
         interval=DIGEST_INTERVAL_S,
         first=DIGEST_FIRST_DELAY_S,
         name="digest",
+    )
+    app.job_queue.run_repeating(
+        auto_retry_job,
+        interval=AUTO_RETRY_INTERVAL_S,
+        first=AUTO_RETRY_FIRST_DELAY_S,
+        name="auto_retry",
     )
     # Keep autofix bookkeeping tables from growing for the life of the
     # install (also pruned once at startup in _post_init).

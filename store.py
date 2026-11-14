@@ -137,6 +137,18 @@ class RecentFixEvent:
     age_seconds: int
 
 
+@dataclass(frozen=True)
+class FailedRetry:
+    """One failed Request waiting for an automatic retry in Seerr."""
+    request_id: int
+    tmdb_id: int
+    media_type: str
+    requester_chat_id: Optional[int]   # None when nobody can be told
+    requester_seerr_id: Optional[int]
+    tries: int                         # retries already made
+    next_try_at: str                   # UTC, "%Y-%m-%d %H:%M:%S"
+
+
 @dataclass
 class PendingAutofix:
     id: int
@@ -478,6 +490,22 @@ class UserStore:
                 """
                 CREATE INDEX IF NOT EXISTS idx_watch_media
                 ON request_watches(media_type, tmdb_id)
+                """
+            )
+            # Failed Requests waiting for an automatic retry in Seerr: one
+            # row per Seerr request id. tries = retries already made;
+            # next_try_at is UTC text so it sorts and compares as text.
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS failed_retries (
+                    request_id INTEGER PRIMARY KEY,
+                    tmdb_id INTEGER NOT NULL DEFAULT 0,
+                    media_type TEXT NOT NULL DEFAULT '',
+                    requester_chat_id INTEGER,
+                    requester_seerr_id INTEGER,
+                    tries INTEGER NOT NULL DEFAULT 0,
+                    next_try_at TEXT NOT NULL
+                )
                 """
             )
             # NOTE: idx_pending_status is created in _migrate_schema, after
@@ -1022,6 +1050,71 @@ class UserStore:
                     WHERE tmdb_id = ? AND removed = 0 ORDER BY id
                     """,
                     (tmdb_id,)).fetchall()]
+        return await self._run(_do)
+
+    # Failed-Request auto-retry
+
+    async def upsert_failed_retry(
+        self, request_id: int, tmdb_id: int, media_type: str,
+        requester_chat_id: Optional[int], requester_seerr_id: Optional[int],
+        first_try_at: str,
+    ) -> str:
+        """Add a failed Request, or refresh the details of one already
+        waiting (its tries and next try are kept, so a failure caused by a
+        retry never restarts the schedule). Returns the row's next try."""
+        def _do() -> str:
+            with self._conn() as c:
+                c.execute(
+                    """
+                    INSERT INTO failed_retries
+                        (request_id, tmdb_id, media_type, requester_chat_id,
+                         requester_seerr_id, next_try_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(request_id) DO UPDATE SET
+                        tmdb_id = excluded.tmdb_id,
+                        media_type = excluded.media_type,
+                        requester_chat_id = excluded.requester_chat_id,
+                        requester_seerr_id = excluded.requester_seerr_id
+                    """,
+                    (request_id, tmdb_id or 0, media_type or "",
+                     requester_chat_id, requester_seerr_id, first_try_at))
+                return c.execute(
+                    "SELECT next_try_at FROM failed_retries WHERE request_id = ?",
+                    (request_id,)).fetchone()[0]
+        return await self._run(_do)
+
+    async def list_due_failed_retries(self, now: str) -> list[FailedRetry]:
+        def _do() -> list[tuple]:
+            with self._conn() as c:
+                return c.execute(
+                    """
+                    SELECT request_id, tmdb_id, media_type, requester_chat_id,
+                           requester_seerr_id, tries, next_try_at
+                    FROM failed_retries WHERE next_try_at <= ?
+                    ORDER BY next_try_at, request_id
+                    """,
+                    (now,)).fetchall()
+        return [FailedRetry(*r) for r in await self._run(_do)]
+
+    async def schedule_failed_retry(self, request_id: int, tries: int,
+                                    next_try_at: str) -> None:
+        """Record a retry made: its new tries count and the next try."""
+        def _do() -> None:
+            with self._conn() as c:
+                c.execute(
+                    """
+                    UPDATE failed_retries SET tries = ?, next_try_at = ?
+                    WHERE request_id = ?
+                    """,
+                    (tries, next_try_at, request_id))
+        await self._run(_do)
+
+    async def delete_failed_retry(self, request_id: int) -> bool:
+        def _do() -> bool:
+            with self._conn() as c:
+                return c.execute(
+                    "DELETE FROM failed_retries WHERE request_id = ?",
+                    (request_id,)).rowcount > 0
         return await self._run(_do)
 
     # New-content poller

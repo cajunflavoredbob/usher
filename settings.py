@@ -106,6 +106,10 @@ class Settings:
     # hour of the day (0 to 23, the server's local time) it is sent.
     digest_enabled: bool = False
     digest_hour: int = 18
+    # Failed Requests are retried in Seerr by themselves: on by default, at
+    # most auto_retry_tries times (1 to 5).
+    auto_retry_failed: bool = True
+    auto_retry_tries: int = 3
     # Service alarms (DMs to the admin): Radarr/Sonarr health, and a disk
     # below either threshold (whichever is hit first).
     alarm_health: bool = True
@@ -198,6 +202,10 @@ class Settings:
             digest_enabled=bool(data.get("digest_enabled", False)),
             digest_hour=(_threshold("digest_hour", 18)
                          if _threshold("digest_hour", 18) <= 23 else 18),
+            auto_retry_failed=bool(data.get("auto_retry_failed", True)),
+            auto_retry_tries=(_threshold("auto_retry_tries", 3)
+                              if 1 <= _threshold("auto_retry_tries", 3) <= 5
+                              else 3),
             radarr_api_key=data.get("radarr_api_key", "") or "",
             sonarr_url=data.get("sonarr_url", "") or "",
             sonarr_api_key=data.get("sonarr_api_key", "") or "",
