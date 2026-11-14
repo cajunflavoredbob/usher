@@ -24,6 +24,8 @@ from tautulli import tmdb_id_from_metadata
 
 from bot.callback_prefixes import (
     DV_CATEGORY,
+    DV_GENRE,
+    DV_GENRE_TYPE,
     DV_INFO,
     DV_PAGE,
     MYSTATS,
@@ -56,7 +58,12 @@ CATEGORY_LABELS = {
     "tv": "📺 Shows",
     "upmovies": "🗓 Soon (Movies)",
     "uptv": "🗓 Soon (Shows)",
+    "genres": "🎭 Genres",
 }
+
+GENRES_CATEGORY = "genres"
+GENRE_RESULT_CATEGORY = "genre"  # dv_cat while a genre's titles are shown
+_GENRE_TYPE_LABELS = {"movie": "🎬 Movies", "tv": "📺 Shows"}
 
 POPULAR_CATEGORY = "popular"
 POPULAR_LABEL = "🏆 Popular here this week"
@@ -153,7 +160,11 @@ def _render(ctx: ContextTypes.DEFAULT_TYPE,
     start = screen * REQUEST_RESULTS_PER_PAGE
     chunk = results[start:start + REQUEST_RESULTS_PER_PAGE]
 
-    lines = [f"{_labels(ctx).get(category, POPULAR_LABEL)} - tap a number to request:", ""]
+    if category == GENRE_RESULT_CATEGORY:
+        title = ctx.user_data.get("dv_label") or CATEGORY_LABELS["genres"]
+    else:
+        title = _labels(ctx).get(category, POPULAR_LABEL)
+    lines = [f"{title} - tap a number to request:", ""]
     for offset, r in enumerate(chunk):
         lines.append(_result_line(start + offset + 1, r))
     lines.append("")
@@ -212,7 +223,10 @@ def _render(ctx: ContextTypes.DEFAULT_TYPE,
 
 async def _load_and_render(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                            reply_method, category: str, *,
-                           user_id: int, hub=None) -> None:
+                           user_id: int, hub=None,
+                           genre: tuple | None = None) -> None:
+    """Fetch and render a browse list. `genre` is (media_type, genre_id,
+    name) for a genre's titles, which show under their own title."""
     seerr: SeerrClient = ctx.bot_data["seerr"]
     ctx.user_data["dv_popular_ok"] = await _popular_allowed(ctx, user_id)
     # /mystats needs the user's own Link, so the Admin without one gets no button.
@@ -221,7 +235,10 @@ async def _load_and_render(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     if category == POPULAR_CATEGORY and not ctx.user_data["dv_popular_ok"]:
         category = "trending"
     try:
-        if category == POPULAR_CATEGORY:
+        if genre:
+            results = await seerr.discover_genre(
+                genre[0], genre[1], limit=REQUEST_SEARCH_FETCH_LIMIT)
+        elif category == POPULAR_CATEGORY:
             results = await _popular_results(ctx.bot_data["tautulli"])
         else:
             results = await seerr.discover(category,
@@ -229,7 +246,9 @@ async def _load_and_render(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     except Exception as exc:
         logger.exception("discover fetch failed")
         text = f"Couldn't fetch the list. {user_friendly_message(exc)}"
-        await reply_end(ctx, reply_method, text, hub, REQUESTS_TRENDING,
+        retry = (f"{DV_GENRE}:{_current_version(ctx)}:{genre[0]}:{genre[1]}"
+                 if genre else REQUESTS_TRENDING)
+        await reply_end(ctx, reply_method, text, hub, retry,
                         user_id=user_id)
         return
     if not results:
@@ -238,7 +257,10 @@ async def _load_and_render(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         return
     ctx.user_data["dv_version"] = _current_version(ctx) + 1
     ctx.user_data["dv_results"] = results
-    ctx.user_data["dv_cat"] = category
+    ctx.user_data["dv_cat"] = GENRE_RESULT_CATEGORY if genre else category
+    if genre:
+        ctx.user_data["dv_label"] = (
+            f"🎭 {genre[2]} ({_GENRE_TYPE_LABELS[genre[0]][2:]})")
     ctx.user_data["dv_screen"] = 0
     text, markup = _render(ctx, hub)
     sent = await reply_method(text, reply_markup=markup)
@@ -302,10 +324,118 @@ async def dv_category(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await q.answer()
         return
     await q.answer()
-    await send_typing(update, ctx)
     hub = REQUESTS_HUB if came_from_hub(q.message, REQUESTS_HUB) else None
+    if category == GENRES_CATEGORY:
+        # Not a list: opens the movie-or-show picker. Entering bumps the
+        # version so older browse messages go stale.
+        ctx.user_data["dv_version"] = _current_version(ctx) + 1
+        text, markup = _genre_type_screen(ctx, hub)
+        sent = await q.edit_message_text(text, reply_markup=markup)
+        record_btn(ctx.application, update.effective_user.id, sent)
+        return
+    await send_typing(update, ctx)
     await _load_and_render(update, ctx, q.edit_message_text, category,
                            user_id=update.effective_user.id, hub=hub)
+
+
+def _genre_type_screen(ctx: ContextTypes.DEFAULT_TYPE,
+                       hub) -> tuple[str, InlineKeyboardMarkup]:
+    version = _current_version(ctx)
+    rows = [[InlineKeyboardButton(
+        label, callback_data=f"{DV_GENRE_TYPE}:{version}:{mt}")
+        for mt, label in _GENRE_TYPE_LABELS.items()],
+        [InlineKeyboardButton(CATEGORY_LABELS["trending"],
+                              callback_data=f"{DV_CATEGORY}:trending")]]
+    if hub:
+        rows.append([back_button(hub)])
+    return "🎭 Genres - movies or shows?", InlineKeyboardMarkup(rows)
+
+
+async def dv_genre_type(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """dvg:<version>:<media_type>: list Seerr's genres for that type."""
+    q = update.callback_query
+    user_id = update.effective_user.id
+    if not await _may_browse(ctx, user_id):
+        await q.answer(NOT_LINKED_MSG, show_alert=True)
+        return
+    try:
+        _, version_s, media_type = q.data.split(":")
+        version = int(version_s)
+    except (ValueError, IndexError):
+        await q.answer()
+        return
+    if media_type not in _GENRE_TYPE_LABELS:
+        await q.answer()
+        return
+    if version != _current_version(ctx):
+        await q.answer(_STALE_BROWSE_TOAST, show_alert=True)
+        return
+    await q.answer()
+    hub = REQUESTS_HUB if came_from_hub(q.message, REQUESTS_HUB) else None
+    await send_typing(update, ctx)
+    seerr: SeerrClient = ctx.bot_data["seerr"]
+    try:
+        genres = await seerr.genres(media_type)
+    except Exception as exc:
+        logger.exception("genre list fetch failed")
+        await reply_end(
+            ctx, q.edit_message_text,
+            f"Couldn't fetch the genres. {user_friendly_message(exc)}", hub,
+            f"{DV_GENRE_TYPE}:{version}:{media_type}", user_id=user_id)
+        return
+    if not genres:
+        await reply_end(ctx, q.edit_message_text,
+                        "No genres to pick from right now.", hub,
+                        user_id=user_id)
+        return
+    ctx.user_data["dv_genres"] = {media_type: dict(genres)}
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for genre_id, name in genres:
+        row.append(InlineKeyboardButton(
+            name, callback_data=f"{DV_GENRE}:{version}:{media_type}:{genre_id}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(
+        CATEGORY_LABELS["genres"], callback_data=f"{DV_CATEGORY}:genres")])
+    if hub:
+        rows.append([back_button(hub)])
+    text = f"🎭 {_GENRE_TYPE_LABELS[media_type][2:]} - pick a genre:"
+    sent = await q.edit_message_text(
+        text, reply_markup=InlineKeyboardMarkup(rows))
+    record_btn(ctx.application, user_id, sent)
+
+
+async def dv_genre(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """dvr:<version>:<media_type>:<genre_id>: a genre's titles as a list."""
+    q = update.callback_query
+    user_id = update.effective_user.id
+    if not await _may_browse(ctx, user_id):
+        await q.answer(NOT_LINKED_MSG, show_alert=True)
+        return
+    try:
+        _, version_s, media_type, genre_s = q.data.split(":")
+        version = int(version_s)
+        genre_id = int(genre_s)
+    except (ValueError, IndexError):
+        await q.answer()
+        return
+    if media_type not in _GENRE_TYPE_LABELS:
+        await q.answer()
+        return
+    names = (ctx.user_data.get("dv_genres") or {}).get(media_type) or {}
+    if version != _current_version(ctx) or genre_id not in names:
+        await q.answer(_STALE_BROWSE_TOAST, show_alert=True)
+        return
+    await q.answer()
+    await send_typing(update, ctx)
+    hub = REQUESTS_HUB if came_from_hub(q.message, REQUESTS_HUB) else None
+    await _load_and_render(update, ctx, q.edit_message_text, GENRES_CATEGORY,
+                           user_id=user_id, hub=hub,
+                           genre=(media_type, genre_id, names[genre_id]))
 
 
 async def dv_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:

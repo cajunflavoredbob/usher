@@ -549,6 +549,32 @@ class SeerrClient:
         data = _json_or_raise(r, what="discover")
         return self._parse_media_results(data.get("results"), limit)
 
+    async def genres(self, media_type: str) -> list[tuple[int, str]]:
+        """Seerr's genre list for "movie" or "tv" as (id, name) pairs. A row
+        without an integer id or a name is skipped."""
+        if media_type not in ("movie", "tv"):
+            raise ValueError(f"unknown genre media type: {media_type}")
+        r = await execute(self._client, "GET", f"/genres/{media_type}",
+                          service=_SERVICE)
+        data = _json_or_raise(r, what="genres", expect=list)
+        return [(g["id"], str(g["name"])) for g in data
+                if isinstance(g, dict) and isinstance(g.get("id"), int)
+                and g.get("name")]
+
+    async def discover_genre(self, media_type: str, genre_id: int,
+                             limit: int = SEARCH_RESULT_LIMIT
+                             ) -> list[MediaResult]:
+        """One page of a genre's titles, same result shape as discover."""
+        if media_type not in ("movie", "tv"):
+            raise ValueError(f"unknown genre media type: {media_type}")
+        path = ("/discover/movies" if media_type == "movie"
+                else "/discover/tv") + f"/genre/{int(genre_id)}"
+        r = await execute(self._client, "GET", path, service=_SERVICE)
+        data = _json_or_raise(r, what="genre discover")
+        items = [{"mediaType": media_type, **(i or {})}
+                 for i in data.get("results") or []]
+        return self._parse_media_results(items, limit)
+
     async def get_tv_seasons(self, tmdb_id: int) -> tuple[list[TvSeason], Optional[int]]:
         """Return (seasons, tvdb_id) for a TV show. Includes season 0 because
         anime movies / OVAs / tie-in specials often live there and users need

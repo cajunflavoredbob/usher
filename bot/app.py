@@ -65,6 +65,8 @@ from bot.callback_prefixes import (
     REQUESTS_TRENDING,
     TICKETS_LIST,
     DV_CATEGORY,
+    DV_GENRE,
+    DV_GENRE_TYPE,
     DV_INFO,
     DV_PAGE,
     SUBSCRIPTION_ADD,
@@ -114,8 +116,8 @@ from bot.hub import end_markup, hub_open_callback
 from bot.link_flow import (_link_conversation, account_unlink, cmd_account,
                            cmd_link_didnt_work, cmd_unlink)
 from bot.mystats_cmd import cmd_mystats, mystats_button
-from bot.discover_cmd import (cmd_trending, dv_category, dv_info, dv_page,
-                              trending_hub)
+from bot.discover_cmd import (cmd_trending, dv_category, dv_genre,
+                              dv_genre_type, dv_info, dv_page, trending_hub)
 from bot.invite_flow import (_INV_KEYS, _invite_conversation,
                              admin_inactive, admin_shares, cmd_uninvite,
                              share_matches, share_remove,
@@ -578,6 +580,9 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     # /trending browse callbacks (category switch / paging / detail cards).
     app.add_handler(CallbackQueryHandler(dv_category, pattern=fr"^{DV_CATEGORY}:"))
     app.add_handler(CallbackQueryHandler(dv_page, pattern=fr"^{DV_PAGE}:"))
+    app.add_handler(CallbackQueryHandler(dv_genre_type,
+                                         pattern=fr"^{DV_GENRE_TYPE}:"))
+    app.add_handler(CallbackQueryHandler(dv_genre, pattern=fr"^{DV_GENRE}:"))
     app.add_handler(CallbackQueryHandler(dv_info, pattern=fr"^{DV_INFO}:"))
     # Subscription callbacks (detail-card 🔔 + /subscriptions ❌).
     app.add_handler(CallbackQueryHandler(subscription_add,

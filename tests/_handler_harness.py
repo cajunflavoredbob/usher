@@ -162,6 +162,8 @@ def make_ctx(*, admin_id: int = 999, user_data: Optional[dict] = None,
                            restricted=False))),
         get_my_permissions=AsyncMock(return_value=0),
         discover=AsyncMock(return_value=[]),
+        genres=AsyncMock(return_value=[]),
+        discover_genre=AsyncMock(return_value=[]),
         # Default: id-based requester resolution is "unavailable" so handler
         # tests exercise the username fallback unless they stub these.
         get_request=AsyncMock(side_effect=RuntimeError("not stubbed")),
