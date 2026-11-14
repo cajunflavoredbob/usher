@@ -926,6 +926,7 @@ async def _submit_ticket_inner(
                                 "label": label,
                                 "ticket_id": created.id,
                                 "ticket_url": created.url,
+                                "before_fingerprint": result.before,
                             }
                             if media["type"] == "movie":
                                 kwargs["radarr_movie_id"] = poll_info.get("movie_id")

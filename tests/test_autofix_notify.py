@@ -160,7 +160,7 @@ async def test_complete_marks_before_notifying(monkeypatch):
         return True, ""
     fix.is_complete = is_complete  # type: ignore[method-assign]
 
-    async def fake_notify(_ctx, fx, extra=""):
+    async def fake_notify(_ctx, fx, extra="", **_kw):
         events.append("notify")
     monkeypatch.setattr(autofix_poll, "_notify_complete", fake_notify)
 
@@ -199,7 +199,7 @@ async def test_failed_mark_suppresses_completion_dm(monkeypatch):
         return True, ""
     fix.is_complete = is_complete  # type: ignore[method-assign]
 
-    async def fake_notify(_ctx, fx, extra=""):
+    async def fake_notify(_ctx, fx, extra="", **_kw):
         notified.append(fx.id)
     monkeypatch.setattr(autofix_poll, "_notify_complete", fake_notify)
 

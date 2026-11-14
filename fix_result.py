@@ -10,6 +10,7 @@ Status:
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Literal, Optional
 
@@ -22,6 +23,13 @@ class FixResult:
     message: str
     steps_done: list[str] = field(default_factory=list)
     poll_info: Optional[dict] = None
+    # What the file looked like before the Fix deleted it (empty when the
+    # read failed or there was no file); stored on the pending fix row.
+    before: "ReleaseFingerprint" = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.before is None:
+            self.before = ReleaseFingerprint()
 
     @property
     def ok(self) -> bool:
@@ -35,15 +43,17 @@ class FixResult:
 
     @classmethod
     def success(cls, message: str, steps_done: list[str],
-                poll_info: Optional[dict] = None) -> "FixResult":
+                poll_info: Optional[dict] = None,
+                before: "Optional[ReleaseFingerprint]" = None) -> "FixResult":
         return cls(status="ok", message=message, steps_done=list(steps_done),
-                   poll_info=poll_info)
+                   poll_info=poll_info, before=before)
 
     @classmethod
     def partial(cls, message: str, steps_done: list[str],
-                poll_info: Optional[dict] = None) -> "FixResult":
+                poll_info: Optional[dict] = None,
+                before: "Optional[ReleaseFingerprint]" = None) -> "FixResult":
         return cls(status="partial", message=message, steps_done=list(steps_done),
-                   poll_info=poll_info)
+                   poll_info=poll_info, before=before)
 
     @classmethod
     def failed(cls, message: str, steps_done: Optional[list[str]] = None) -> "FixResult":
@@ -115,3 +125,113 @@ def find_grab_for_import(records: list[dict]) -> Optional[dict]:
          if rec.get("eventType") == "grabbed" and rec.get("downloadId") == download_id),
         None,
     )
+
+
+@dataclass(frozen=True)
+class ReleaseFingerprint:
+    """What is known about one release: release name (the file's scene name,
+    or the grab's source title), release group, quality name, size in bytes,
+    and the grab's downloadId. Every field is optional.
+
+    `download_id` only records which grab was found; it is never compared
+    (usenet download ids are new on every grab).
+    """
+    release_name: Optional[str] = None
+    group: Optional[str] = None
+    quality: Optional[str] = None
+    size: Optional[int] = None
+    download_id: Optional[str] = None
+
+    def to_json(self) -> str:
+        """JSON for the pending fix row; "" when nothing is known."""
+        data = {k: v for k, v in (
+            ("release_name", self.release_name), ("group", self.group),
+            ("quality", self.quality), ("size", self.size),
+            ("download_id", self.download_id)) if v is not None}
+        return json.dumps(data) if data else ""
+
+    @classmethod
+    def from_json(cls, raw: Optional[str]) -> "ReleaseFingerprint":
+        """Parse a stored value; "", None and anything unreadable give the
+        empty fingerprint (an old row, or one that failed to read)."""
+        if not raw:
+            return cls()
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            return cls()
+        if not isinstance(data, dict):
+            return cls()
+        size = data.get("size")
+        return cls(
+            release_name=_clean_str(data.get("release_name")),
+            group=_clean_str(data.get("group")),
+            quality=_clean_str(data.get("quality")),
+            size=_clean_size(size),
+            download_id=_clean_str(data.get("download_id")),
+        )
+
+    @property
+    def known(self) -> bool:
+        return any((self.release_name, self.group, self.quality, self.size))
+
+
+def _clean_size(value) -> Optional[int]:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def _clean_str(value) -> Optional[str]:
+    return value.strip() or None if isinstance(value, str) else None
+
+
+def build_fingerprint(file_record: Optional[dict],
+                      history: Optional[list]) -> ReleaseFingerprint:
+    """Fingerprint of the file on disk from the arr's file record and the
+    item's newest-first history. The grab is found as Mark Failed finds it
+    (find_grab_for_import); its source title and group stand in for fields
+    the file record lacks."""
+    file_record = file_record if isinstance(file_record, dict) else {}
+    grab = find_grab_for_import(history or [])
+    grab_data = grab.get("data") if grab else None
+    grab_data = grab_data if isinstance(grab_data, dict) else {}
+
+    def quality_name(rec) -> Optional[str]:
+        q = rec.get("quality") if isinstance(rec, dict) else None
+        q = q.get("quality") if isinstance(q, dict) else None
+        return _clean_str(q.get("name")) if isinstance(q, dict) else None
+
+    size = file_record.get("size")
+    return ReleaseFingerprint(
+        release_name=(_clean_str(file_record.get("sceneName"))
+                      or (_clean_str(grab.get("sourceTitle")) if grab else None)),
+        group=(_clean_str(file_record.get("releaseGroup"))
+               or _clean_str(grab_data.get("releaseGroup"))),
+        quality=quality_name(file_record) or (quality_name(grab) if grab else None),
+        size=_clean_size(size),
+        download_id=_clean_str(grab.get("downloadId")) if grab else None,
+    )
+
+
+def compare_fingerprints(before: ReleaseFingerprint,
+                         after: ReleaseFingerprint) -> str:
+    """"same", "different" or "unknown" for a release and its replacement.
+
+    same when both release names are known and equal ignoring case; else
+    same when group, quality and size are known on both sides and all
+    equal; different when any field known on both sides differs; unknown
+    otherwise. The downloadId is never compared.
+    """
+    def eq(a, b) -> bool:
+        return a.casefold() == b.casefold() if isinstance(a, str) else a == b
+
+    pairs = [(before.release_name, after.release_name),
+             (before.group, after.group),
+             (before.quality, after.quality),
+             (before.size, after.size)]
+    if pairs[0][0] and pairs[0][1] and eq(*pairs[0]):
+        return "same"
+    if all(a and b for a, b in pairs[1:]) and all(eq(a, b) for a, b in pairs[1:]):
+        return "same"
+    if any(a and b and not eq(a, b) for a, b in pairs):
+        return "different"
+    return "unknown"

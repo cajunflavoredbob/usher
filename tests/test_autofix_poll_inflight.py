@@ -56,7 +56,7 @@ def _make_ctx(fix: PendingAutofix, *,
     # Monkey-patch the bound method on the dataclass instance.
     fix.is_complete = is_complete_slow  # type: ignore[method-assign]
 
-    async def notify_complete(_ctx, fx, extra=""):
+    async def notify_complete(_ctx, fx, extra="", **_kw):
         notified.append(fx.id)
 
     async def notify_timeout(_ctx, fx):

@@ -17,6 +17,7 @@ from typing import Optional
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
+from fix_result import ReleaseFingerprint, compare_fingerprints
 from http_util import NotFoundAPIError, TransientAPIError
 from radarr import RadarrClient
 from sonarr import SonarrClient
@@ -93,8 +94,15 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 done, extra = await fix.is_complete(radarr, sonarr)
                 if done:
                     await store.mark_autofix_status(fix.id, "complete")
-                    await _paint_progress(ctx, store, fix, final="🎉 Replacement downloaded.")
-                    await _notify_complete(ctx, fix, extra)
+                    repeat = await _detect_repeat(fix, radarr, sonarr)
+                    if repeat is not None:
+                        await _paint_progress(
+                            ctx, store, fix,
+                            final=f"🔁 {_repeat_sentence(repeat)}")
+                    else:
+                        await _paint_progress(ctx, store, fix,
+                                              final="🎉 Replacement downloaded.")
+                    await _notify_complete(ctx, fix, extra, repeat=repeat)
                 else:
                     await _paint_progress(ctx, store, fix)
             except NotFoundAPIError:
@@ -108,6 +116,37 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 logger.exception("poll failed for fix %d", fix.id, exc_info=exc)
         finally:
             _inflight.discard(fix.id)
+
+
+async def _detect_repeat(fix, radarr, sonarr) -> Optional[ReleaseFingerprint]:
+    """The replacement's fingerprint when it looks like the same release as
+    the file the Fix deleted, else None. An unknown comparison (nothing was
+    read before, or the read after failed) is not a repeat: it must never
+    block or change a completion."""
+    if not fix.before_fingerprint.known:
+        return None
+    try:
+        if fix.media_type == "movie" and radarr and fix.radarr_movie_id:
+            after = await radarr.read_fingerprint(fix.radarr_movie_id)
+        elif fix.media_type == "tv" and sonarr and fix.sonarr_episode_id:
+            after = await sonarr.read_fingerprint(fix.sonarr_episode_id)
+        else:
+            return None
+    except Exception as exc:
+        logger.warning("repeat check: couldn't read the new file for fix %d: %s",
+                       fix.id, exc)
+        return None
+    if compare_fingerprints(fix.before_fingerprint, after) == "same":
+        return after
+    return None
+
+
+def _repeat_sentence(after: ReleaseFingerprint) -> str:
+    """The repeat line, naming the group and quality when known."""
+    known = [x for x in (after.group, after.quality) if x]
+    named = f" ({html.escape(', '.join(known))})" if known else ""
+    return (f"Replacement looks like the same release{named} "
+            "and probably didn't fix the problem.")
 
 
 async def _paint_progress(ctx: ContextTypes.DEFAULT_TYPE, store: UserStore,
@@ -199,9 +238,15 @@ async def _notify_media_gone(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:
         logger.exception("notify_media_gone send_message failed for fix %d", fix.id, exc_info=exc)
 
 
-async def _notify_complete(ctx: ContextTypes.DEFAULT_TYPE, fix, extra: str = "") -> None:
+async def _notify_complete(ctx: ContextTypes.DEFAULT_TYPE, fix, extra: str = "",
+                           repeat: Optional[ReleaseFingerprint] = None) -> None:
+    if repeat is not None:
+        head = [f"🔁 {_fix_name(fix)} complete: <b>{html.escape(fix.label)}</b> "
+                f"downloaded{extra}.", _repeat_sentence(repeat)]
+    else:
+        head = [f"🎉 {_fix_name(fix)} complete: <b>{html.escape(fix.label)}</b> downloaded{extra}."]
     lines = [
-        f"🎉 {_fix_name(fix)} complete: <b>{html.escape(fix.label)}</b> downloaded{extra}.",
+        *head,
         *_ticket_line(fix),
         "",
         "Did this resolve the problem?",

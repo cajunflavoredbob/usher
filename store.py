@@ -20,7 +20,7 @@ import os
 import sqlite3
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterator, Optional, TypeVar
 
@@ -28,6 +28,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from const import AUTOFIX_TIMEOUT_HOURS
 from former_name import legacy_env
+from fix_result import ReleaseFingerprint
 from fsutil import atomic_write_bytes
 
 logger = logging.getLogger("usher." + __name__)
@@ -122,6 +123,9 @@ class PendingAutofix:
                                         # each progress edit ("" = none)
     action_name: str = ""               # an admin Fix's own name ("Redownload");
                                         # "" = a Reporter's /issue Auto-fix
+    before_fingerprint: ReleaseFingerprint = field(
+        default_factory=ReleaseFingerprint)  # the release the Fix deleted
+                                             # (empty = unknown)
 
     async def is_complete(self, radarr, sonarr) -> tuple[bool, str]:
         """Returns (done, extra_suffix). Polymorphic dispatch over media_type
@@ -302,7 +306,7 @@ class UserStore:
     # schema; 0 = any pre-stamp database (CREATE TABLE IF NOT
     # EXISTS never reconciles an existing old-shape table, and a missing
     # column is a permanent poller kill).
-    SCHEMA_VERSION = 3
+    SCHEMA_VERSION = 4
 
     # Full expected column sets, table -> (column, ADD COLUMN ddl). ALTER
     # TABLE ADD COLUMN needs a default for NOT NULL adds, so nullable/
@@ -336,6 +340,9 @@ class UserStore:
             ("bumped",               "ALTER TABLE pending_autofixes ADD COLUMN bumped INTEGER NOT NULL DEFAULT 0"),
             ("reply_markup",         "ALTER TABLE pending_autofixes ADD COLUMN reply_markup TEXT NOT NULL DEFAULT ''"),
             ("action_name",          "ALTER TABLE pending_autofixes ADD COLUMN action_name TEXT NOT NULL DEFAULT ''"),
+            # Schema 4: the release the Fix deleted, as ReleaseFingerprint
+            # JSON ('' = unknown, which is what every older row reads as).
+            ("before_fingerprint",   "ALTER TABLE pending_autofixes ADD COLUMN before_fingerprint TEXT NOT NULL DEFAULT ''"),
         ],
     }
 
@@ -786,7 +793,10 @@ class UserStore:
         expected_episode_ids: Optional[list[int]] = None,
         message_id: Optional[int] = None,
         action_name: str = "",
+        before_fingerprint: Optional[ReleaseFingerprint] = None,
     ) -> int:
+        fingerprint_json = before_fingerprint.to_json() if before_fingerprint else ""
+
         def _do() -> int:
             with self._conn() as c:
                 cur = c.execute(
@@ -795,14 +805,14 @@ class UserStore:
                         chat_id, user_id, media_type,
                         radarr_movie_id, sonarr_series_id, sonarr_episode_id, sonarr_season,
                         expected_episode_ids, label, issue_id, issue_url,
-                        message_id, action_name, timeout_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', ?))
+                        message_id, action_name, before_fingerprint, timeout_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', ?))
                     """,
                     (
                         chat_id, user_id, media_type,
                         radarr_movie_id, sonarr_series_id, sonarr_episode_id, sonarr_season,
                         json.dumps(expected_episode_ids or []), label, ticket_id, ticket_url,
-                        message_id, action_name, f"+{timeout_hours} hours",
+                        message_id, action_name, fingerprint_json, f"+{timeout_hours} hours",
                     ),
                 )
                 return cur.lastrowid
@@ -818,7 +828,7 @@ class UserStore:
                            sonarr_series_id, sonarr_episode_id, sonarr_season,
                            expected_episode_ids, label, issue_id, issue_url,
                            started_at, timeout_at, message_id, last_progress,
-                           bumped, reply_markup, action_name
+                           bumped, reply_markup, action_name, before_fingerprint
                     FROM pending_autofixes
                     WHERE status = 'pending'
                     ORDER BY id
@@ -847,6 +857,7 @@ class UserStore:
                     bumped=r[16] or 0,
                     reply_markup=r[17] or "",
                     action_name=r[18] or "",
+                    before_fingerprint=ReleaseFingerprint.from_json(r[19]),
                 ))
             except Exception as exc:
                 logger.exception("Skipping corrupt pending_autofix row id=%s", r[0], exc_info=exc)

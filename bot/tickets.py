@@ -616,6 +616,7 @@ async def _enqueue_fix_completion(
         "ticket_id": fix.ticket_id,
         "ticket_url": ticket_url,
         "action_name": action_name,
+        "before_fingerprint": result.before,
     }
     if fix.media["type"] == "movie":
         kwargs["radarr_movie_id"] = poll_info.get("movie_id")

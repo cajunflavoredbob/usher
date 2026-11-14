@@ -7,7 +7,8 @@ from typing import Optional
 
 import httpx
 
-from fix_result import FixResult, find_grab_for_import, parse_queue_records
+from fix_result import (FixResult, ReleaseFingerprint, build_fingerprint,
+                        find_grab_for_import, parse_queue_records)
 from http_util import APIError, execute, json_or_raise
 
 logger = logging.getLogger("usher." + __name__)
@@ -21,6 +22,7 @@ class RadarrMovie:
     title: str
     has_file: bool
     movie_file_id: Optional[int]
+    file: Optional[dict] = None   # the movie's file record, as Radarr sent it
 
 
 class RadarrClient:
@@ -59,6 +61,7 @@ class RadarrClient:
             title=m.get("title", "?"),
             has_file=bool(m.get("hasFile")),
             movie_file_id=mf.get("id"),
+            file=mf or None,
         )
 
     async def delete_movie_file(self, movie_file_id: int) -> None:
@@ -101,6 +104,30 @@ class RadarrClient:
                            _SERVICE, exc.user_message, recheck_exc.user_message)
             return False
 
+    async def _movie_history(self, movie_id: int) -> list:
+        # /history/movie is the per-movie endpoint (bare array, newest
+        # first). The paginated /history endpoint has no singular
+        # `movieId` filter -- Radarr silently ignores unknown params,
+        # which made this query return library-wide history and could
+        # blocklist a different movie's grab.
+        r = await execute(
+            self._client, "GET", "/history/movie", service=_SERVICE,
+            params={"movieId": movie_id},
+        )
+        return json_or_raise(r, service=_SERVICE, what="movie history", expect=list) or []
+
+    async def read_fingerprint(self, movie_id: int) -> ReleaseFingerprint:
+        """Fingerprint of the movie's file now on disk (the poller reads it
+        once a replacement lands). Empty when there is no file; raises
+        APIError when Radarr can't be read."""
+        r = await execute(self._client, "GET", f"/movie/{movie_id}",
+                          service=_SERVICE)
+        movie = json_or_raise(r, service=_SERVICE, what="movie detail")
+        mf = movie.get("movieFile")
+        if not isinstance(mf, dict) or not mf:
+            return ReleaseFingerprint()
+        return build_fingerprint(mf, await self._movie_history(movie_id))
+
     async def _run_movie_workflow(
         self, *, movie: RadarrMovie, blocklist: bool,
     ) -> FixResult:
@@ -113,20 +140,32 @@ class RadarrClient:
         steps: list[str] = []
         poll_info = {"movie_id": movie.id}
 
+        # One history read serves both the before-fingerprint and the
+        # blocklist. A failed read only fails a Mark Failed (below); an
+        # Auto-fix or Redownload carries on with an empty fingerprint.
+        records: Optional[list] = None
+        history_exc: Optional[APIError] = None
+        if blocklist or movie.has_file:
+            try:
+                records = await self._movie_history(movie.id)
+            except APIError as exc:
+                history_exc = exc
+                logger.warning("%s: couldn't read history before the fix: %s",
+                               _SERVICE, exc.user_message)
+        before = ReleaseFingerprint()
+        if movie.has_file and records is not None:
+            try:
+                before = build_fingerprint(movie.file, records)
+            except Exception:
+                logger.warning("%s: couldn't build the release fingerprint",
+                               _SERVICE, exc_info=True)
+
         blocklisted = False
         if blocklist:
             try:
-                # /history/movie is the per-movie endpoint (bare array, newest
-                # first). The paginated /history endpoint has no singular
-                # `movieId` filter -- Radarr silently ignores unknown params,
-                # which made this query return library-wide history and could
-                # blocklist a different movie's grab.
-                r = await execute(
-                    self._client, "GET", "/history/movie", service=_SERVICE,
-                    params={"movieId": movie.id},
-                )
-                records = json_or_raise(r, service=_SERVICE, what="movie history", expect=list) or []
-                grab = find_grab_for_import(records)
+                if history_exc is not None:
+                    raise history_exc
+                grab = find_grab_for_import(records or [])
                 if grab is not None:
                     await execute(self._client, "POST", f"/history/failed/{grab['id']}",
                                   service=_SERVICE)
@@ -148,7 +187,7 @@ class RadarrClient:
                     prefix = "Blocklisted release but " if blocklisted else ""
                     return FixResult.partial(
                         f"{prefix}couldn't delete file: {exc.user_message}",
-                        steps_done=steps, poll_info=poll_info,
+                        steps_done=steps, poll_info=poll_info, before=before,
                     )
 
         try:
@@ -157,7 +196,7 @@ class RadarrClient:
         except APIError as exc:
             return FixResult.partial(
                 f"Cleaned up but couldn't trigger search: {exc.user_message}",
-                steps_done=steps, poll_info=poll_info,
+                steps_done=steps, poll_info=poll_info, before=before,
             )
 
         if blocklist:
@@ -166,7 +205,8 @@ class RadarrClient:
             message = f"{prefix}deleted '{movie.title}' file, and triggered re-search."
         else:
             message = f"Deleted file (if any) and triggered re-search for '{movie.title}'."
-        return FixResult.success(message, steps_done=steps, poll_info=poll_info)
+        return FixResult.success(message, steps_done=steps, poll_info=poll_info,
+                                 before=before)
 
     async def auto_fix(self, tmdb_id: int) -> FixResult:
         """Delete current file (if any) and trigger search."""

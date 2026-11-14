@@ -74,6 +74,9 @@ A Fix that blocklists the current release (when one is found), deletes the file,
 A Redownload the Reporter starts themselves on one episode or movie, allowed by the Admin's allowlist and daily limit.
 _Avoid_: self-fix, re-search
 
+**Repeat**:
+An Auto-fix or Redownload whose replacement looks like the same release as the file it replaced. The bot compares release name, or else group, quality and size; it is a hint, not proof.
+
 ## Requests and notifications
 
 **Request**:

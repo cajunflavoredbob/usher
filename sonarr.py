@@ -7,7 +7,8 @@ from typing import Optional
 
 import httpx
 
-from fix_result import FixResult, find_grab_for_import, parse_queue_records
+from fix_result import (FixResult, ReleaseFingerprint, build_fingerprint,
+                        find_grab_for_import, parse_queue_records)
 from http_util import APIError, execute, json_or_raise
 
 logger = logging.getLogger("usher." + __name__)
@@ -99,6 +100,46 @@ class SonarrClient:
                            _SERVICE, exc.user_message, recheck_exc.user_message)
             return False
 
+    async def _episode_history(self, episode_id: int) -> "tuple[list[dict], Optional[dict]]":
+        """Newest-first history for one episode and the grab behind the
+        newest import. Pages until that grab is found: a churn-heavy episode
+        (repeated imports/upgrades) can push it past the first
+        _HISTORY_PAGE_SIZE records, and silently skipping the blocklist
+        re-grabs the exact release Mark Failed was meant to bury."""
+        grab = None
+        records: list[dict] = []
+        for page in range(1, _HISTORY_MAX_PAGES + 1):
+            r = await execute(
+                self._client, "GET", "/history", service=_SERVICE,
+                params={"episodeId": episode_id, "page": page,
+                        "pageSize": _HISTORY_PAGE_SIZE,
+                        "sortKey": "date", "sortDirection": "descending"},
+            )
+            page_records = json_or_raise(r, service=_SERVICE, what="episode history").get("records") or []
+            records.extend(page_records)
+            grab = find_grab_for_import(records)
+            if grab is not None or len(page_records) < _HISTORY_PAGE_SIZE:
+                break
+        return records, grab
+
+    async def _episode_file(self, episode_file_id: int) -> dict:
+        r = await execute(self._client, "GET", f"/episodefile/{episode_file_id}",
+                          service=_SERVICE)
+        return json_or_raise(r, service=_SERVICE, what="episode file")
+
+    async def read_fingerprint(self, episode_id: int) -> ReleaseFingerprint:
+        """Fingerprint of the episode's file now on disk (the poller reads it
+        once a replacement lands). Empty when there is no file; raises
+        APIError when Sonarr can't be read."""
+        r = await execute(self._client, "GET", f"/episode/{episode_id}",
+                          service=_SERVICE)
+        episode = json_or_raise(r, service=_SERVICE, what="episode detail")
+        file_id = episode.get("episodeFileId") if episode.get("hasFile") else None
+        if not file_id:
+            return ReleaseFingerprint()
+        records, _ = await self._episode_history(episode_id)
+        return build_fingerprint(await self._episode_file(file_id), records)
+
     async def _run_episode_workflow(
         self, *, series: SonarrSeries, match: SonarrEpisode, blocklist: bool,
     ) -> FixResult:
@@ -111,28 +152,33 @@ class SonarrClient:
         steps: list[str] = []
         poll_info = {"series_id": series.id, "episode_id": match.id}
 
+        # One history read serves both the before-fingerprint and the
+        # blocklist. A failed read only fails a Mark Failed (below); an
+        # Auto-fix or Redownload carries on with an empty fingerprint.
+        records: Optional[list] = None
+        grab = None
+        history_exc: Optional[APIError] = None
+        if blocklist or match.has_file:
+            try:
+                records, grab = await self._episode_history(match.id)
+            except APIError as exc:
+                history_exc = exc
+                logger.warning("%s: couldn't read history before the fix: %s",
+                               _SERVICE, exc.user_message)
+        before = ReleaseFingerprint()
+        if match.has_file and match.episode_file_id and records is not None:
+            try:
+                before = build_fingerprint(
+                    await self._episode_file(match.episode_file_id), records)
+            except Exception:
+                logger.warning("%s: couldn't read the release fingerprint",
+                               _SERVICE, exc_info=True)
+
         blocklisted = False
         if blocklist:
             try:
-                # Page until the grab matching the newest import is found: a
-                # churn-heavy episode (repeated imports/upgrades) can push
-                # it past the first _HISTORY_PAGE_SIZE records, and
-                # silently skipping the blocklist re-grabs the exact release
-                # Mark Failed was meant to bury.
-                grab = None
-                records: list[dict] = []
-                for page in range(1, _HISTORY_MAX_PAGES + 1):
-                    r = await execute(
-                        self._client, "GET", "/history", service=_SERVICE,
-                        params={"episodeId": match.id, "page": page,
-                                "pageSize": _HISTORY_PAGE_SIZE,
-                                "sortKey": "date", "sortDirection": "descending"},
-                    )
-                    page_records = json_or_raise(r, service=_SERVICE, what="episode history").get("records") or []
-                    records.extend(page_records)
-                    grab = find_grab_for_import(records)
-                    if grab is not None or len(page_records) < _HISTORY_PAGE_SIZE:
-                        break
+                if history_exc is not None:
+                    raise history_exc
                 if grab is not None:
                     await execute(self._client, "POST", f"/history/failed/{grab['id']}",
                                   service=_SERVICE)
@@ -154,7 +200,7 @@ class SonarrClient:
                     prefix = "Blocklisted release but " if blocklisted else ""
                     return FixResult.partial(
                         f"{prefix}couldn't delete file: {exc.user_message}",
-                        steps_done=steps, poll_info=poll_info,
+                        steps_done=steps, poll_info=poll_info, before=before,
                     )
 
         try:
@@ -163,7 +209,7 @@ class SonarrClient:
         except APIError as exc:
             return FixResult.partial(
                 f"Cleaned up but couldn't trigger search: {exc.user_message}",
-                steps_done=steps, poll_info=poll_info,
+                steps_done=steps, poll_info=poll_info, before=before,
             )
 
         if blocklist:
@@ -178,7 +224,8 @@ class SonarrClient:
                 f"Deleted '{series.title}' S{match.season:02d}E{match.episode:02d} file "
                 "(if any) and triggered re-search."
             )
-        return FixResult.success(message, steps_done=steps, poll_info=poll_info)
+        return FixResult.success(message, steps_done=steps, poll_info=poll_info,
+                                 before=before)
 
     async def _resolve_episode(
         self, tvdb_id: int, season: int, episode: int
