@@ -22,7 +22,7 @@ A Telegram bot and web admin panel that sit in front of a Plex server and its [S
 - **Notification toggles**: in the web admin panel's Telegram tab, the Admin can turn off seven classes of bot DM for everyone: Request updates to Requesters, new-Request notices to the Admin, the failed-download alarm to the Admin, Ticket DMs, availability notices for Subscriptions, Follow pings, and the Digest.
 - **Webhook-driven updates**: Seerr posts to Usher at `/webhook/seerr`, so new comments on a Ticket, resolutions and Request status changes are delivered in Telegram and the close flow stays in sync.
 - **Admin web panel** at `/admin`: first-run setup wizard, settings tabs for Telegram, Seerr, Auto-fix, SABnzbd, Tautulli, Webhook and Account, connection **Test** buttons, encrypted backups, and restore.
-- Works in DMs or any Telegram group the bot is added to with per-user conversation state. The Admin Hub is DM-only.
+- Works in DMs or any Telegram group the bot is added to with per-user conversation state; in a group, only the person a menu was sent to can use its buttons. The Admin Hub is DM-only.
 - The Admin also gets a startup health DM.
 
 ## Commands

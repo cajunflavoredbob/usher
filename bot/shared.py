@@ -503,6 +503,24 @@ def record_btn(app, user_id: int, message) -> None:
         user_entries.pop(0)
 
 
+def record_card_owner(app, owner_id, message) -> None:
+    """Remember who a detail card in a group chat was sent for. Cards stay out
+    of the button history (recording them would evict the live pick list), so
+    the group tap check reads this map instead. Only group cards are kept, and
+    entries older than BTN_TTL_SECONDS are dropped as new ones arrive."""
+    chat_id = getattr(message, "chat_id", None)
+    msg_id = getattr(message, "message_id", None)
+    if (app is None or owner_id is None or msg_id is None
+            or not isinstance(chat_id, int) or chat_id >= 0):
+        return
+    owners: dict = app.bot_data.setdefault("card_owners", {})
+    now = datetime.now(timezone.utc)
+    for key in [k for k, (_, at) in owners.items()
+                if (now - at).total_seconds() > BTN_TTL_SECONDS]:
+        del owners[key]
+    owners[(chat_id, msg_id)] = (owner_id, now)
+
+
 # Relink-resume executors, keyed by the resume kind stashed at each gated
 # surface. Populated at import time by ticket_flow / resolve_flow / tickets so
 # link_flow can dispatch without importing them (avoids import cycles).
@@ -673,6 +691,39 @@ _GATE_EXEMPT_PREFIXES: Final = frozenset({
 })
 
 
+def _is_group_message(message) -> bool:
+    chat = getattr(message, "chat", None)
+    return getattr(chat, "type", None) in ("group", "supergroup")
+
+
+def _group_tap_is_owner(ctx, message, user_id: int) -> bool:
+    """Whether `user_id` is the person a group-chat bot message was sent to.
+    A bot reply carries the message it answers, so a reply to a human's
+    command or text belongs to that human. A message with no such reply
+    (the command was deleted, or the bot sent it unprompted) belongs to
+    whoever has it in their own recorded button history."""
+    replied = getattr(message, "reply_to_message", None)
+    author = getattr(replied, "from_user", None)
+    if author is not None and not getattr(author, "is_bot", False):
+        return author.id == user_id
+    msg_id = getattr(message, "message_id", None)
+    chat_id = getattr(message, "chat_id", None)
+    now = datetime.now(timezone.utc)
+    card = ctx.application.bot_data.get("card_owners", {}).get((chat_id, msg_id))
+    if card is not None and card[0] == user_id:
+        return (now - card[1]).total_seconds() <= BTN_TTL_SECONDS
+    for e in ctx.application.bot_data.get("btn_msgs", {}).get(user_id, []):
+        if e.get("message_id") != msg_id or e.get("chat_id") != chat_id:
+            continue
+        try:
+            sent = datetime.fromisoformat(e["sent_at"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if (now - sent).total_seconds() <= BTN_TTL_SECONDS:
+            return True
+    return False
+
+
 async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """TypeHandler at group=-1. Runs before any callback handler. The gate
     snapshots the per-user button history once at entry, then decides, so a
@@ -684,8 +735,10 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     q = update.callback_query
     if q is None or q.message is None or q.from_user is None:
         return
-    # Callbacks exempt from the gate because their source message is not in
-    # the history or may be old, and the action is safe to run anyway:
+    # In a group the owner check below still applies to these. In a DM,
+    # callbacks are exempt from the history check because their source
+    # message is not in the history or may be old, and the action is safe
+    # to run anyway:
     #  - Dismiss and Notify-me sit on detail cards, which are deliberately NOT
     #    recorded (recording them would evict the live pick list after three
     #    taps and brick the /request flow). Dismiss only deletes the tapped
@@ -703,9 +756,20 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     #    old when tapped and cannot be brought back. The handler checks the
     #    tapped message carries that button, and each Ticket is asked once.
     data = getattr(q, "data", None)
+    user_id = q.from_user.id
+    in_group = _is_group_message(q.message)
+    if in_group and not _group_tap_is_owner(ctx, q.message, user_id):
+        # Another member's tap on a menu sent to someone else: nothing runs
+        # and the message stays as it is. This covers the exempt prefixes
+        # too, since their handlers would otherwise act as the tapper on a
+        # card in someone else's menu.
+        try:
+            await q.answer("This menu isn't yours.", show_alert=False)
+        except telegram.error.TelegramError as exc:
+            logger.debug("callback answer failed", exc_info=exc)
+        raise ApplicationHandlerStop
     if isinstance(data, str) and data.split(":", 1)[0] in _GATE_EXEMPT_PREFIXES:
         return
-    user_id = q.from_user.id
     # Snapshot via list copy so concurrent record_btn calls don't mutate
     # the iterable we're inspecting.
     entries = list(ctx.application.bot_data.get("btn_msgs", {}).get(user_id, []))

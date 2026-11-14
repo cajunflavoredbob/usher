@@ -22,6 +22,7 @@ from seerr import (
 
 from bot.callback_prefixes import RQ_INFO_DISMISS, SUBSCRIPTION_ADD
 from bot.follows import follow_button, follow_state
+from bot.shared import record_card_owner
 from const import DETAIL_OVERVIEW_MAX_CHARS
 
 logger = logging.getLogger("usher")
@@ -77,9 +78,12 @@ def card_keyboard(r: MediaResult,
     return InlineKeyboardMarkup(rows)
 
 
-async def send_detail_card(ctx, chat_id: int, r: MediaResult) -> None:
+async def send_detail_card(ctx, chat_id: int, r: MediaResult,
+                           owner_id: "int | None" = None) -> None:
     """Send the card as a photo when a poster exists, text otherwise (a dead
-    poster URL degrades to the text card, never a dead tap)."""
+    poster URL degrades to the text card, never a dead tap). `owner_id` is
+    the user the card is for: in a group the button gate only lets that user
+    tap it (cards are not in the button history)."""
     caption = build_card_caption(r)
     following = None
     if r.media_type == "tv":
@@ -87,21 +91,23 @@ async def send_detail_card(ctx, chat_id: int, r: MediaResult) -> None:
     kb = card_keyboard(r, following)
     if r.poster_path:
         try:
-            await ctx.bot.send_photo(
+            sent = await ctx.bot.send_photo(
                 chat_id=chat_id,
                 photo=f"{TMDB_POSTER_BASE}{r.poster_path}",
                 caption=caption,
                 parse_mode="HTML",
                 reply_markup=kb,
             )
+            record_card_owner(ctx.application, owner_id, sent)
             return
         except Exception:
             logger.debug("poster send failed; falling back to text card",
                          exc_info=True)
-    await ctx.bot.send_message(
+    sent = await ctx.bot.send_message(
         chat_id=chat_id,
         text=caption,
         parse_mode="HTML",
         reply_markup=kb,
         disable_web_page_preview=True,
     )
+    record_card_owner(ctx.application, owner_id, sent)

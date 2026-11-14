@@ -238,4 +238,5 @@ async def digest_info(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             chat_id=update.effective_chat.id,
             text="Couldn't load that title right now.")
         return
-    await send_detail_card(ctx, update.effective_chat.id, r)
+    await send_detail_card(ctx, update.effective_chat.id, r,
+                           update.effective_user.id)

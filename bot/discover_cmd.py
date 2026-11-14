@@ -352,4 +352,5 @@ async def dv_info(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await q.answer()
         return
     await q.answer()
-    await send_detail_card(ctx, update.effective_chat.id, r)
+    await send_detail_card(ctx, update.effective_chat.id, r,
+                           update.effective_user.id)

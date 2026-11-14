@@ -575,7 +575,8 @@ async def request_info(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await q.answer()
         return RQ_PICK_MEDIA
     await q.answer()
-    await send_detail_card(ctx, update.effective_chat.id, r)
+    await send_detail_card(ctx, update.effective_chat.id, r,
+                           update.effective_user.id)
     return RQ_PICK_MEDIA
 
 
