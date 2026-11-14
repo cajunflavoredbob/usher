@@ -1047,6 +1047,21 @@ async def cmd_uninvite(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         labels=_expiry_labels(matches, await store.list_share_expiries())))
 
 
+async def remove_share_and_forget(store: UserStore, plex: PlexClient,
+                                  token: str, share_id: int) -> bool:
+    """The one Share removal: revoke the Share (or cancel a pending Invite)
+    and drop its Expiry row. Returns True when Plex already had no such Share
+    (the row is dropped then too); any other failure is raised with the row
+    kept. Used by /uninvite, the Share view and the Expiry job."""
+    try:
+        await plex.remove_share(token, share_id)
+    except NotFoundAPIError:
+        await store.clear_share_expiry(share_id)
+        return True
+    await store.clear_share_expiry(share_id)
+    return False
+
+
 async def uninvite_go(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
     if update.effective_user.id != ctx.bot_data.get("admin_id"):
@@ -1085,20 +1100,19 @@ async def _uninvite_go_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         return
     plex: PlexClient = ctx.bot_data["plex"]
     try:
-        await plex.remove_share(link.plex_token, share_id)
-    except NotFoundAPIError:
-        # Already gone (removed elsewhere, or a racing duplicate tap):
-        # the desired end state holds, so report it as done.
-        await store.clear_share_expiry(share_id)
-        await end_flow(update, ctx, "✅ Already removed.", ADMIN_HUB)
-        return
+        already_gone = await remove_share_and_forget(
+            store, plex, link.plex_token, share_id)
     except Exception as exc:
         logger.exception("share removal failed")
         await end_flow(update, ctx,
                        f"Couldn't remove the share. {user_friendly_message(exc)}",
                        ADMIN_HUB, q.data)
         return
-    await store.clear_share_expiry(share_id)
+    if already_gone:
+        # Already gone (removed elsewhere, or a racing duplicate tap):
+        # the desired end state holds, so report it as done.
+        await end_flow(update, ctx, "✅ Already removed.", ADMIN_HUB)
+        return
     await end_flow(update, ctx, "✅ Invite cancelled." if was_pending
                    else "✅ Access removed.", ADMIN_HUB)
 

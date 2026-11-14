@@ -88,6 +88,10 @@ from bot.callback_prefixes import (
     RQ_ADMIN_RETRY,
     LINK_HELP,
     SHARE_EXPIRY,
+    SHARE_EXTEND,
+    SHARE_LET_END,
+    SHARE_REMOVE_NOW,
+    SHARE_RETRY,
     SHARE_REMOVE,
     SHARE_MATCHES,
     SHARE_VIEW,
@@ -126,6 +130,9 @@ from bot.invite_flow import (_INV_KEYS, _invite_conversation,
                              share_matches, share_remove,
                              share_expiry, share_view, uninvite_cancel,
                              uninvite_go)
+from bot.share_expiry_job import (SHARE_EXPIRY_FIRST_DELAY_S,
+                                  SHARE_EXPIRY_INTERVAL_S,
+                                  share_expiry_action, share_expiry_job)
 from bot.digest import (DIGEST_FIRST_DELAY_S, DIGEST_INTERVAL_S,
                         account_notices, digest_info, digest_job,
                         notice_toggle)
@@ -657,6 +664,10 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
                                          pattern=fr"^{SHARE_VIEW}:\d+$"))
     app.add_handler(CallbackQueryHandler(share_expiry,
                                          pattern=fr"^{SHARE_EXPIRY}:\d+(:\d+)?$"))
+    app.add_handler(CallbackQueryHandler(
+        share_expiry_action,
+        pattern=(fr"^({SHARE_EXTEND}|{SHARE_LET_END}|{SHARE_REMOVE_NOW}"
+                 fr"|{SHARE_RETRY}):\d+$")))
     app.add_handler(CallbackQueryHandler(share_remove,
                                          pattern=fr"^{SHARE_REMOVE}:\d+$"))
     app.add_handler(CallbackQueryHandler(share_matches,
@@ -721,6 +732,12 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
         interval=DIGEST_INTERVAL_S,
         first=DIGEST_FIRST_DELAY_S,
         name="digest",
+    )
+    app.job_queue.run_repeating(
+        share_expiry_job,
+        interval=SHARE_EXPIRY_INTERVAL_S,
+        first=SHARE_EXPIRY_FIRST_DELAY_S,
+        name="share_expiry",
     )
     app.job_queue.run_repeating(
         auto_retry_job,

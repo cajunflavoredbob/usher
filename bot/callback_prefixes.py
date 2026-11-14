@@ -97,6 +97,10 @@ SHARE_VIEW: Final = "shv"             # shv:<share_id> one Share's view
 SHARE_REMOVE: Final = "shrm"          # shrm:<share_id> Remove -> confirm card
 INV_EXPIRY: Final = "invex"           # invex:<version>:<days> pick an Expiry (0 = never)
 SHARE_EXPIRY: Final = "shex"          # shex:<share_id>[:<days>] Set expiry picker / choice (0 = clear)
+SHARE_EXTEND: Final = "shext"         # shext:<share_id> Extend 30 days (expiry reminder)
+SHARE_LET_END: Final = "shend"        # shend:<share_id> Let it end (expiry reminder)
+SHARE_REMOVE_NOW: Final = "shnow"     # shnow:<share_id> Remove now (expiry reminder)
+SHARE_RETRY: Final = "shrty"          # shrty:<share_id> Retry a failed expiry removal
 SHARE_MATCHES: Final = "shq"          # shq:<page> Prev/Next of typed /uninvite
                                       # matches (search text in user_data)
 

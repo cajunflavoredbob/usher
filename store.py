@@ -1204,6 +1204,33 @@ class UserStore:
                     "ORDER BY expires_at, share_id").fetchall()
         return [self._share_expiry_from_row(r) for r in await self._run(_do)]
 
+    async def mark_share_expiry_reminded(self, share_id: int, *,
+                                         admin: bool = False,
+                                         holder: bool = False) -> None:
+        """Record that the Admin and/or the holder got their reminder."""
+        def _do() -> None:
+            with self._conn() as c:
+                if admin:
+                    c.execute("UPDATE share_expiries SET admin_reminded = 1 "
+                              "WHERE share_id = ?", (share_id,))
+                if holder:
+                    c.execute("UPDATE share_expiries SET holder_reminded = 1 "
+                              "WHERE share_id = ?", (share_id,))
+        await self._run(_do)
+
+    async def record_share_removal_failure(self, share_id: int, at: str,
+                                           error: str, alerted: bool) -> None:
+        """A removal attempt failed at `at` (UTC text). The row stays;
+        `alerted` also stamps the Admin alert time."""
+        def _do() -> None:
+            with self._conn() as c:
+                c.execute(
+                    "UPDATE share_expiries SET last_attempt_at = ?, "
+                    "last_error = ?, last_alerted_at = CASE WHEN ? THEN ? "
+                    "ELSE last_alerted_at END WHERE share_id = ?",
+                    (at, error, 1 if alerted else 0, at, share_id))
+        await self._run(_do)
+
     async def clear_share_expiry(self, share_id: int) -> bool:
         def _do() -> bool:
             with self._conn() as c:
