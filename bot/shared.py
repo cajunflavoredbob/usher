@@ -1019,7 +1019,8 @@ _ISSUE_KEYS_KEPT_ON_FORCE_END: Final = ("hub_origin", "submitting_ticket",
 # can never collide with a fresh flow's counter restarting at 1.
 RQ_KEYS: Final = ("rq_media", "rq_search_results",
                   "rq_results", "rq_screen", "rq_perms", "rq_is4k",
-                  "rq_seasons", "rq_selected", "rq_submitting", "rq_for")
+                  "rq_seasons", "rq_selected", "rq_submitting", "rq_for",
+                  "rq_confirm_for")
 # The one a force-end leaves alone: it belongs to the in-flight submit, which
 # pops it itself.
 _RQ_KEYS_KEPT_ON_FORCE_END: Final = ("rq_submitting",)

@@ -138,11 +138,16 @@ async def test_typed_request_forgets_an_earlier_pick():
 
 # --- submit ------------------------------------------------------------------
 
+_PERSON_1 = {"seerr_id": 21, "name": "Person 1", "telegram_id": 1001}
+
+
 def _confirm_ctx(**kwargs):
+    # The state the confirm screen leaves: its snapshot names Person 1.
     ctx = _admin_ctx(user_data={
         "rq_media": {"type": "movie", "tmdb_id": 1, "title": "New Movie",
                      "year": "2026"},
-        "rq_for": {"seerr_id": 21, "name": "Person 1", "telegram_id": 1001},
+        "rq_for": dict(_PERSON_1),
+        "rq_confirm_for": {"gen": 0, "version": 1, "target": dict(_PERSON_1)},
         "rq_search_version": 1,
     }, **kwargs)
     return ctx
@@ -164,12 +169,38 @@ async def test_submit_carries_picked_users_seerr_id():
 async def test_submit_without_pick_sends_no_user_id():
     ctx = _admin_ctx(user_data={
         "rq_media": {"type": "movie", "tmdb_id": 1, "title": "M", "year": ""},
+        "rq_confirm_for": {"gen": 0, "version": 1, "target": None},
         "rq_search_version": 1})
     ctx.bot_data["seerr"].create_request.return_value = CreatedRequest(
         id=5, status=REQUEST_STATUS_APPROVED)
     upd = make_update(callback_data="rqgo:1", user_id=ADMIN_ID)
     await request_submit(upd, ctx)
     assert ctx.bot_data["seerr"].create_request.call_args.kwargs["user_id"] is None
+
+
+@pytest.mark.parametrize("snapshot", [
+    None,  # no confirm snapshot at all
+    {"gen": 0, "version": 0, "target": None},  # an older confirm's
+])
+async def test_admin_submit_without_this_confirms_snapshot_files_nothing(snapshot):
+    ctx = _confirm_ctx()
+    ctx.user_data.pop("rq_confirm_for")
+    if snapshot is not None:
+        ctx.user_data["rq_confirm_for"] = snapshot
+    upd = make_update(callback_data="rqgo:1", user_id=ADMIN_ID)
+    state = await request_submit(upd, ctx)
+    assert state == ConversationHandler.END
+    ctx.bot_data["seerr"].create_request.assert_not_called()
+    assert "Lost conversation state" in upd.callback_query.edits[-1]["text"]
+
+
+async def test_admin_submit_from_another_generation_files_nothing():
+    ctx = _confirm_ctx()
+    ctx.user_data["flow_gen"] = 3  # flows were reset since the confirm
+    upd = make_update(callback_data="rqgo:1", user_id=ADMIN_ID)
+    await request_submit(upd, ctx)
+    ctx.bot_data["seerr"].create_request.assert_not_called()
+    assert "The person you picked was cleared" in upd.callback_query.edits[-1]["text"]
 
 
 async def test_behalf_progress_card_is_owned_by_the_picked_user():

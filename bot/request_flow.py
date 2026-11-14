@@ -142,6 +142,12 @@ logger = logging.getLogger("usher")
 # fresh flow's counter restarting at 1.
 _RQ_KEYS = RQ_KEYS
 
+# The confirm screen's snapshot of whom it names (see _show_confirm). One of
+# RQ_KEYS, so ending the flow clears it; entry points never pop it themselves.
+_CONFIRM_KEY = "rq_confirm_for"
+_TARGET_CLEARED_TEXT = ("The person you picked was cleared. Start Request for "
+                        "someone again.")
+
 # Availability annotations for the search list. UNKNOWN/DELETED get none:
 # they're plainly requestable.
 _STATUS_NOTES = {
@@ -502,7 +508,6 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     """Entry via the /issue dead-end button. The tapped media is already
     known, so this drops straight into the season picker / confirm."""
     q = update.callback_query
-    ctx.user_data.pop("rq_for", None)
     # Ack first: the gate below can run a slow Seerr login, and a late
     # answer to an expired tap raises out of the handler.
     await q.answer()
@@ -563,6 +568,9 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
             if user_in_conversation(ctx, update, "request"):
                 return None
             return ConversationHandler.END
+    # The jump files for the tapper. Only a tap that goes ahead forgets a
+    # Request for someone pick: a refused one leaves the open flow's pick.
+    ctx.user_data.pop("rq_for", None)
     set_hub_origin(ctx, hub)
     # Another flow may still be parked in a pick state, an open /request
     # included; end everything so no stale flow can fire a timeout notice
@@ -1104,6 +1112,13 @@ async def _quota_line(ctx: ContextTypes.DEFAULT_TYPE, tg_id: int,
 
 async def _show_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
+    # The person this confirm names, taken before any await and kept under a
+    # key of its own: the submit files with this snapshot only, so a later
+    # entry point clearing rq_for cannot turn it into the Admin's own Request.
+    target = _behalf_target(ctx)
+    ctx.user_data[_CONFIRM_KEY] = {
+        "gen": flow_step_gen(ctx), "version": _current_version(ctx),
+        "target": dict(target) if target is not None else None}
     await send_typing(update, ctx)  # quota preview is two network calls
     media = ctx.user_data["rq_media"]
     label = _media_label(media)
@@ -1116,7 +1131,6 @@ async def _show_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     version = _current_version(ctx)
 
     text = f"Request <b>{html.escape(label)}</b>?"
-    target = _behalf_target(ctx)
     if target is not None:
         text = (f"Request <b>{html.escape(label)}</b> for "
                 f"<b>{html.escape(target['name'])}</b>?")
@@ -1172,13 +1186,18 @@ async def request_submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     gen = flow_step_gen(ctx)
     if ctx.user_data.get("rq_submitting") == gen:
         return ConversationHandler.END
+    # Read before any await: the person this confirm named.
+    confirm = ctx.user_data.get(_CONFIRM_KEY)
+    if not isinstance(confirm, dict) or confirm.get("version") != version:
+        confirm = None
     ctx.user_data["rq_submitting"] = gen
     # Remembered (not just parsed) so a relink-resume re-submits at the tier
     # the user actually chose.
     is4k = prefix == RQ_GO_4K
     ctx.user_data["rq_is4k"] = is4k
     try:
-        return await _submit_request(update, ctx, is4k=is4k)
+        return await _submit_request(update, ctx, is4k=is4k, confirm=confirm,
+                                     gen=gen)
     finally:
         # Only our own marker: a newer flow's submit may have replaced it.
         if ctx.user_data.get("rq_submitting") == gen:
@@ -1186,7 +1205,10 @@ async def request_submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
-                          *, is4k: bool = False) -> int:
+                          *, is4k: bool = False, confirm: Optional[dict],
+                          gen: int) -> int:
+    """`confirm` is the tapped confirm's snapshot (None when there is none for
+    its version) and `gen` the flow generation the submit started under."""
     q = update.callback_query
     hub = hub_origin(ctx)
     media = ctx.user_data.get("rq_media")
@@ -1201,6 +1223,27 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                        hub,
                        typed_text="Your /link is incomplete. /link then /request to start over.")
         return ConversationHandler.END
+    # Only the Admin can request for someone, so only the Admin's submit needs
+    # the snapshot. Without one nothing tells whom the confirm named: file
+    # nothing rather than the Admin's own Request.
+    target = None
+    if is_admin:
+        if confirm is None:
+            await end_flow(update, ctx, "Lost conversation state.", hub,
+                           REQUESTS_NEW,
+                           typed_text="Lost conversation state. /request to start over.")
+            return ConversationHandler.END
+        target = confirm.get("target")
+        if target is not None and confirm.get("gen") != gen:
+            # The user's flows were reset since the confirm was drawn (a
+            # command or a Hub button, maybe in another chat): the pick is no
+            # longer this flow's to file.
+            await end_flow(update, ctx, _TARGET_CLEARED_TEXT, hub,
+                           REQUESTS_BEHALF,
+                           typed_text=("The person you picked was cleared. "
+                                       "/request, then Request for someone "
+                                       "again."))
+            return ConversationHandler.END
 
     seasons = None
     if media["type"] == "tv":
@@ -1227,7 +1270,6 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     await send_typing(update, ctx)
 
     seerr: SeerrClient = ctx.bot_data["seerr"]
-    target = _behalf_target(ctx) if is_admin else None
     who = target["name"] if target else None
     try:
         created = await seerr.create_request(
