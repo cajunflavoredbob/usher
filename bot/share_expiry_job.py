@@ -284,7 +284,7 @@ async def _confirm_removal(q, ctx, store: UserStore, row: ShareExpiry) -> None:
         await store.clear_share_expiry(sid)
         await edit_or_send(q, "✅ Already removed.")
         return
-    text, flag = removal_prompt(share)
+    text, _flag = removal_prompt(share)
     await edit_or_send(
         q, text, parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([[

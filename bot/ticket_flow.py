@@ -101,9 +101,6 @@ def _tickets_origin(ctx) -> Optional[str]:
     return TICKETS_HUB if hub_origin(ctx) == TICKETS_HUB else None
 
 
-_ISSUE_KEYS = ISSUE_KEYS
-
-
 def _current_version(ctx) -> int:
     return ctx.user_data.get("search_version") or 0
 
@@ -142,7 +139,7 @@ async def _is_stale(update, ctx, version: Optional[int]) -> bool:
 
 
 def _clear_issue_state(ctx, *, keep_resume: bool = False) -> None:
-    for key in _ISSUE_KEYS:
+    for key in ISSUE_KEYS:
         ctx.user_data.pop(key, None)
     # A resume marker for this flow's own submit is stale once the flow ends;
     # markers other flows left (a Request, a Ticket reply) stay. A NEW report
@@ -488,14 +485,19 @@ async def ticket_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
             )])
         # Not in the library is exactly what /request exists for: offer the
         # jump. The tap enters the request conversation (its entry point
-        # force-ends this one); the title travels via rq_jump_media so the
-        # request flow doesn't re-fetch what we already know.
-        if selected is not None:
+        # force-ends this one). While the parent re-search keeps this
+        # conversation open, the title travels via rq_jump_media so the
+        # request flow doesn't re-fetch what we already know; when this
+        # message ends the conversation no stash is left behind, because it
+        # would make a later /trending tap on this title skip the
+        # availability check, and the jump looks the title up instead.
+        if selected is not None and parent:
             ctx.user_data["rq_jump_media"] = {
                 "tmdb_id": tmdb_id,
                 "title": selected.title,
                 "year": selected.year,
             }
+        if selected is not None:
             rows.append([InlineKeyboardButton(
                 "📥 Request it instead",
                 callback_data=f"{RQ_FROM_TICKET}:{media_type}:{tmdb_id}",
@@ -512,11 +514,6 @@ async def ticket_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
         if rows:
             # Keep the re-search / request buttons live in the gate's history.
             record_btn(ctx.application, update.effective_user.id, sent)
-        if not parent:
-            # END: a stash left behind would make a later /trending tap on
-            # this title skip the availability check. The jump falls back to
-            # a title lookup.
-            ctx.user_data.pop("rq_jump_media", None)
         # END unless the parent re-search (which needs this conversation's
         # state) is offered. The "Request it instead" button is a request-
         # conversation ENTRY POINT, so it works after END too; staying

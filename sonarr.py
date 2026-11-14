@@ -45,6 +45,9 @@ def episode_code(e: "SonarrEpisode") -> str:
     return f"S{e.season:02d}E{e.episode:02d}"
 
 
+PREVIEW_UNKNOWN = "Sonarr: couldn't check which episode this is."
+
+
 def _sibling_note(siblings: "list[SonarrEpisode]") -> str:
     """User text for the episodes a deleted file also held, or ''."""
     if not siblings:
@@ -172,7 +175,8 @@ class SonarrClient:
         self, *, series: SonarrSeries, match: SonarrEpisode, blocklist: bool,
         siblings: "Optional[list[SonarrEpisode]]" = None,
     ) -> FixResult:
-        """Optional blocklist + delete + search workflow for a single episode.
+        """Optional blocklist + delete + search workflow for an episode and any
+        siblings that share its file.
         auto_fix_episode calls with blocklist=False; mark_failed_episode with
         blocklist=True. Status semantics match v0.11.3: ok if all steps
         succeed; partial if an early step succeeded but search failed;
@@ -257,12 +261,12 @@ class SonarrClient:
             prefix = ("Blocklisted current release, " if blocklisted
                       else "Couldn't identify the release, so it wasn't blocklisted; ")
             message = (
-                f"{prefix}deleted '{series.title}' S{match.season:02d}E{match.episode:02d}{title} "
+                f"{prefix}deleted '{series.title}' {episode_code(match)}{title} "
                 f"file, and triggered re-search.{also}"
             )
         else:
             message = (
-                f"Deleted '{series.title}' S{match.season:02d}E{match.episode:02d}{title} file "
+                f"Deleted '{series.title}' {episode_code(match)}{title} file "
                 f"(if any) and triggered re-search.{also}"
             )
         return FixResult.success(message, steps_done=steps, poll_info=poll_info,
@@ -318,7 +322,7 @@ class SonarrClient:
         except Exception:
             logger.warning("%s: couldn't preview the episode", _SERVICE,
                            exc_info=True)
-            return "Sonarr: couldn't check which episode this is."
+            return PREVIEW_UNKNOWN
         if err is not None:
             # Some messages already name Sonarr ("Sonarr lookup failed ...").
             return (err.message if err.message.startswith("Sonarr")

@@ -425,7 +425,10 @@ async def edit_or_send(q, text: str, **kwargs):
 
 def in_group_chat(update) -> bool:
     """True when the update comes from a group or supergroup chat."""
-    chat = getattr(update, "effective_chat", None)
+    return _is_group_chat(getattr(update, "effective_chat", None))
+
+
+def _is_group_chat(chat) -> bool:
     return getattr(chat, "type", None) in ("group", "supergroup")
 
 
@@ -751,8 +754,7 @@ def _exempt_buttons_only(message) -> Optional[InlineKeyboardMarkup]:
 
 
 def _is_group_message(message) -> bool:
-    chat = getattr(message, "chat", None)
-    return getattr(chat, "type", None) in ("group", "supergroup")
+    return _is_group_chat(getattr(message, "chat", None))
 
 
 def _group_tap_is_owner(ctx, message, user_id: int) -> bool:

@@ -547,8 +547,9 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         await end_flow(update, ctx, "Couldn't parse selection.", hub, REQUESTS_NEW,
                        typed_text="Couldn't parse selection. /request to start over.")
         return ConversationHandler.END
-    # Title travels via user_data (stashed by ticket_flow when it renders the
-    # button); fall back to a TMDb lookup if it got clobbered.
+    # Title travels via user_data (stashed by ticket_flow only while its
+    # parent re-search keeps the /issue conversation open); otherwise, or if
+    # it got clobbered, fall back to a TMDb lookup.
     title = stash.get("title")
     year = stash.get("year", "")
     if not title or stash.get("tmdb_id") != tmdb_id:
@@ -1282,9 +1283,9 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     sent = await edit_or_send(q, text, parse_mode="HTML",
                               reply_markup=end_markup(REQUESTS_HUB))
     record_btn(ctx.application, update.effective_user.id, sent)
-    # Only when requesting on behalf of someone: the card lives in the
-    # Admin's chat, but its row is owned by the picked user the Request was
-    # made for, since webhook events and cancels match on that owner.
+    # The card lives in this chat, but its row is owned by the picked user
+    # when requesting on behalf of someone (webhook events and cancels match
+    # on that owner), otherwise by the requester.
     await _send_progress_card(
         ctx, chat_id=update.effective_chat.id,
         owner_id=((target or {}).get("telegram_id")

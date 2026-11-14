@@ -39,7 +39,7 @@ from fix_result import FixResult
 from http_util import user_friendly_message
 from radarr import RadarrClient
 from seerr import ISSUE_STATUS_RESOLVED, PlexTokenInvalidError, SeerrClient
-from sonarr import SonarrClient
+from sonarr import PREVIEW_UNKNOWN, SonarrClient
 from store import UserStore
 
 from bot.ask_admin import mark_failed_button
@@ -532,11 +532,11 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 target = await describe_fix_target(
                     fix_ctx.media, fix_ctx.season, fix_ctx.episode, sonarr)
             elif err is not None and err.startswith(_FETCH_FAILED):
-                target = _PREVIEW_UNKNOWN
+                target = PREVIEW_UNKNOWN
         except Exception:
             logger.warning("couldn't preview the Fix target for #%d",
                            ticket_id, exc_info=True)
-            target = _PREVIEW_UNKNOWN
+            target = PREVIEW_UNKNOWN
     await q.edit_message_text(
         f"🔧 Fix #{ticket_id} - how?\n"
         + (f"{target}\n" if target else "")
@@ -584,8 +584,7 @@ async def resolve_fix_context(
     On any unrecoverable failure returns (None, user_facing_error_string).
     Best-effort lookups (title, tvdb_id) don't fail the whole flow.
     preview: the caller only needs the media ids to describe the target, so
-    the title lookup (label unused) and, for a movie, the TV lookup are
-    skipped."""
+    the title lookup (the label goes unused) is skipped."""
     try:
         ticket = await seerr.get_issue(ticket_id)
     except Exception as exc:
@@ -1226,9 +1225,6 @@ async def run_arr_action(
     return FixResult.failed("Unknown media type.")
 
 
-_PREVIEW_UNKNOWN = "Sonarr: couldn't check which episode this is."
-
-
 async def describe_fix_target(
     media: dict, season: Optional[int], episode: Optional[int],
     sonarr: Optional[SonarrClient],
@@ -1242,11 +1238,11 @@ async def describe_fix_target(
             or season is None):
         return ""
     if not media.get("tvdb_id"):
-        return _PREVIEW_UNKNOWN
+        return PREVIEW_UNKNOWN
     try:
         return await sonarr.describe_episode(media["tvdb_id"], season, episode)
     except Exception:
         logger.warning("couldn't preview the Sonarr episode", exc_info=True)
-        return _PREVIEW_UNKNOWN
+        return PREVIEW_UNKNOWN
 
 
