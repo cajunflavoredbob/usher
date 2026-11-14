@@ -23,7 +23,7 @@ from seerr import (
 from bot.callback_prefixes import DV_SIMILAR, RQ_INFO_DISMISS, SUBSCRIPTION_ADD
 from bot.follows import follow_button, follow_state
 from bot.remaining import remaining_button, requestable_seasons
-from bot.shared import record_card_owner
+from bot.shared import record_card_owner, subscription_dms_off
 from bot.watchlist import watchlist_allowed, watchlist_button
 from const import DETAIL_OVERVIEW_MAX_CHARS
 
@@ -66,17 +66,20 @@ def build_card_caption(r: MediaResult) -> str:
 def card_keyboard(r: MediaResult,
                   following: "bool | None" = None,
                   remaining: bool = False,
-                  watchlist: bool = False) -> InlineKeyboardMarkup:
+                  watchlist: bool = False,
+                  dms_off: bool = False) -> InlineKeyboardMarkup:
     """Dismiss always; 🔔 Notify-me only when availability could still
     change (an already-available or blocklisted title would never fire);
     Follow or Unfollow for a show when `following` is given (None = the
     viewer may not follow, so no button); Request remaining seasons for a
     show when `remaining` says a season is left to request; Plex watchlist
-    when `watchlist` says the viewer has a Link; More like this always."""
+    when `watchlist` says the viewer has a Link; More like this always. With
+    `dms_off` (the Admin turned Subscription DMs off) the bell says so."""
     rows = []
     if (r.status or 0) not in (MEDIA_STATUS_AVAILABLE, MEDIA_STATUS_BLOCKLISTED):
         rows.append([InlineKeyboardButton(
-            "🔔 Notify me when available",
+            "🔔 Notify me (DMs off on this server)" if dms_off
+            else "🔔 Notify me when available",
             callback_data=f"{SUBSCRIPTION_ADD}:{r.media_type}:{r.tmdb_id}")])
     if r.media_type == "tv" and following is not None:
         rows.append([follow_button(r.tmdb_id, following)])
@@ -108,7 +111,8 @@ async def send_detail_card(ctx, chat_id: int, r: MediaResult,
             left = await requestable_seasons(ctx.bot_data["seerr"], r.tmdb_id)
             remaining = bool(left)
     watchlist = await watchlist_allowed(ctx.bot_data, viewer_id)
-    kb = card_keyboard(r, following, remaining, watchlist)
+    kb = card_keyboard(r, following, remaining, watchlist,
+                       subscription_dms_off(ctx.bot_data))
     if r.poster_path:
         try:
             sent = await ctx.bot.send_photo(

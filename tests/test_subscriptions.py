@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 from seerr import MEDIA_STATUS_AVAILABLE, MEDIA_STATUS_BLOCKLISTED, MediaResult
 from bot.media_card import card_keyboard
+from bot.shared import FOLLOW_PINGS_OFF, SUBSCRIPTION_DMS_OFF
 from bot.subscriptions import (
     cmd_subscriptions,
     fan_out_availability,
@@ -307,3 +308,60 @@ async def test_the_admin_without_a_link_still_gets_subscription_notices(
     await fresh_store.add_subscription(ADMIN_ID, "movie", 550, "Fight Club")
     assert await fresh_store.pop_subscribers("movie", 550) == []
     assert await fresh_store.pop_subscribers("movie", 550, ADMIN_ID) == [ADMIN_ID]
+
+
+# --- Subscription DMs off on the server -----------------------------------------
+
+def _dms(ctx, on):
+    ctx.bot_data["settings_store"].settings.tg_notify_subscriptions = on
+
+
+async def test_toast_says_dms_are_off_when_the_switch_is_off():
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
+    _dms(ctx, False)
+    upd = make_update(callback_data="subadd:movie:550", user_id=USER_ID)
+    await subscription_add(upd, ctx)
+    toast = upd.callback_query.answers[0][0]
+    assert "Added to your Subscriptions" in toast
+    assert SUBSCRIPTION_DMS_OFF in toast
+    _dms(ctx, True)
+    upd = make_update(callback_data="subadd:movie:551", user_id=USER_ID)
+    await subscription_add(upd, ctx)
+    assert "DMs are off" not in upd.callback_query.answers[0][0]
+
+
+async def test_empty_list_does_not_promise_a_dm_when_dms_are_off():
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
+    _dms(ctx, False)
+    upd = make_update(user_id=USER_ID)
+    await cmd_subscriptions(upd, ctx)
+    text = upd.effective_message.reply_calls[-1]["text"]
+    assert SUBSCRIPTION_DMS_OFF in text and "to get a DM" not in text
+
+
+def test_the_bell_says_dms_are_off_only_when_they_are():
+    r = MediaResult("movie", 1, "T", "2026", None, status=None)
+
+    def label(**kw):
+        return [b.text for row in card_keyboard(r, **kw).inline_keyboard
+                for b in row if b.callback_data.startswith("subadd:")][0]
+    assert "off" not in label()
+    assert "off on this server" in label(dms_off=True)
+
+
+def test_the_off_sentences_are_one_shared_pair():
+    assert SUBSCRIPTION_DMS_OFF == "Subscription DMs are off on this server."
+    assert FOLLOW_PINGS_OFF == "New-episode pings are off on this server."
+
+
+async def test_a_sent_detail_card_carries_the_dms_off_bell():
+    from bot.media_card import send_detail_card
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
+    r = MediaResult("movie", 7, "T", "2026", None, status=None)
+    for on, off_text in ((False, True), (True, False)):
+        _dms(ctx, on)
+        await send_detail_card(ctx, USER_ID, r)
+        kb = ctx.bot.send_message.call_args.kwargs["reply_markup"]
+        bell = [b.text for row in kb.inline_keyboard for b in row
+                if b.callback_data.startswith("subadd:")][0]
+        assert ("off on this server" in bell) is off_text

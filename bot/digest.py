@@ -25,7 +25,9 @@ from telegram.ext import ContextTypes
 from bot.callback_prefixes import DIGEST_INFO, NOTICE_TOGGLE
 from bot.hub import back_button
 from bot.media_card import send_detail_card
-from bot.shared import edit_or_send, record_btn, watch_now_button
+from bot.shared import (
+    FOLLOW_PINGS_OFF, edit_or_send, follow_pings_off, record_btn,
+    watch_now_button)
 
 logger = logging.getLogger("usher")
 
@@ -166,12 +168,6 @@ def _auto_follow_live(bot_data) -> bool:
     return bot_data.get("tautulli") is not None
 
 
-def _follow_pings_on(bot_data) -> bool:
-    """Follows are still created with the Admin's follow pings off, but no
-    new-episode ping is sent for them."""
-    return bool(bot_data["settings_store"].settings.tg_notify_follows)
-
-
 async def _notices_card(store, telegram_id: int, bot_data):
     """The card. A switch the server cannot act on reads "off on this
     server" and gets no button, so nobody opts in to nothing."""
@@ -183,9 +179,8 @@ async def _notices_card(store, telegram_id: int, bot_data):
                     else "off on this server")
     follow_text = ("Follow shows you have been watching, so you hear about "
                    "new episodes.")
-    if follow_live and not _follow_pings_on(bot_data):
-        follow_text = ("Follow shows you have been watching. New-episode "
-                       "pings are off on this server.")
+    if follow_live and follow_pings_off(bot_data):
+        follow_text = f"Follow shows you have been watching. {FOLLOW_PINGS_OFF}"
     text = (
         "🔔 <b>Notices</b>\n\n"
         f"Daily digest: <b>{digest_state}</b>. A daily message "

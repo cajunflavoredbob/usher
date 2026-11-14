@@ -472,6 +472,26 @@ async def token_for(
     return False, link.plex_token, False
 
 
+# Notification switches the Admin can turn off. A Follow or Subscription is
+# still stored when its switch is off, but nothing is sent, so every place that
+# promises a ping or DM says so with these two sentences.
+FOLLOW_PINGS_OFF = "New-episode pings are off on this server."
+SUBSCRIPTION_DMS_OFF = "Subscription DMs are off on this server."
+
+
+def follow_pings_off(bot_data) -> bool:
+    """The Admin has Follow pings off: Follows are kept, none is sent."""
+    store = bot_data.get("settings_store")
+    return store is not None and not store.settings.tg_notify_follows
+
+
+def subscription_dms_off(bot_data) -> bool:
+    """The Admin has Subscription DMs off: Subscriptions are kept, no DM is
+    sent."""
+    store = bot_data.get("settings_store")
+    return store is not None and not store.settings.tg_notify_subscriptions
+
+
 # Button bookkeeping
 # How many recent button-bearing messages per user the gate will admit. Three
 # is enough to cover a rapid-fire webhook burst (new-ticket + comment + resolve)

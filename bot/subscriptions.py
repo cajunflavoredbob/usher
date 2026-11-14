@@ -24,10 +24,12 @@ from bot.hub import back_button, came_from_hub, end_markup, reply_end
 from bot.requests_hub import REQUESTS_HUB
 from bot.shared import (
     DECRYPT_FAILED_MSG,
+    SUBSCRIPTION_DMS_OFF,
     edit_or_send,
     force_end_flow_conversations,
     record_btn,
     require_seerr,
+    subscription_dms_off,
     token_for,
     watch_now_button,
 )
@@ -67,7 +69,10 @@ async def subscription_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
     if not added:
         await q.answer("Already on your list. See /subscriptions.")
         return
-    await q.answer("🔔 Added to your Subscriptions.")
+    toast = "🔔 Added to your Subscriptions."
+    if subscription_dms_off(ctx.bot_data):
+        toast += f" {SUBSCRIPTION_DMS_OFF}"
+    await q.answer(toast)
     seerr: SeerrClient = ctx.bot_data["seerr"]
     try:
         title, year = await seerr.get_media_title(media_type, tmdb_id)
@@ -111,6 +116,8 @@ async def _render_subscriptions(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         text = ("You have no Subscriptions. Tap 🔔 on a title's detail card "
                 "(🖼 in /request or /trending) to get a DM when it becomes "
                 "available.")
+        if subscription_dms_off(ctx.bot_data):
+            text = f"You have no Subscriptions. {SUBSCRIPTION_DMS_OFF}"
         await reply_end(ctx, reply_method, text, hub, user_id=user_id)
         return
     total = len(subscriptions)

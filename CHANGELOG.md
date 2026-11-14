@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Subscriptions say so when Subscription DMs are off**: with Subscription DMs turned off on the server, the bell on a detail card, the "Added to your Subscriptions" answer and the empty Subscriptions list still promised a DM. They now say Subscription DMs are off on this server (the Subscription stays stored). The Follow wording for off pings is now one shared sentence.
 - **An expired menu stays expired after the hourly clean-up**: the sweep that frees old button records could empty a person's record, and the bot then treated their old menus as live again, so a stale Remove or Mark failed confirm became tappable. The sweep now keeps the newest record, so an old menu still answers "expired".
 - **An upgrade done by an atomic move is no longer announced as new**: a title that came in through the library import and was upgraded by a move (delete and import in the same second) counted as a brand new quick upgrade on the Tautulli path, so followers were told it was new content. Only an upgrade delete after the first import counts as quick.
 - **Removing a Share by username can no longer hit the wrong Link**: when plex.tv could not be reached during /link, the Seerr display name was stored as the Plex username, so removing a Share (or its expiry) could unlink whoever else carried that name, the Admin included. A Link now stores a Plex username only when plex.tv gave one (and logs when it did not), and removal by Plex username never unlinks the Admin.

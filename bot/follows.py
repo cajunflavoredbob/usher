@@ -20,7 +20,9 @@ from bot.remaining import remaining_button, requestable_seasons
 from bot.requests_hub import REQUESTS_HUB
 from bot.shared import (
     DECRYPT_FAILED_MSG,
+    FOLLOW_PINGS_OFF,
     edit_or_send,
+    follow_pings_off,
     force_end_flow_conversations,
     record_btn,
     require_seerr,
@@ -134,7 +136,7 @@ async def follow_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not added:
         toast = "Already following."
     elif _pings_off(ctx):
-        toast = "🔔 Following. New-episode pings are off on this server."
+        toast = f"🔔 Following. {FOLLOW_PINGS_OFF}"
     else:
         toast = "🔔 Following. I'll ping you for each new episode."
     await q.answer(toast)
@@ -154,9 +156,7 @@ async def follow_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def _pings_off(ctx) -> bool:
-    """The Admin has follow pings off: Follows are kept, none is sent."""
-    store = ctx.bot_data.get("settings_store")
-    return store is not None and not store.settings.tg_notify_follows
+    return follow_pings_off(ctx.bot_data)
 
 
 async def follow_del(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -196,8 +196,8 @@ async def _render_follows(update, ctx, reply_method, *, user_id: int) -> None:
         text = ("You aren't following any shows. Tap ➕ Follow on a show's "
                 "detail card to get a DM for each new episode.")
         if _pings_off(ctx):
-            text = ("You aren't following any shows. New-episode pings are "
-                    "off on this server, so a Follow would send nothing.")
+            text = (f"You aren't following any shows. {FOLLOW_PINGS_OFF} "
+                    "A Follow would send nothing.")
         await reply_end(ctx, reply_method, text, REQUESTS_HUB, user_id=user_id)
         return
     total = len(follows)
