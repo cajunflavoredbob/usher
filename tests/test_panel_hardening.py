@@ -57,17 +57,60 @@ async def test_parallel_login_burst_still_hits_the_lockout(client):
 
 async def test_right_password_after_a_parallel_burst_is_locked_out(client):
     csrf = webui.generate_csrf_token(SECRET)
-    forms = [_login_form("wrong", csrf)] * (THROTTLE_MAX_FAILURES + 2)
-    forms.append(_login_form("right-password", csrf))
 
-    async def attempt(form):
-        r = await client.post("/admin/login", data=form,
+    async def attempt(password):
+        r = await client.post("/admin/login", data=_login_form(password, csrf),
                               cookies={"usher_csrf": csrf},
                               allow_redirects=False)
         return r.status
 
-    statuses = await asyncio.gather(*(attempt(f) for f in forms))
-    assert 302 not in statuses
+    burst = await asyncio.gather(
+        *(attempt("wrong") for _ in range(THROTTLE_MAX_FAILURES + 2)))
+    assert 500 not in burst
+    assert await attempt("right-password") == 429
+
+
+async def test_login_lock_belongs_to_the_app(client):
+    # One lock per panel app (so per event loop), and the form is read
+    # before it is taken: a stalled upload never holds up other logins.
+    assert isinstance(client.server.app["login_lock"], asyncio.Lock)
+    assert not client.server.app["login_lock"].locked()
+
+
+async def test_repeated_content_encoding_headers_are_refused(client):
+    csrf = webui.generate_csrf_token(SECRET)
+    body = f"username=admin&password=x&csrf_token={csrf}".encode()
+    r = await client.post(
+        "/admin/login", data=body, cookies={"usher_csrf": csrf},
+        headers=[("Content-Type", "application/x-www-form-urlencoded"),
+                 ("Content-Encoding", "identity"),
+                 ("Content-Encoding", "gzip")])
+    assert r.status == 415
+
+
+def test_unsized_body_is_refused():
+    req = SimpleNamespace(content_length=None, headers={})
+    assert webui._unauth_form_rejection(req).status == 413
+
+
+async def test_setup_post_applies_the_same_body_gate(client):
+    admin = client.server.app["settings_store"].settings.admin
+    admin.username = ""
+    admin.password_hash = ""
+    r = await client.post(
+        "/admin/setup", data=b"username=a",
+        headers={"Content-Type": "application/x-www-form-urlencoded",
+                 "Content-Encoding": "gzip"}, allow_redirects=False)
+    assert r.status == 415
+
+
+async def test_non_utf8_login_form_is_a_400_not_a_500(client):
+    csrf = webui.generate_csrf_token(SECRET)
+    r = await client.post(
+        "/admin/login", data=b"username=admin&password=" + bytes([0xFF]),
+        cookies={"usher_csrf": csrf},
+        headers={"Content-Type": "application/x-www-form-urlencoded"})
+    assert r.status == 400
 
 
 async def test_compressed_login_body_is_refused(client):
@@ -91,13 +134,13 @@ async def test_oversized_login_body_is_refused(client):
 
 async def test_restore_refused_while_another_restore_runs(client, monkeypatch):
     lock = asyncio.Lock()
-    monkeypatch.setattr(webui, "_restore_lock", lock)
     monkeypatch.setattr(webui, "_restore_error",
                         lambda request, message, status=400:
                         web.Response(text=message, status=status))
     await lock.acquire()
     try:
-        resp = await webui.restore_upload(SimpleNamespace(app={}))
+        resp = await webui.restore_upload(
+            SimpleNamespace(app={"restore_lock": lock}))
     finally:
         lock.release()
     assert resp.status == 409
@@ -145,3 +188,23 @@ def test_csrf_cookie_is_http_only():
     resp = web.Response()
     attach_csrf_cookie(resp, "tok", secure=False)
     assert resp.cookies["usher_csrf"]["httponly"] is True
+
+
+@pytest.mark.parametrize("cookies", [
+    {webui.SESSION_COOKIE: "\udcff.x"},
+    {webui.SESSION_COOKIE: "a.\udcff"},
+    {"usher_csrf": "\udcff.x"},
+])
+def test_undecodable_cookie_bytes_never_raise(cookies):
+    from auth_util import csrf_for_request
+    req = SimpleNamespace(cookies=cookies, app={"session_secret": SECRET})
+    assert webui._verify_session_cookie(
+        SECRET, cookies.get(webui.SESSION_COOKIE, "a.b")) is None
+    assert isinstance(csrf_for_request(req), str)
+
+
+def test_csrf_compare_rejects_non_ascii_without_raising():
+    from auth_util import validate_csrf
+    req = SimpleNamespace(cookies={"usher_csrf": "toké"},
+                          app={"session_secret": SECRET})
+    assert validate_csrf(req, "tok") is False

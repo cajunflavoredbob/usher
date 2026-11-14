@@ -98,15 +98,15 @@ _ip_throttle = LoginThrottle(max_failures=THROTTLE_IP_MAX_FAILURES)
 # (no timing oracle on the admin username). Computed once at import.
 _TIMING_EQUALIZER_HASH = hash_password("timing-equalizer-not-a-real-password")
 
-# Serializes the lockout check and the password hash across login attempts.
-# Without it a burst of parallel POSTs all pass the lockout check before the
-# first hash finishes, so every guess in the burst is evaluated. Logins are
-# rare, so one at a time costs nothing a real Admin notices.
-_login_lock = asyncio.Lock()
-
-# One restore at a time: a double-submitted Restore would otherwise copy the
-# already-restored files over the first run's pre-restore snapshot.
-_restore_lock = asyncio.Lock()
+# Two app-scoped locks (created in attach_webui, so each belongs to the
+# event loop that serves the panel):
+# - "login_lock" serializes the lockout check and the password hash across
+#   login attempts. Without it a burst of parallel POSTs all pass the lockout
+#   check before the first hash finishes, so every guess is evaluated. The
+#   body is read before taking it, so a client that stalls its body cannot
+#   hold up anyone else's login.
+# - "restore_lock" allows one restore at a time: a double-submitted Restore
+#   would otherwise copy the restored files over the pre-restore snapshot.
 
 # Unauthenticated form posts (login, first-run setup) are tiny. The app's
 # client_max_size is raised to 32MB for backup restores, so these routes cap
@@ -116,15 +116,27 @@ UNAUTH_FORM_MAX_BYTES = 64 * 1024
 
 def _unauth_form_rejection(request: web.Request) -> Optional[web.Response]:
     """Refuse an unauthenticated form body that is large, has no declared
-    length, or is compressed (a small gzip body can expand to the full
-    32MB limit). Browsers send none of these for a login form."""
+    length, or declares any Content-Encoding (a small gzip body can expand
+    to the full 32MB limit, and aiohttp decodes by the LAST of repeated
+    headers). Browsers send none of these for a login form."""
     length = request.content_length
     if length is None or length > UNAUTH_FORM_MAX_BYTES:
         return web.Response(text="Form too large.", status=413)
-    if request.headers.get("Content-Encoding", "identity").lower() != "identity":
+    if "Content-Encoding" in request.headers:
         return web.Response(text="Compressed form bodies are not accepted.",
                             status=415)
     return None
+
+
+async def _read_unauth_form(request: web.Request):
+    """(form, None) or (None, error response) for an unauthenticated POST."""
+    rejection = _unauth_form_rejection(request)
+    if rejection is not None:
+        return None, rejection
+    try:
+        return await request.post(), None
+    except UnicodeDecodeError:
+        return None, web.Response(text="Form is not valid UTF-8.", status=400)
 
 
 def _set_session_cookie(resp, cookie_value: str, *, secure: bool) -> None:
@@ -173,7 +185,7 @@ def _verify_session_cookie(secret: bytes, cookie: str,
         body, sig = cookie.split(".")
     except ValueError:
         return None
-    expected_sig = _b64(_sign(secret, body.encode()))
+    expected_sig = _b64(_sign(secret, body.encode("utf-8", "surrogateescape")))
     if not safe_compare(sig, expected_sig):
         return None
     try:
@@ -1071,10 +1083,9 @@ async def setup_post(request: web.Request) -> web.Response:
     store: SettingsStore = request.app["settings_store"]
     if store.settings.admin.is_set():
         raise web.HTTPFound("/admin/login")
-    rejection = _unauth_form_rejection(request)
+    form, rejection = await _read_unauth_form(request)
     if rejection is not None:
         return rejection
-    form = await request.post()
     if not validate_csrf(request, form.get(CSRF_FORM_FIELD)):
         audit("setup_csrf_fail", ip=client_ip(request))
         return web.Response(text="CSRF token mismatch.", status=403)
@@ -1184,19 +1195,18 @@ async def login_get(request: web.Request) -> web.Response:
 
 
 async def login_post(request: web.Request) -> web.Response:
-    rejection = _unauth_form_rejection(request)
+    form, rejection = await _read_unauth_form(request)
     if rejection is not None:
         return rejection
-    async with _login_lock:
-        return await _login_post_serialized(request)
-
-
-async def _login_post_serialized(request: web.Request) -> web.Response:
-    store: SettingsStore = request.app["settings_store"]
-    form = await request.post()
     if not validate_csrf(request, form.get(CSRF_FORM_FIELD)):
         audit("login_csrf_fail", ip=client_ip(request))
         return web.Response(text="CSRF token mismatch.", status=403)
+    async with request.app["login_lock"]:
+        return await _login_attempt(request, form)
+
+
+async def _login_attempt(request: web.Request, form) -> web.Response:
+    store: SettingsStore = request.app["settings_store"]
 
     ip = client_ip(request)
     username = (form.get("username") or "").strip()
@@ -1634,7 +1644,14 @@ async def change_password(request: web.Request) -> web.Response:
             content_type="text/html", status=400,
         )
     user = _current_user(request) or "-"
-    admin.password_hash = await asyncio.to_thread(hash_password, new)
+    new_hash = await asyncio.to_thread(hash_password, new)
+    # The two hashes take a while; a restore that landed meanwhile has
+    # replaced settings.json, and saving here would write the old settings
+    # back over it.
+    if restart_pending():
+        return web.Response(text="Usher is restarting; try again in a moment.",
+                            status=503)
+    admin.password_hash = new_hash
     # Sign out every other session: a stolen cookie must die when the
     # admin rotates the password in response to it. The current session
     # is kept by re-issuing it at the new version below.
@@ -1772,16 +1789,12 @@ def _restore_error(request: web.Request, message: str, status: int = 400) -> web
 
 
 async def restore_upload(request: web.Request) -> web.Response:
-    if _restore_lock.locked():
+    lock = request.app["restore_lock"]
+    # Refuse rather than wait: nothing awaits between this check and the
+    # acquire, so a second Restore never queues behind the first.
+    if lock.locked():
         return _restore_error(request, "A restore is already running.", status=409)
-    async with _restore_lock:
-        # Re-checked under the lock: the middleware checked on entry, but a
-        # restore that finished while this request waited has already
-        # scheduled the restart.
-        if restart_pending():
-            return _restore_error(
-                request, "A restore was just applied; Usher is restarting.",
-                status=409)
+    async with lock:
         return await _restore_upload_locked(request)
 
 
@@ -2139,7 +2152,7 @@ async def test_webhook(request: web.Request) -> web.Response:
     secret = (store.settings.webhook_secret or "").strip()
     if not secret:
         return _test_json(False, "No saved secret. Generate, Save, then Test.")
-    # Self-POST to loopback, never a Host-derived URL: the Host
+    # Self-POST to this server, never a Host-derived URL: the Host
     # header is attacker-influenceable, and this request carries the real
     # webhook secret in Authorization -- a spoofed Host exfiltrated it to an
     # arbitrary target. The receiver runs in this same process/port. Post to
@@ -2300,8 +2313,10 @@ def attach_webui(
     # the DB-file swap against in-flight store writes.
     app["user_store"] = user_store
     app["on_settings_changed"] = on_settings_changed
-    # Port for the webhook self-test's loopback URL.
+    # Port for the webhook self-test's self-POST URL.
     app["http_port"] = http_port
+    app["login_lock"] = asyncio.Lock()
+    app["restore_lock"] = asyncio.Lock()
     # Only requests from these CIDRs (TRUSTED_PROXIES) may set X-Forwarded-*.
     app["trusted_proxies"] = trusted_proxies
     app.middlewares.append(auth_middleware)

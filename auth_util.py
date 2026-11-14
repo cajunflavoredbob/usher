@@ -133,7 +133,8 @@ def generate_csrf_token(secret: bytes, binding: str = "") -> str:
     HMAC; binding defeats one who lifts a validly-signed token from the
     public login page and plants it against a logged-in session."""
     rand = secrets.token_urlsafe(32)
-    sig = hmac.new(secret, f"{rand}.{binding}".encode(), "sha256").hexdigest()[:32]
+    sig = hmac.new(secret, f"{rand}.{binding}".encode("utf-8", "surrogateescape"),
+                   "sha256").hexdigest()[:32]
     return f"{rand}.{sig}"
 
 
@@ -142,7 +143,8 @@ def _csrf_token_signed(secret: bytes, token: str, binding: str = "") -> bool:
         rand, sig = token.split(".")
     except (ValueError, AttributeError):
         return False
-    expected = hmac.new(secret, f"{rand}.{binding}".encode(), "sha256").hexdigest()[:32]
+    expected = hmac.new(secret, f"{rand}.{binding}".encode("utf-8", "surrogateescape"),
+                        "sha256").hexdigest()[:32]
     return safe_compare(sig, expected)
 
 

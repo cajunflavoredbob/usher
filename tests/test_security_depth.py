@@ -214,3 +214,22 @@ async def test_restore_form_offers_pre_rename_backup_extension(client):
     assert resp.status == 200
     body = await resp.text()
     assert f'accept=".zip,.usher-backup,{LEGACY_BACKUP_EXT}"' in body
+
+
+async def test_password_change_never_saves_over_a_restore_that_landed(
+        client, monkeypatch):
+    # The restore lands while the two hashes run in threads; saving the
+    # in-memory settings afterwards would undo it.
+    calls = {"n": 0}
+
+    def pending_after_first_check():
+        calls["n"] += 1
+        return calls["n"] > 1  # the middleware's entry check sees False
+
+    monkeypatch.setattr(webui, "restart_pending", pending_after_first_check)
+    resp = await client.post("/admin/password", data={
+        "csrf_token": CSRF, "current": "old-password",
+        "new": "new-password-123", "confirm": "new-password-123",
+    }, cookies=_cookies(pwd_ver=0))
+    assert resp.status == 503
+    assert client.settings_store.settings.admin.password_version == 0
