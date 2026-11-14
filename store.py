@@ -27,6 +27,7 @@ from typing import Callable, Iterator, Optional, TypeVar
 from cryptography.fernet import Fernet, InvalidToken
 
 from const import (ACCESS_ASK_IGNORE_DAYS, ACCESS_ASK_KEEP_DAYS,
+                   BROADCAST_KEEP_DAYS,
                    ACCESS_ASK_MAX_OPEN, AUTOFIX_TIMEOUT_HOURS)
 from fix_kinds import (KIND_AUTO_FIX, OUTCOME_COMPLETE, OUTCOME_FAILED,
                        OUTCOME_PENDING, OUTCOME_REPEAT, OUTCOME_TIMEOUT)
@@ -115,6 +116,16 @@ class AccessAsk:
     plex_email: str
     status: str                       # open, approved or ignored
     admin_message_id: Optional[int]
+
+
+@dataclass(frozen=True)
+class Broadcast:
+    """An Admin Broadcast (see GLOSSARY: Broadcast)."""
+    id: int
+    text: str
+    chat_id: int
+    message_id: Optional[int]
+    status: str                       # sending or done
 
 
 @dataclass(frozen=True)
@@ -366,6 +377,33 @@ class UserStore:
                     created_at TEXT NOT NULL DEFAULT (datetime('now')),
                     decided_at TEXT,
                     admin_message_id INTEGER
+                )
+                """
+            )
+            # Admin Broadcasts: one row per message, one recipient row per
+            # Linked user it goes to, so a restart resumes without repeats.
+            # status: sending or done (a broadcast); pending, sent or failed
+            # (a recipient). chat_id and message_id name the preview message
+            # the final report edits.
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS broadcasts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    text TEXT NOT NULL,
+                    chat_id INTEGER NOT NULL,
+                    message_id INTEGER,
+                    status TEXT NOT NULL DEFAULT 'sending',
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+                """
+            )
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS broadcast_recipients (
+                    broadcast_id INTEGER NOT NULL,
+                    telegram_id INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    PRIMARY KEY (broadcast_id, telegram_id)
                 )
                 """
             )
@@ -1260,6 +1298,96 @@ class UserStore:
                 c.execute("DELETE FROM access_asks WHERE id = ?", (ask_id,))
         await self._run(_do)
 
+    # Admin Broadcasts
+
+    async def list_linked_ids(self) -> list[int]:
+        """Telegram ids of every Linked user (a row in user_mapping)."""
+        def _do() -> list[int]:
+            with self._conn() as c:
+                return [r[0] for r in c.execute(
+                    "SELECT telegram_id FROM user_mapping "
+                    "ORDER BY telegram_id").fetchall()]
+        return await self._run(_do)
+
+    async def create_broadcast(self, text: str, chat_id: int,
+                               message_id: Optional[int],
+                               recipient_ids: list[int]) -> int:
+        """Store a broadcast and its recipients (all pending) in one
+        transaction. Returns its id."""
+        def _do() -> int:
+            with self._conn() as c:
+                bid = c.execute(
+                    "INSERT INTO broadcasts (text, chat_id, message_id) "
+                    "VALUES (?, ?, ?)", (text, chat_id, message_id)).lastrowid
+                c.executemany(
+                    "INSERT OR IGNORE INTO broadcast_recipients "
+                    "(broadcast_id, telegram_id) VALUES (?, ?)",
+                    [(bid, tid) for tid in recipient_ids])
+                return bid
+        return await self._run(_do)
+
+    async def get_broadcast(self, broadcast_id: int) -> Optional["Broadcast"]:
+        def _do():
+            with self._conn() as c:
+                return c.execute(
+                    "SELECT id, text, chat_id, message_id, status "
+                    "FROM broadcasts WHERE id = ?", (broadcast_id,)).fetchone()
+        row = await self._run(_do)
+        return None if row is None else Broadcast(*row)
+
+    async def unfinished_broadcast_ids(self) -> list[int]:
+        def _do() -> list[int]:
+            with self._conn() as c:
+                return [r[0] for r in c.execute(
+                    "SELECT id FROM broadcasts WHERE status = 'sending' "
+                    "ORDER BY id").fetchall()]
+        return await self._run(_do)
+
+    async def pending_broadcast_recipients(self, broadcast_id: int,
+                                           limit: int = 50) -> list[int]:
+        def _do() -> list[int]:
+            with self._conn() as c:
+                return [r[0] for r in c.execute(
+                    "SELECT telegram_id FROM broadcast_recipients "
+                    "WHERE broadcast_id = ? AND status = 'pending' "
+                    "ORDER BY telegram_id LIMIT ?",
+                    (broadcast_id, limit)).fetchall()]
+        return await self._run(_do)
+
+    async def mark_broadcast_recipient(self, broadcast_id: int,
+                                       telegram_id: int, status: str) -> None:
+        """status is sent or failed."""
+        def _do():
+            with self._conn() as c:
+                c.execute(
+                    "UPDATE broadcast_recipients SET status = ? "
+                    "WHERE broadcast_id = ? AND telegram_id = ?",
+                    (status, broadcast_id, telegram_id))
+        await self._run(_do)
+
+    async def broadcast_counts(self, broadcast_id: int) -> dict[str, int]:
+        """{"pending": n, "sent": n, "failed": n} for one broadcast."""
+        def _do():
+            with self._conn() as c:
+                return c.execute(
+                    "SELECT status, COUNT(*) FROM broadcast_recipients "
+                    "WHERE broadcast_id = ? GROUP BY status",
+                    (broadcast_id,)).fetchall()
+        counts = {"pending": 0, "sent": 0, "failed": 0}
+        counts.update(dict(await self._run(_do)))
+        return counts
+
+    async def finish_broadcast(self, broadcast_id: int) -> bool:
+        """Move a sending broadcast to done. False when it already was, so
+        its report goes out once."""
+        def _do() -> bool:
+            with self._conn() as c:
+                return c.execute(
+                    "UPDATE broadcasts SET status = 'done' "
+                    "WHERE id = ? AND status = 'sending'",
+                    (broadcast_id,)).rowcount > 0
+        return await self._run(_do)
+
     async def prune_autofix_history(self) -> tuple[int, int]:
         """Delete rows nothing reads anymore, so neither table grows for the
         life of the install: pending_autofixes rows in a terminal state
@@ -1296,6 +1424,16 @@ class UserStore:
                     "DELETE FROM access_asks WHERE created_at < datetime('now', ?)",
                     (f"-{ACCESS_ASK_KEEP_DAYS} days",),
                 )
+                # Finished broadcasts older than BROADCAST_KEEP_DAYS, with
+                # their recipients (not counted in the return value).
+                old = f"-{BROADCAST_KEEP_DAYS} days"
+                c.execute(
+                    "DELETE FROM broadcast_recipients WHERE broadcast_id IN "
+                    "(SELECT id FROM broadcasts WHERE status = 'done' "
+                    "AND created_at < datetime('now', ?))", (old,))
+                c.execute(
+                    "DELETE FROM broadcasts WHERE status = 'done' "
+                    "AND created_at < datetime('now', ?)", (old,))
                 return pending, events
 
         return await self._run(_do)

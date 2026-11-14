@@ -87,6 +87,14 @@ INVITE_FLOW_TIMEOUT_S: Final = 600     # 10 min
 # the full strong-PIN window but a stale draft can't fire hours later.
 RELINK_RESUME_TTL_S: Final = 1800      # 30 min
 
+# Admin Broadcast: DMs to every Linked user.
+BROADCAST_SEND_INTERVAL_S: Final = 0.04  # 25 sends a second, under Telegram's
+                                         # bulk limit of about 30
+BROADCAST_FLOW_TIMEOUT_S: Final = 600    # 10 min
+BROADCAST_MAX_CHARS: Final = 3500        # header and text must fit in 4096
+BROADCAST_KEEP_DAYS: Final = 30          # finished broadcasts older than this
+                                         # are pruned
+
 # Access asks: a stranger's request for an Invite.
 ACCESS_ASK_MAX_OPEN: Final = 10        # open asks at once
 ACCESS_ASK_IGNORE_DAYS: Final = 7      # no new ask this long after an Ignore

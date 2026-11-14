@@ -419,7 +419,7 @@ def test_every_step_of_every_registered_conversation_is_guarded(monkeypatch):
                              Path("."), Path("settings.json"), ":memory:",
                              8080, "127.0.0.1")
     convs = _all_conversations(app)
-    assert len(convs) == 6
+    assert len(convs) == 7
     assert all(c in app.bot_data["flow_convs"] for c in convs)
     for conv in convs:
         handlers = (list(conv.entry_points) + list(conv.fallbacks)

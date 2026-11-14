@@ -52,6 +52,9 @@ _Avoid_: unshare
 **Access ask**:
 A stranger's request, sent through the bot, for the Admin to Invite them. It comes from the Link flow when Seerr rejects the person's Plex sign-in, and is open until the Admin approves it (by sending the Invite) or ignores it.
 
+**Broadcast**:
+A plain-text message the Admin sends from the Admin Hub to every Linked user except themselves, under a "From the Admin" header. It is sent as a job that records each recipient as sent or failed, so a restart resumes it without repeats.
+
 ## Tickets
 
 **Ticket**:

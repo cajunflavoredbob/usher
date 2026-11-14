@@ -90,6 +90,8 @@ from bot.callback_prefixes import (
 )
 from bot.ticket_flow import _new_ticket_conversation
 from bot.admin_hub import ADMIN_HUB, cmd_admin, refuse_outside_admin_dm
+from bot.broadcast import (_BC_KEYS, _broadcast_conversation,
+                           cancel_broadcast_tasks, resume_broadcasts)
 from bot.downloads import downloads
 from bot.nowplaying import now_playing_section, stop_ask, stop_confirmed
 from bot.alarms import (ALARM_FIRST_DELAY_S, ALARM_INTERVAL_S, check_alarms,
@@ -468,6 +470,7 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     new_ticket_conv = _new_ticket_conversation()
     request_conv = _request_conversation()
     invite_conv = _invite_conversation()
+    broadcast_conv = _broadcast_conversation()
     resolve_conv = _resolve_conversation()
     ticket_conv = _ticket_conversation()
     # Registry for shared.user_in_conversation: lets one flow's
@@ -477,11 +480,13 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
         "issue": new_ticket_conv,
         "request": request_conv,
         "invite": invite_conv,
+        "broadcast": broadcast_conv,
         "resolve": resolve_conv,
         "ticket_reply": ticket_conv,
     }
     app.bot_data["flow_convs"] = [link_conv, new_ticket_conv, request_conv,
-                                  invite_conv, resolve_conv, ticket_conv]
+                                  invite_conv, broadcast_conv, resolve_conv,
+                                  ticket_conv]
     for conv in app.bot_data["flow_convs"]:
         guard_flow_steps(conv)
     app.add_handler(TypeHandler(Update, reset_stale_flows), group=-2)
@@ -507,6 +512,7 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     app.add_handler(new_ticket_conv)
     app.add_handler(request_conv)
     app.add_handler(invite_conv)
+    app.add_handler(broadcast_conv)
     app.add_handler(CommandHandler("uninvite", cmd_uninvite))
     app.add_handler(resolve_conv)
     # Request-list cancel + detail-card dismiss: non-conversation callbacks,
@@ -795,6 +801,9 @@ async def _post_init(app: Application) -> None:
     except Exception as exc:
         logger.exception("Couldn't DM admin %d on startup (unexpected)", admin_id, exc_info=exc)
 
+    # A restart mid-Broadcast: carry on with the recipients not yet marked.
+    await resume_broadcasts(app)
+
     store: UserStore = app.bot_data["store"]
     try:
         n_failed = await store.count_decrypt_failures()
@@ -816,6 +825,7 @@ async def _post_init(app: Application) -> None:
 
 
 async def _post_shutdown(app: Application) -> None:
+    await cancel_broadcast_tasks(app)
     # Cancel any prior settings-reload close tasks: each begins with a 90s
     # grace sleep, and awaiting them here would block shutdown for up to that
     # long (SIGKILL under docker stop's 10s grace). Cancel, settle, then
@@ -869,7 +879,7 @@ _CONVERSATION_USER_DATA_KEYS = (
     # reset or a still-gated message from a prior flow could collide with a
     # fresh flow's counter restarting at 1.
     "rq_jump_media",
-) + _INV_KEYS  # inv_version deliberately excluded (see invite_flow._INV_KEYS)
+) + _INV_KEYS + _BC_KEYS  # inv_version deliberately excluded (see invite_flow._INV_KEYS)
 
 
 async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:

@@ -279,7 +279,7 @@ def _nine_shares():
 
 # --- /admin and its gate ---------------------------------------------------------
 
-async def test_admin_shows_three_button_hub():
+async def test_admin_shows_four_button_hub():
     ctx = _shares_ctx()
     upd = make_update(text="/admin", user_id=ADMIN_ID)
     await cmd_admin(upd, ctx)
@@ -288,7 +288,7 @@ async def test_admin_shows_three_button_hub():
     assert reply["parse_mode"] == "HTML"
     assert _flat(reply["reply_markup"]) == [
         ("📨 Invite", ADMIN_INVITE), ("👥 Shares", f"{ADMIN_SHARES}:0"),
-        ("📶 Status", ADMIN_STATUS)]
+        ("📶 Status", ADMIN_STATUS), ("📣 Broadcast", "bcst")]
 
 
 async def test_admin_from_user_says_admin_only():

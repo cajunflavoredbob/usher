@@ -130,6 +130,11 @@ STOP_ASK: Final = "stk"               # stk:<token> a Now playing Stop button
 STOP_GO: Final = "stg"                # stg:<token> confirmed Stop, no message
 STOP_MSG: Final = "stm"               # stm:<token> Stop with the default message
 
+# Admin Broadcast (Admin Hub button -> conversation)
+BROADCAST_START: Final = "bcst"       # Admin Hub "Broadcast" (conversation entry)
+BROADCAST_SEND: Final = "bcss"        # preview card's Send
+BROADCAST_CANCEL: Final = "bcsc"      # preview card's Cancel
+
 # Access asks (a stranger asks the Admin for an Invite)
 ACCESS_ASK: Final = "acsk"            # "Ask for access" on the rejected-sign-in
                                       # message -> preview card

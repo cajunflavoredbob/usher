@@ -62,6 +62,9 @@ AWAIT_TICKET_REPLY = 400
 INV_EMAIL = 500
 INV_LIBS = 501
 INV_CONFIRM = 502
+# Admin Broadcast
+BC_TEXT = 510
+BC_CONFIRM = 511
 
 # Issue type maps
 

@@ -1,4 +1,4 @@
-"""The Admin Hub (/admin): Invite, Shares and Status, for the Admin in a DM
+"""The Admin Hub (/admin): Invite, Shares, Status and Broadcast, for the Admin in a DM
 only. See ADR 0009 and the Hub, Share, Invite and Uninvite entries in
 GLOSSARY.md.
 
@@ -6,7 +6,7 @@ Holds the Hub's render function, its registration, /admin itself and the
 Admin-and-DM gate that the Admin commands and the Hub's Invite, Shares and
 Status buttons run first (the Share confirm card's Remove and Keep check
 Admin only). The button handlers live in the modules that own their flows (bot.invite_flow for
-Invite and Shares, bot.app for Status, bot.downloads for the Downloads
+Invite and Shares, bot.app for Status, bot.broadcast for Broadcast, bot.downloads for the Downloads
 button shown when SABnzbd is linked), and each imports ADMIN_HUB from here,
 which registers the Hub as a side effect."""
 from __future__ import annotations
@@ -14,7 +14,7 @@ from __future__ import annotations
 from telegram import InlineKeyboardButton
 
 from bot.callback_prefixes import (ADMIN_INVITE, ADMIN_SHARES, ADMIN_STATUS,
-                                   DOWNLOADS_VIEW)
+                                   BROADCAST_START, DOWNLOADS_VIEW)
 from bot.hub import HubView, register_hub, send_hub
 
 ADMIN_HUB = "admin"
@@ -25,13 +25,14 @@ async def render_admin_hub(update, ctx) -> HubView:
         InlineKeyboardButton("📨 Invite", callback_data=ADMIN_INVITE),
         InlineKeyboardButton("👥 Shares", callback_data=f"{ADMIN_SHARES}:0"),
         InlineKeyboardButton("📶 Status", callback_data=ADMIN_STATUS),
+        InlineKeyboardButton("📣 Broadcast", callback_data=BROADCAST_START),
     ]
     if ctx.bot_data.get("sabnzbd"):
         buttons.append(InlineKeyboardButton("⏯ Downloads",
                                             callback_data=DOWNLOADS_VIEW))
     return HubView(
         text=("🛠 <b>Admin</b>\nInvite someone to your Plex server, see and "
-              "remove Shares, or check connections."),
+              "remove Shares, check connections, or message every Linked user."),
         buttons=buttons,
     )
 
