@@ -6,14 +6,17 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
 from bot.callback_prefixes import (SHARE_EXTEND, SHARE_LET_END,
                                    SHARE_REMOVE_NOW, SHARE_RETRY)
 from bot.share_expiry_job import run_share_expiries, share_expiry_action
+from bot.shared import BTN_HISTORY_MAX, global_btn_gate, record_btn
 from http_util import NotFoundAPIError, TransientAPIError
 from plex import PlexShare
 from store import UserStore
 
-from tests._handler_harness import make_ctx, make_update
+from tests._handler_harness import make_ctx, make_message, make_update
 
 ADMIN_ID = 999
 HOLDER_ID = 555
@@ -163,6 +166,54 @@ def _tap(ctx_app, data, user_id=ADMIN_ID):
     ctx.bot_data["store"] = ctx_app.bot_data["store"]
     ctx.bot_data["plex"] = ctx_app.bot_data["plex"]
     return ctx, make_update(callback_data=data, user_id=user_id)
+
+
+async def _gated_tap(app, data):
+    """A tap on a DM that was never recorded, with the Admin's button history
+    full of newer messages: through the button gate, then the handler."""
+    ctx, upd = _tap(app, data)
+    ctx.application = SimpleNamespace(bot_data=ctx.bot_data)
+    for i in range(BTN_HISTORY_MAX + 1):
+        record_btn(ctx.application, ADMIN_ID,
+                   make_message(message_id=5000 + i))
+    await global_btn_gate(upd, ctx)
+    await share_expiry_action(upd, ctx)
+    return upd
+
+
+async def test_extend_gets_through_the_button_gate(fresh_store):
+    app, _ = await _setup(fresh_store, [_share(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2031-01-01 00:00:00")
+    upd = await _gated_tap(app, f"{SHARE_EXTEND}:1")
+    assert upd.callback_query.markup_edits == []
+    row = await fresh_store.get_share_expiry(1)
+    assert row.expires_at == "2031-01-31 00:00:00"
+
+
+async def test_let_it_end_gets_through_the_button_gate(fresh_store):
+    app, _ = await _setup(fresh_store, [_share(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2031-01-01 00:00:00")
+    upd = await _gated_tap(app, f"{SHARE_LET_END}:1")
+    assert "ends on Jan 1, 2031" in upd.callback_query.edits[-1]["text"]
+
+
+async def test_retry_gets_through_the_button_gate(fresh_store):
+    app, plex = await _setup(fresh_store, [_share(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2020-01-01 00:00:00")
+    await _gated_tap(app, f"{SHARE_RETRY}:1")
+    plex.remove_share.assert_awaited_once_with("admin-tok", 1)
+
+
+async def test_remove_now_gets_through_the_button_gate(fresh_store):
+    app, _ = await _setup(fresh_store, [_share(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2031-01-01 00:00:00")
+    upd = await _gated_tap(app, f"{SHARE_REMOVE_NOW}:1")
+    assert upd.callback_query.markup_edits == []
+    assert upd.callback_query.edits
 
 
 async def test_extend_moves_the_date_and_rearms(fresh_store):

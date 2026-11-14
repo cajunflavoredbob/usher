@@ -30,6 +30,10 @@ from bot.callback_prefixes import (
     ACCESS_IGNORE,
     DIGEST_INFO,
     RELINK,
+    SHARE_EXTEND,
+    SHARE_LET_END,
+    SHARE_REMOVE_NOW,
+    SHARE_RETRY,
     RQ_ADMIN_APPROVE,
     RQ_ADMIN_DECLINE,
     RQ_ADMIN_RETRY,
@@ -697,6 +701,8 @@ _GATE_EXEMPT_PREFIXES: Final = frozenset({
     FOLLOW_ADD, FOLLOW_DEL, DIGEST_INFO,
     RQ_REMAINING, RQ_ADMIN_APPROVE, RQ_ADMIN_DECLINE, RQ_ADMIN_RETRY,
     ACCESS_APPROVE, ACCESS_IGNORE, ASK_ADMIN,
+    SHARE_EXTEND, SHARE_LET_END, SHARE_REMOVE_NOW, SHARE_RETRY,
+    TK_OPEN, TK_REPLY, TK_FIX, TK_CLOSE,
 })
 
 
@@ -771,6 +777,19 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     #  - Ask the Admin sits on a Reporter's repeat DM, which can be hours
     #    old when tapped and cannot be brought back. The handler checks the
     #    tapped message carries that button, and each Ticket is asked once.
+    #  - Extend / Let it end / Remove now / Retry sit on the Admin's Share
+    #    expiry DMs, which are not recorded (a reminder goes out three days
+    #    ahead, so the 6 hour window would always have closed). The handler is
+    #    Admin-only and DM-only, and re-reads the Share's expiry row; Remove now
+    #    only opens a confirm.
+    #  - History, Reply, Fix and Close sit on Ticket DMs and cards. History is
+    #    read-only and Reply only opens a prompt (Seerr decides with the
+    #    tapper's own token whether the comment lands); Fix and Close are
+    #    Admin-only and only open a sub-menu, whose own buttons stay gated.
+    #    Mark Failed (tkfm) is NOT exempt: it deletes the file, it shares its
+    #    prefix with the Fix sub-menu, and a stale tap could delete a file a
+    #    later Fix just brought back. Same for the Redownload, Close and Back
+    #    buttons and the post-Fix resolve buttons: they stay gated.
     data = getattr(q, "data", None)
     user_id = q.from_user.id
     in_group = _is_group_message(q.message)

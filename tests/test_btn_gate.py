@@ -200,10 +200,31 @@ async def test_gate_admits_admin_request_dm_when_old_and_buried(prefix):
     await global_btn_gate(upd, _Ctx(app))  # no raise
 
 
+@pytest.mark.parametrize("prefix", ["shext", "shend", "shnow", "shrty",
+                                    "tkopen", "tkr", "tkf", "tkc"])
+async def test_gate_admits_unrecorded_dm_buttons_when_old_and_buried(prefix):
+    """Share expiry and Ticket DM buttons are tapped days later, after more
+    than BTN_HISTORY_MAX newer recorded messages."""
+    app = _make_app()
+    for i in range(BTN_HISTORY_MAX + 1):
+        record_btn(app, 42, _make_message(3000 + i))
+    upd = _make_update(42, 2000, data=f"{prefix}:5")
+    await global_btn_gate(upd, _Ctx(app))  # no raise
+
+
+@pytest.mark.parametrize("prefix", ["tkfm", "tkfd", "tkcd", "tkcc", "resolve"])
+async def test_gate_still_blocks_destructive_and_flow_buttons(prefix):
+    app = _make_app()
+    record_btn(app, 42, _make_message(1001))
+    upd = _make_update(42, 5555, data=f"{prefix}:9")
+    with pytest.raises(ApplicationHandlerStop):
+        await global_btn_gate(upd, _Ctx(app))
+
+
 async def test_gate_still_blocks_stale_fix_button():
     app = _make_app()
     record_btn(app, 42, _make_message(1001))
-    upd = _make_update(42, 5555, data="tkf:9")
+    upd = _make_update(42, 5555, data="tkfm:9")
     with pytest.raises(ApplicationHandlerStop):
         await global_btn_gate(upd, _Ctx(app))
 
