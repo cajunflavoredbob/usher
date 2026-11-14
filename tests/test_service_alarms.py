@@ -227,6 +227,50 @@ async def test_cmd_status_includes_the_section(fresh_store, monkeypatch):
     assert "Free space" in upd.effective_message.reply_calls[0]["text"]
 
 
+def _titles(n):
+    return ", ".join(f"Example Title {i} (2020) & <more>" for i in range(n))
+
+
+async def test_oversized_health_text_goes_out_capped_in_status_commands(
+        fresh_store, monkeypatch):
+    monkeypatch.setattr(app_mod, "_check_connections",
+                        AsyncMock(return_value={"Seerr": "ok"}))
+    items = [_health(msg=_titles(400), source=f"Src{i}") for i in range(30)]
+    ctx = _ctx(fresh_store, radarr=_arr(health=items, disks=[_disk()]))
+    ctx.bot_data["tautulli"] = None
+    upd = make_update(text="/status", user_id=ADMIN)
+    await app_mod.cmd_status(upd, ctx)
+    text = upd.effective_message.reply_calls[0]["text"]
+    assert len(text) <= 4096 and "more lines)" in text
+    upd = make_update(callback_data="admt", user_id=ADMIN)
+    await app_mod.admin_hub_status(upd, ctx)
+    edit = upd.callback_query.edits[-1]
+    assert len(edit["text"]) <= 4096
+    assert edit["reply_markup"] is not None
+
+
+async def test_oversized_alarm_dm_is_capped_and_marked_notified(fresh_store):
+    ctx = _ctx(fresh_store, radarr=_arr(health=[_health(msg=_titles(2000))]))
+    await check_alarms(ctx)
+    sent = _sent(ctx)
+    assert len(sent) == 1 and len(sent[0]) <= 4096
+    assert [n for _k, _t, n in await fresh_store.list_alarms()] == [True]
+
+
+async def test_dm_caps_text_that_is_still_too_long():
+    from bot.alarms import _dm
+    ctx = _ctx(None)
+    assert await _dm(ctx, "<b>" + "x" * 9000 + "</b>") is True
+    assert len(_sent(ctx)[0]) <= 4096
+
+
+async def test_alarm_not_marked_notified_when_the_capped_dm_still_fails(fresh_store):
+    ctx = _ctx(fresh_store, radarr=_arr(health=[_health(msg=_titles(2000))]))
+    ctx.bot.send_message.side_effect = RuntimeError("message is too long")
+    await check_alarms(ctx)
+    assert [n for _k, _t, n in await fresh_store.list_alarms()] == [False]
+
+
 async def test_problem_that_clears_before_its_dm_got_through_clears_silently(fresh_store):
     r = _arr(health=[_health()])
     ctx = _ctx(fresh_store, radarr=r)

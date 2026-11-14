@@ -24,6 +24,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+from bot.htmlcap import cap_html, clip
 from http_util import user_friendly_message
 from settings import DEFAULT_LOW_DISK_GB, DEFAULT_LOW_DISK_PERCENT
 
@@ -47,7 +48,8 @@ _SLASHES = "/" + chr(92)
 
 async def _dm(ctx, text: str) -> bool:
     try:
-        await ctx.bot.send_message(chat_id=ctx.bot_data["admin_id"], text=text,
+        await ctx.bot.send_message(chat_id=ctx.bot_data["admin_id"],
+                                   text=cap_html(text),
                                    parse_mode="HTML",
                                    disable_web_page_preview=True)
         return True
@@ -142,10 +144,10 @@ def health_problems(service: str, items) -> dict[str, str]:
         message = str(it.get("message") or "").strip()
         text = (f"<b>{html.escape(service)}</b> {level} "
                 f"({html.escape(source or 'unknown source')}): "
-                f"{html.escape(message)}")
+                f"{html.escape(clip(message))}")
         wiki = _wiki(it)
         if wiki:
-            text += f"\n{html.escape(wiki)}"
+            text += f"\n{html.escape(clip(wiki))}"
         out[f"{KIND_HEALTH}:{service}:{source}:{message}"] = text
     return out
 
@@ -167,7 +169,7 @@ class Disk:
         return self.percent < pct or (gb > 0 and self.free / GB < gb)
 
     def describe(self) -> str:
-        name = html.escape(self.path)
+        name = html.escape(clip(self.path))
         return (f"{name}: {self.percent:.0f}% free "
                 f"({self.free / GB:.1f} GB of {self.total / GB:.1f} GB)")
 
@@ -337,7 +339,7 @@ async def status_section(ctx) -> str:
             lines.append(f"  • <b>{svc}</b>: no problems")
         for i in probs:
             lines.append(f"  • <b>{svc}</b> {str(i.get('type')).lower()}: "
-                         f"{html.escape(str(i.get('message') or ''))}")
+                         f"{html.escape(clip(i.get('message') or ''))}")
     lines.append("\n<b>Free space:</b>")
     failed = [s for s, v in checks.disks.items() if isinstance(v, BaseException)]
     disks = merged_disks(checks.disks)

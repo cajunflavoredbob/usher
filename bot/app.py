@@ -37,6 +37,7 @@ from webui import attach_webui, set_token_rejected
 from _version import __version__ as USHER_VERSION
 
 from bot.autofix_poll import poll_pending_autofixes
+from bot.htmlcap import cap_html
 from bot.progress_card import poll_progress_cards
 from bot.callback_prefixes import (
     ACCESS_ASK,
@@ -468,7 +469,7 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     playing, stop_rows = await now_playing_section(ctx)
     playing = await alarms_section(ctx) + playing
     sent = await update.effective_message.reply_text(
-        f"<b>Connection status:</b>\n{format_status(summary)}{playing}",
+        cap_html(f"<b>Connection status:</b>\n{format_status(summary)}{playing}"),
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(stop_rows) if stop_rows else None,
     )
@@ -490,7 +491,8 @@ async def admin_hub_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
     playing, stop_rows = await now_playing_section(ctx)
     playing = await alarms_section(ctx) + playing
     sent = await edit_or_send(
-        q, f"<b>Connection status:</b>\n{format_status(summary)}{playing}",
+        q, cap_html(
+            f"<b>Connection status:</b>\n{format_status(summary)}{playing}"),
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(
             stop_rows + list(end_markup(ADMIN_HUB).inline_keyboard)))
