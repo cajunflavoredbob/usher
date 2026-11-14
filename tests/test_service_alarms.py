@@ -331,3 +331,23 @@ async def test_long_disk_path_is_clipped_in_status(fresh_store):
     ctx = _ctx(fresh_store, radarr=_arr(disks=[_disk(path="/" + "d" * 900)]))
     text = await status_section(ctx)
     assert "d" * 400 not in text and "…" in text
+
+
+async def test_status_commands_cap_the_whole_message_when_free_space_grows(
+        fresh_store, monkeypatch):
+    """The outer cap_html in /status and Hub Status covers sections other than
+    Health: many disks grow Free space past Telegram's limit while the Health
+    section stays small."""
+    monkeypatch.setattr(app_mod, "_check_connections",
+                        AsyncMock(return_value={"Seerr": "ok"}))
+    disks = [_disk(path=f"/data/{i}/" + "d" * 150) for i in range(80)]
+    ctx = _ctx(fresh_store, radarr=_arr(health=[_health()], disks=disks))
+    ctx.bot_data["tautulli"] = None
+    assert len(await status_section(ctx)) > 4096
+    upd = make_update(text="/status", user_id=ADMIN)
+    await app_mod.cmd_status(upd, ctx)
+    text = upd.effective_message.reply_calls[0]["text"]
+    assert len(text) <= 4096 and "more lines)" in text
+    upd = make_update(callback_data="admt", user_id=ADMIN)
+    await app_mod.admin_hub_status(upd, ctx)
+    assert len(upd.callback_query.edits[-1]["text"]) <= 4096

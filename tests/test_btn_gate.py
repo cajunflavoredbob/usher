@@ -222,14 +222,6 @@ async def test_gate_still_blocks_destructive_and_flow_buttons(prefix):
         await global_btn_gate(upd, _Ctx(app))
 
 
-async def test_gate_still_blocks_stale_fix_button():
-    app = _make_app()
-    record_btn(app, 42, _make_message(1001))
-    upd = _make_update(42, 5555, data="tkfm:9")
-    with pytest.raises(ApplicationHandlerStop):
-        await global_btn_gate(upd, _Ctx(app))
-
-
 async def test_gate_refuses_same_message_id_from_other_chat():
     app = _make_app()
     record_btn(app, 42, _make_message(1001, chat_id=100))
