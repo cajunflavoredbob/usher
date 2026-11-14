@@ -40,6 +40,7 @@ from bot.autofix_poll import poll_pending_autofixes
 from bot.progress_card import poll_progress_cards
 from bot.callback_prefixes import (
     ACCOUNT_UNLINK,
+    ADMIN_INACTIVE,
     ADMIN_SHARES,
     ADMIN_STATUS,
     STOP_ASK,
@@ -87,8 +88,9 @@ from bot.link_flow import (_link_conversation, account_unlink, cmd_account,
 from bot.mystats_cmd import cmd_mystats, mystats_button
 from bot.discover_cmd import (cmd_trending, dv_category, dv_info, dv_page,
                               trending_hub)
-from bot.invite_flow import (_INV_KEYS, _invite_conversation, admin_shares,
-                             cmd_uninvite, share_matches, share_remove,
+from bot.invite_flow import (_INV_KEYS, _invite_conversation,
+                             admin_inactive, admin_shares, cmd_uninvite,
+                             share_matches, share_remove,
                              share_view, uninvite_cancel, uninvite_go)
 from bot.subscriptions import (cmd_subscriptions, subscription_add,
                                subscription_del, subscriptions_hub)
@@ -547,6 +549,8 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     # (Invite is an invite-conversation entry).
     app.add_handler(CallbackQueryHandler(admin_shares,
                                          pattern=fr"^{ADMIN_SHARES}:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_inactive,
+                                         pattern=fr"^{ADMIN_INACTIVE}:\d+$"))
     app.add_handler(CallbackQueryHandler(share_view,
                                          pattern=fr"^{SHARE_VIEW}:\d+$"))
     app.add_handler(CallbackQueryHandler(share_remove,

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import html
 import logging
+import time
 from typing import Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -40,9 +41,11 @@ from http_util import (NotFoundAPIError, PermanentAPIError,
                        user_friendly_message)
 from plex import PlexClient, PlexShare
 from store import UserStore
+from tautulli import match_share_user
 
 from bot.admin_hub import ADMIN_HUB, refuse_outside_admin_dm
 from bot.callback_prefixes import (
+    ADMIN_INACTIVE,
     ADMIN_INVITE,
     ADMIN_SHARES,
     INV_ALL,
@@ -513,12 +516,6 @@ def _share_label(share: PlexShare) -> str:
     return who if share.accepted else f"⏳ {who} (pending)"
 
 
-def _share_rows(shares) -> list[list[InlineKeyboardButton]]:
-    return [[InlineKeyboardButton(_share_label(s),
-                                  callback_data=f"{SHARE_VIEW}:{s.id}")]
-            for s in shares]
-
-
 def _share_view(share: PlexShare) -> tuple[str, InlineKeyboardMarkup]:
     lines = [f"👤 <b>{html.escape(_who(share))}</b>"]
     if share.email and share.username:
@@ -560,14 +557,21 @@ def _sorted_shares(shares) -> list[PlexShare]:
     return sorted(shares, key=lambda s: _who(s).lower())
 
 
-def _share_page(shares, page: int, nav_prefix: str,
-                header: str) -> tuple[str, InlineKeyboardMarkup]:
+def _share_page(shares, page: int, nav_prefix: str, header: str,
+                labels: Optional[dict] = None, lead_rows=(),
+                back_rows=None) -> tuple[str, InlineKeyboardMarkup]:
     """One page of Share buttons with Prev/Next (`nav_prefix:<page>`) and
-    "⬅️ Admin"; `header` gets "Page N of M." when there is more than one."""
+    "⬅️ Admin"; `header` gets "Page N of M." when there is more than one.
+    `labels` maps a Share id to its button text, `lead_rows` go above the
+    Share buttons and `back_rows` replace the "⬅️ Admin" row."""
     pages = -(-len(shares) // SHARES_PER_PAGE)
     page = min(max(page, 0), pages - 1)
     start = page * SHARES_PER_PAGE
-    rows = _share_rows(shares[start:start + SHARES_PER_PAGE])
+    rows = [list(r) for r in lead_rows]
+    rows += [[InlineKeyboardButton(
+        (labels or {}).get(s.id) or _share_label(s),
+        callback_data=f"{SHARE_VIEW}:{s.id}")]
+        for s in shares[start:start + SHARES_PER_PAGE]]
     nav = []
     if page > 0:
         nav.append(InlineKeyboardButton(
@@ -577,7 +581,7 @@ def _share_page(shares, page: int, nav_prefix: str,
             "Next ▶️", callback_data=f"{nav_prefix}:{page + 1}"))
     if nav:
         rows.append(nav)
-    rows.append([back_button(ADMIN_HUB)])
+    rows += back_rows if back_rows is not None else [[back_button(ADMIN_HUB)]]
     if pages > 1:
         header += f"\nPage {page + 1} of {pages}."
     return header, InlineKeyboardMarkup(rows)
@@ -658,9 +662,80 @@ async def admin_shares(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                        "👥 <b>Shares</b>\nNo one has a Share on your server yet.",
                        ADMIN_HUB, parse_mode="HTML")
         return
+    lead = ([[InlineKeyboardButton("💤 Inactive",
+                                   callback_data=f"{ADMIN_INACTIVE}:0")]]
+            if ctx.bot_data.get("tautulli") else [])
     await _edit_recorded(update, ctx, *_share_page(
         shares, _page_of(q.data), ADMIN_SHARES,
-        f"👥 <b>Shares</b> ({len(shares)})\nTap one to see it or remove it."))
+        f"👥 <b>Shares</b> ({len(shares)})\nTap one to see it or remove it.",
+        lead_rows=lead))
+
+
+def _last_seen_s(row: Optional[dict]) -> Optional[float]:
+    """A Tautulli users-table row's `last_seen` as epoch seconds, or None
+    when the person never watched (or there is no row)."""
+    try:
+        seen = float((row or {}).get("last_seen"))
+    except (TypeError, ValueError):
+        return None
+    return seen if seen > 0 else None
+
+
+def _inactive_label(share: PlexShare, seen: Optional[float],
+                    now: float) -> str:
+    who = _share_label(share)
+    if seen is None:
+        return f"{who}: never watched"
+    days = max(int((now - seen) // 86400), 0)
+    return f"{who}: last watched {days} days ago"
+
+
+async def admin_inactive(update: Update,
+                         ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """The Shares list's "💤 Inactive" and its Prev/Next (admn:<page>): the
+    Shares whose Tautulli last_seen is `inactive_share_days` or more days ago,
+    or empty, longest-idle first. Each row opens the usual Share view."""
+    if await refuse_outside_admin_dm(update, ctx):
+        return
+    q = update.callback_query
+    await q.answer()
+    force_end_flow_conversations(ctx, update)
+    tau = ctx.bot_data.get("tautulli")
+    if tau is None:
+        await end_flow(update, ctx, "Tautulli isn't linked.", ADMIN_HUB)
+        return
+    shares = await _load_shares(update, ctx, q.data)
+    if shares is None:
+        return
+    try:
+        rows = await tau.get_users_table()
+    except Exception as exc:
+        logger.exception("Tautulli get_users_table failed")
+        await end_flow(update, ctx,
+                       f"Couldn't ask Tautulli. {user_friendly_message(exc)}",
+                       ADMIN_HUB, q.data)
+        return
+    days = ctx.bot_data["settings_store"].settings.inactive_share_days
+    now = time.time()
+    seen = {s.id: _last_seen_s(match_share_user(rows, s.email, s.username))
+            for s in shares}
+    idle = sorted((s for s in shares
+                   if seen[s.id] is None or now - seen[s.id] >= days * 86400),
+                  key=lambda s: (seen[s.id] is not None, seen[s.id] or 0,
+                                 _who(s).lower()))
+    shares_back = [InlineKeyboardButton("⬅️ Shares",
+                                        callback_data=f"{ADMIN_SHARES}:0")]
+    if not idle:
+        await _edit_recorded(update, ctx, f"💤 <b>Inactive</b>\nEvery Share "
+                             f"has watched something in the last {days} days.",
+                             InlineKeyboardMarkup([shares_back]))
+        return
+    await _edit_recorded(update, ctx, *_share_page(
+        idle, _page_of(q.data), ADMIN_INACTIVE,
+        f"💤 <b>Inactive</b> ({len(idle)})\nNothing watched for {days} days "
+        "or more. Tap one to see it or remove it.",
+        labels={s.id: _inactive_label(s, seen[s.id], now) for s in idle},
+        back_rows=[shares_back, [back_button(ADMIN_HUB)]]))
 
 
 async def share_matches(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:

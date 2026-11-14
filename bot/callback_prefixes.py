@@ -115,6 +115,8 @@ ADMIN_INVITE: Final = "admi"          # Admin Hub "Invite" (invite conversation
                                       # entry point)
 ADMIN_SHARES: Final = "adms"          # adms:<page> Admin Hub "Shares" (page 0),
                                       # Prev/Next and "⬅️ Shares"
+ADMIN_INACTIVE: Final = "admn"        # admn:<page> Shares list "💤 Inactive" (page 0)
+                                      # and its Prev/Next (Tautulli linked only)
 ADMIN_STATUS: Final = "admt"          # Admin Hub "Status" (global handler)
 STOP_ASK: Final = "stk"               # stk:<token> a Now playing Stop button
                                       # -> confirm card (Admin, DM only)

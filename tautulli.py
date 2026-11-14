@@ -86,6 +86,14 @@ class TautulliClient:
         self._users_cache = (now, users)
         return users
 
+    async def get_users_table(self, length: int = 1000) -> list:
+        """Every user's row with `last_seen` (epoch seconds, empty when the
+        person never watched), unwrapped from the `{"data": [...]}` block
+        Tautulli wraps them in. `length` lifts Tautulli's page size of 25."""
+        data = await self.call("get_users_table", length=length)
+        rows = data.get("data") if isinstance(data, dict) else None
+        return [r for r in (rows or []) if isinstance(r, dict)]
+
     async def get_user_watch_time_stats(self, user_id, days=(7, 30)) -> list:
         """A user's plays and watch time per window: a list of rows with
         `query_days`, `total_plays` and `total_time` (seconds)."""
@@ -169,7 +177,13 @@ async def find_user_for_share(client: TautulliClient, email: Optional[str],
                               username: Optional[str]) -> Optional[dict]:
     """The Tautulli user row for a Share: matched by email first, then by
     username (letter case ignored), or None."""
-    users = await client.get_users()
+    return match_share_user(await client.get_users(), email, username)
+
+
+def match_share_user(users: list, email: Optional[str],
+                     username: Optional[str]) -> Optional[dict]:
+    """The row among `users` (get_users or get_users_table rows) that
+    belongs to a Share: email first, then username, letter case ignored."""
     for u in users:
         if _same(u.get("email"), email):
             return u

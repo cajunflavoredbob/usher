@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tautulli**: link Tautulli in the web admin panel (URL, API key, Test, Save, Remove the saved key) and see its version or error in /status. Nothing else changes until later releases use the link.
 - **Playback details on Tickets**: with Tautulli linked, the Admin's new-Ticket DM and Ticket card show how the Reporter last played that title (player, platform, direct play or transcode, video and audio codecs, date). Left out when there is no matching play; never shown to the Reporter.
 - **Popular here this week**: with Tautulli linked, the Trending list gains a category of the server's most watched movies and shows over 7 days, as titles only (no names, no play counts). Titles Tautulli can match to TMDb open detail cards and Requests as usual.
+- **My stats**: with Tautulli linked, /mystats (and a My stats button in the Trending list) shows your plays and watch time for the last 7 and 30 days and your most watched titles.
+- **Now playing**: with Tautulli linked, the Admin's Status lists who is playing now, with a Stop button on each stream (confirm first, with or without a message to the viewer).
+- **Inactive Shares**: with Tautulli linked, the Admin Hub's Shares list gains a 💤 Inactive button listing Shares that haven't watched for 60 days or more (changeable in the panel's Tautulli tab), or never, each opening the usual Share view with Remove.
 
 ### Fixed
 - The admin login lockout now holds against a burst of parallel attempts, and the login and first-run setup pages refuse oversized or compressed form bodies.
