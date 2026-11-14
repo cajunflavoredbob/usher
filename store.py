@@ -966,6 +966,17 @@ class UserStore:
                 return cur.rowcount > 0
         return await self._run(_do)
 
+    async def has_follow_row(self, telegram_id: int, tmdb_id: int) -> bool:
+        """Whether the user has any Follow row for the show, active or
+        removed (an automatic follow must not bring a removed one back)."""
+        def _do() -> bool:
+            with self._conn() as c:
+                return c.execute(
+                    "SELECT 1 FROM follows WHERE telegram_id = ? "
+                    "AND tmdb_id = ?", (telegram_id, tmdb_id)
+                ).fetchone() is not None
+        return await self._run(_do)
+
     async def is_following(self, telegram_id: int, tmdb_id: int) -> bool:
         def _do() -> bool:
             with self._conn() as c:

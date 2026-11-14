@@ -119,6 +119,8 @@ from bot.digest import (DIGEST_FIRST_DELAY_S, DIGEST_INTERVAL_S,
                         account_notices, digest_info, digest_job,
                         notice_toggle)
 from bot.follows import follow_add, follow_del, follow_remove, follows_hub
+from bot.auto_follow import (AUTO_FOLLOW_FIRST_DELAY_S,
+                             AUTO_FOLLOW_INTERVAL_S, auto_follow_job)
 from bot.new_content import (NEW_CONTENT_FIRST_DELAY_S, NEW_CONTENT_INTERVAL_S,
                              poll_new_content)
 from bot.subscriptions import (cmd_subscriptions, subscription_add,
@@ -671,6 +673,12 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
         interval=NEW_CONTENT_INTERVAL_S,
         first=NEW_CONTENT_FIRST_DELAY_S,
         name="new_content_poll",
+    )
+    app.job_queue.run_repeating(
+        auto_follow_job,
+        interval=AUTO_FOLLOW_INTERVAL_S,
+        first=AUTO_FOLLOW_FIRST_DELAY_S,
+        name="auto_follow",
     )
     app.job_queue.run_repeating(
         digest_job,
