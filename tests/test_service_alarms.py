@@ -298,3 +298,36 @@ def test_gb_limit_still_counts_when_set():
     assert small.is_low(10, 50)
     big = Disk(path="/data", label="data", free=60 * GB, total=500 * GB)
     assert not big.is_low(10, 50)
+
+
+async def test_oversized_health_keeps_free_space_and_plex_in_status(fresh_store):
+    items = [_health(msg=_titles(400), source=f"Src{i}") for i in range(30)]
+    ctx = _ctx(fresh_store, radarr=_arr(health=items, disks=[_disk()]))
+    ctx.bot_data["plex"] = object()
+    text = await status_section(ctx)
+    assert "more lines)" in text
+    assert text.index("more lines)") < text.index("<b>Free space:</b>")
+    assert "/data: 8% free" in text
+    assert "<b>Plex server:</b>" in text
+    assert len(text) < 3500
+
+
+async def test_long_health_message_and_wiki_are_clipped_in_the_alarm_dm(fresh_store):
+    ctx = _ctx(fresh_store, radarr=_arr(health=[
+        _health(msg="m" * 900, wiki="https://wiki.test/" + "w" * 900)]))
+    await check_alarms(ctx)
+    text = _sent(ctx)[0]
+    assert "m" * 400 not in text and "w" * 400 not in text
+    assert text.count("…") == 2
+
+
+async def test_long_health_message_is_clipped_in_status(fresh_store):
+    ctx = _ctx(fresh_store, radarr=_arr(health=[_health(msg="m" * 900)]))
+    text = await status_section(ctx)
+    assert "m" * 400 not in text and "…" in text
+
+
+async def test_long_disk_path_is_clipped_in_status(fresh_store):
+    ctx = _ctx(fresh_store, radarr=_arr(disks=[_disk(path="/" + "d" * 900)]))
+    text = await status_section(ctx)
+    assert "d" * 400 not in text and "…" in text

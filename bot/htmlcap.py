@@ -39,9 +39,11 @@ def _open_tags(fragment: str) -> list[str]:
 
 def cap_html(text: str, limit: int = SAFE_LIMIT) -> str:
     """Return `text` unchanged when it fits. Otherwise cut it at a line
-    break (or, failing that, a safe character) so the result, closing tags
-    and a "(+N more lines)" tail included, stays within `limit`. Never cuts
-    inside a tag or an entity, and closes any tag left open."""
+    break (or, failing that, a safe character) and add a "(+N more lines)"
+    tail. The result stays within `limit` while the closing tags and the
+    tail fit the reserve under it (about 80 characters); a message with
+    many tags open at the cut can exceed it. Never cuts inside a tag or an
+    entity, and closes any tag left open."""
     if len(text) <= limit:
         return text
     budget = max(limit - _TAIL_RESERVE, 0)

@@ -11,7 +11,10 @@ from bot.htmlcap import SAFE_LIMIT, TELEGRAM_LIMIT, cap_html, clip
 def _well_formed(text: str) -> None:
     # No dangling "<" or "&" at the end, and every tag closed.
     assert text.rfind("<") <= text.rfind(">")
-    assert not re.search(r"&[a-z#0-9]*$", text)
+    # Every "&" starts a complete entity (the output ends with the tail, so
+    # a split entity sits mid-text, not at the end).
+    for m in re.finditer(r"&", text):
+        assert re.match(r"&(?:[a-zA-Z]+|#\d+|#x[0-9a-fA-F]+);", text[m.start():])
     opens = re.findall(r"<([a-z]+)[^>]*>", text)
     closes = re.findall(r"</([a-z]+)>", text)
     assert sorted(opens) == sorted(closes)

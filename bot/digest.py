@@ -166,6 +166,12 @@ def _auto_follow_live(bot_data) -> bool:
     return bot_data.get("tautulli") is not None
 
 
+def _follow_pings_on(bot_data) -> bool:
+    """Follows are still created with the Admin's follow pings off, but no
+    new-episode ping is sent for them."""
+    return bool(bot_data["settings_store"].settings.tg_notify_follows)
+
+
 async def _notices_card(store, telegram_id: int, bot_data):
     """The card. A switch the server cannot act on reads "off on this
     server" and gets no button, so nobody opts in to nothing."""
@@ -175,12 +181,16 @@ async def _notices_card(store, telegram_id: int, bot_data):
     digest_state = _onoff(prefs["digest"]) if digest_live else "off on this server"
     follow_state = (_onoff(prefs["auto_follow"]) if follow_live
                     else "off on this server")
+    follow_text = ("Follow shows you have been watching, so you hear about "
+                   "new episodes.")
+    if follow_live and not _follow_pings_on(bot_data):
+        follow_text = ("Follow shows you have been watching. New-episode "
+                       "pings are off on this server.")
     text = (
         "🔔 <b>Notices</b>\n\n"
         f"Daily digest: <b>{digest_state}</b>. A daily message "
         "listing what was added to the server.\n"
-        f"Automatic follows: <b>{follow_state}</b>. Follow "
-        "shows you have been watching, so you hear about new episodes.")
+        f"Automatic follows: <b>{follow_state}</b>. {follow_text}")
     rows = []
     if digest_live:
         rows.append([InlineKeyboardButton(

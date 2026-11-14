@@ -33,6 +33,9 @@ logger = logging.getLogger("usher")
 ALARM_INTERVAL_S = 5 * 60
 ALARM_FIRST_DELAY_S = 60
 HEALTH_LEVELS = ("warning", "error")
+# The /status Health section is capped on its own, leaving room for Free
+# space, the Plex line and Now playing.
+HEALTH_CAP = 2500
 KIND_HEALTH = "health"
 KIND_DISK = "disk"
 KIND_PLEX = "plex"
@@ -327,19 +330,22 @@ async def status_section(ctx) -> str:
     if not any(ctx.bot_data.get(k) for k, _ in _APPS):
         return "\n\n" + plex_line if plex_line else ""
     checks = await gather_checks(ctx.bot_data)
-    lines = ["\n\n<b>Health:</b>"]
+    health = ["\n\n<b>Health:</b>"]
     for svc, items in checks.health.items():
         if isinstance(items, BaseException):
-            lines.append(f"  • <b>{svc}</b>: couldn't ask. "
-                         f"{html.escape(user_friendly_message(items))}")
+            health.append(f"  • <b>{svc}</b>: couldn't ask. "
+                          f"{html.escape(user_friendly_message(items))}")
             continue
         probs = [i for i in items or [] if isinstance(i, dict)
                  and str(i.get("type") or "").lower() in HEALTH_LEVELS]
         if not probs:
-            lines.append(f"  • <b>{svc}</b>: no problems")
+            health.append(f"  • <b>{svc}</b>: no problems")
         for i in probs:
-            lines.append(f"  • <b>{svc}</b> {str(i.get('type')).lower()}: "
-                         f"{html.escape(clip(i.get('message') or ''))}")
+            health.append(f"  • <b>{svc}</b> {str(i.get('type')).lower()}: "
+                          f"{html.escape(clip(i.get('message') or ''))}")
+    # Capped on its own so a long health list cannot push Free space or the
+    # Plex line off the capped /status message.
+    lines = [cap_html("\n".join(health), HEALTH_CAP)]
     lines.append("\n<b>Free space:</b>")
     failed = [s for s, v in checks.disks.items() if isinstance(v, BaseException)]
     disks = merged_disks(checks.disks)

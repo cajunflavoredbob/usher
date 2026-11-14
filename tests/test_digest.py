@@ -244,3 +244,19 @@ def test_digest_settings_default_off_at_18_and_round_trip():
                             "tg_notify_digest": False})
     assert (s.digest_enabled, s.digest_hour, s.tg_notify_digest) == (True, 7, False)
     assert Settings.from_dict({"digest_hour": 30}).digest_hour == 18
+
+
+@pytest.mark.parametrize("pings,says_off", [(False, True), (True, False)])
+async def test_notices_card_says_follow_pings_are_off_on_the_server(
+        fresh_store, pings, says_off):
+    await _link(fresh_store, 1)
+    hub.register_hub("account", "Account", None)
+    ctx = _ctx(fresh_store)
+    ctx.bot_data["tautulli"] = AsyncMock()
+    ctx.bot_data["settings_store"].settings.tg_notify_follows = pings
+    upd = make_update(callback_data="accnt", user_id=1)
+    await account_notices(upd, ctx)
+    text = upd.callback_query.edits[-1]["text"]
+    assert ("pings are off on this server" in text) is says_off
+    assert ("so you hear about new episodes" in text) is not says_off
+    assert "ntg:auto" in _buttons(upd)
