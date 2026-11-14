@@ -377,3 +377,66 @@ async def test_row_extended_after_the_first_read_is_not_removed(fresh_store):
     await run_share_expiries(app, NOW)
     plex.remove_share.assert_not_awaited()
     assert await fresh_store.get_share_expiry(1) is not None
+
+
+async def test_retry_after_the_date_was_extended_leaves_the_share(fresh_store):
+    app, plex = await _setup(fresh_store, [_share(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2031-01-01 00:00:00")
+    ctx, upd = _tap(app, f"{SHARE_RETRY}:1")
+    await share_expiry_action(upd, ctx)
+    plex.remove_share.assert_not_awaited()
+    assert await fresh_store.get_share_expiry(1) is not None
+    assert "Jan 1, 2031" in upd.callback_query.edits[-1]["text"]
+
+
+async def test_reminder_states_the_real_days_left(fresh_store):
+    app, plex = await _setup(fresh_store, [_share(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       _at(timedelta(days=1, hours=2)))
+    await run_share_expiries(app, NOW)
+    text = _sent_to(app, ADMIN_ID)[0]["text"]
+    assert "in about 1 day." in text and "3 days" not in text
+
+
+async def test_keep_restores_the_reminder_with_the_real_days_left(
+        fresh_store):
+    app, plex = await _setup(fresh_store, [_share(1)])
+    later = (datetime.now(timezone.utc) + timedelta(days=2, hours=1)
+             ).strftime("%Y-%m-%d %H:%M:%S")
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice", later)
+    upd = await _gated_tap(app, f"{SHARE_KEEP}:1")
+    text = upd.callback_query.edits[-1]["text"]
+    assert "in about 2 days." in text and "3 days" not in text
+
+
+async def test_confirm_and_keep_taps_reach_the_share_expiry_handler():
+    """shnoy and shnok are matched by the registered pattern and no earlier
+    handler takes them (the real handler registration)."""
+    from pathlib import Path
+    from unittest.mock import MagicMock
+
+    from telegram.ext import TypeHandler
+
+    import bot.app as app_mod
+    settings = MagicMock()
+    settings.settings.telegram_bot_token = "123:abc"
+    settings.settings.admin_telegram_id = ADMIN_ID
+    app = app_mod._build_app(settings, b"secret", MagicMock(), MagicMock(),
+                             Path("."), Path("settings.json"), ":memory:",
+                             8080, "127.0.0.1")
+    for prefix in (SHARE_REMOVE_YES, SHARE_KEEP):
+        from telegram import CallbackQuery, Update, User
+        upd = Update(update_id=1, callback_query=CallbackQuery(
+            id="1", from_user=User(ADMIN_ID, "a", False),
+            chat_instance="c", data=f"{prefix}:7"))
+        # One handler per group runs; the gates (TypeHandlers) match every
+        # update and pass it on, so only the other handlers count.
+        taken = []
+        for group in sorted(app.handlers):
+            hit = next((h for h in app.handlers[group]
+                        if not isinstance(h, TypeHandler)
+                        and h.check_update(upd)), None)
+            if hit is not None:
+                taken.append(hit.callback)
+        assert taken == [share_expiry_action], prefix

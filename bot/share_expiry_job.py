@@ -67,8 +67,22 @@ async def _dm(app, chat_id: int, text: str,
         return False
 
 
-def _reminder_card(row: ShareExpiry) -> tuple[str, InlineKeyboardMarkup]:
+def _ends_in(expires_at: str, now: datetime) -> str:
+    """", in about 3 days" for the reminder, from the row's real date: whole
+    days left, "in less than a day" under one, nothing once it has passed."""
+    left = _parse(expires_at) - now
+    if left <= timedelta(0):
+        return ""
+    if left < timedelta(days=1):
+        return ", in less than a day"
+    days = round(left / timedelta(days=1))
+    return f", in about {days} day{'s' if days != 1 else ''}"
+
+
+def _reminder_card(row: ShareExpiry, now: Optional[datetime] = None
+                   ) -> tuple[str, InlineKeyboardMarkup]:
     """The Admin's reminder: text and Extend / Let it end / Remove now."""
+    now = now or datetime.now(timezone.utc)
     sid = row.share_id
     markup = InlineKeyboardMarkup([[
         InlineKeyboardButton(f"➕ Extend {EXTEND_DAYS} days",
@@ -78,15 +92,16 @@ def _reminder_card(row: ShareExpiry) -> tuple[str, InlineKeyboardMarkup]:
         InlineKeyboardButton("🗑 Remove now",
                              callback_data=f"{SHARE_REMOVE_NOW}:{sid}"),
     ]])
+    date = expiry_date_text(row.expires_at)
     return (f"⏳ <b>{html.escape(_who(row))}</b>'s access ends on "
-            f"{expiry_date_text(row.expires_at)}, in about 3 days."), markup
+            f"{date}{_ends_in(row.expires_at, now)}.", markup)
 
 
 async def _remind(app, store: UserStore, row: ShareExpiry,
-                  admin_id: int) -> None:
+                  admin_id: int, now: datetime) -> None:
     date = expiry_date_text(row.expires_at)
     if not row.admin_reminded:
-        text, markup = _reminder_card(row)
+        text, markup = _reminder_card(row, now)
         if await _dm(app, admin_id, text, markup):
             await store.mark_share_expiry_reminded(row.share_id, admin=True)
     if not row.holder_reminded and row.username:
@@ -124,7 +139,7 @@ async def run_share_expiries(app, now: Optional[datetime] = None) -> None:
     due = [r for r in rows if _parse(r.expires_at) <= now]
     for row in rows:
         if row not in due and _parse(row.expires_at) - now <= REMIND_BEFORE:
-            await _remind(app, store, row, admin_id)
+            await _remind(app, store, row, admin_id, now)
     if not due:
         return
     plex = app.bot_data["plex"]
@@ -181,7 +196,7 @@ async def share_expiry_action(update: Update,
                               ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Extend 30 days (shext:<id>), Let it end (shend:<id>), Remove now
     (shnow:<id>, which asks to confirm: Remove shnoy:<id>, Keep shnok:<id>)
-    and Retry (shrty:<id>). Admin only; each edits its DM to say what
+    and Retry (shrty:<id>, which removes only while the date is still due). Admin only; each edits its DM to say what
     happened. The DMs are not recorded buttons (a reminder can sit for days),
     so these prefixes are exempt from the button gate (bot.shared); this
     handler is the check: Admin and DM only, and it re-reads the row."""
@@ -218,7 +233,15 @@ async def share_expiry_action(update: Update,
     elif action == SHARE_KEEP:
         text, markup = _reminder_card(row)
         await edit_or_send(q, text, reply_markup=markup, parse_mode="HTML")
+    elif (action == SHARE_RETRY
+          and _parse(row.expires_at) > datetime.now(timezone.utc)):
+        # Extended since the failed removal: the Admin chose to keep it.
+        await edit_or_send(
+            q, f"👍 <b>{who}</b> now ends on "
+               f"{expiry_date_text(row.expires_at)}: left as it is.",
+            parse_mode="HTML")
     else:
+        # Retry of a removal that is still due, or the confirmed Remove.
         await _remove_from_button(q, ctx, store, row, who)
 
 
