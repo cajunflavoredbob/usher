@@ -146,9 +146,14 @@ def _clear_issue_state(ctx, *, keep_resume: bool = False) -> None:
     # keeps it (keep_resume), flagged superseded: when the re-link finishes,
     # the resume then only tells the user the earlier report was not sent
     # (whether or not the new report is still open), instead of the report
-    # vanishing without a word or being submitted from the new draft.
+    # vanishing without a word or being submitted from the new draft. An
+    # already superseded marker belongs to the earlier report, not to this
+    # flow, so ending the newer report (cancel, timeout, finish) leaves it:
+    # only the resume itself consumes it.
     marker = ctx.user_data.get("relink_resume")
     if isinstance(marker, dict) and marker.get("kind") == "submit_ticket":
+        if (marker.get("payload") or {}).get("superseded"):
+            return
         if not keep_resume:
             ctx.user_data.pop("relink_resume", None)
         else:

@@ -546,6 +546,9 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await q.edit_message_text(
             f"🔧 Fix #{ticket_id}\n{refusal}",
             reply_markup=InlineKeyboardMarkup(kb.inline_keyboard[-1:]))
+        # Its Back is gated like the menu's: record it, or on an older Ticket
+        # DM the Back is refused and the gate strips the keyboard.
+        record_btn(ctx.application, update.effective_user.id, q.message)
         return
     await q.edit_message_text(
         f"🔧 Fix #{ticket_id} - how?\n"

@@ -153,3 +153,26 @@ async def test_fix_menu_for_a_whole_season_ticket_shows_the_refusal_only():
                  for b in row]
     assert len(callbacks) == 1 and callbacks[0].endswith(":5")
     assert not any(c.startswith(("tkfd", "tkfm")) for c in callbacks)
+
+
+async def test_fix_refusal_records_its_message_so_the_gated_back_works():
+    import pytest
+    from telegram.ext import ApplicationHandlerStop
+    from bot.shared import global_btn_gate, record_btn
+    ctx = _admin_ctx(problem_episode=None)
+    # A newer button message exists, so the older Ticket DM (id 100) is not
+    # the latest one the gate knows about.
+    record_btn(ctx.application, ADMIN,
+               SimpleNamespace(message_id=55, chat_id=100))
+    upd = make_update(callback_data="tkf:5", user_id=ADMIN)
+    await tk_fix(upd, ctx)
+    back = [b.callback_data
+            for row in upd.callback_query.edits[-1]["reply_markup"].inline_keyboard
+            for b in row][0]
+    tap = make_update(callback_data=back, user_id=ADMIN)
+    tap.callback_query.message = upd.callback_query.message
+    ctx.user_data = {}
+    try:
+        await global_btn_gate(tap, ctx)
+    except ApplicationHandlerStop:
+        pytest.fail("the gate refused the Back on the Fix refusal")

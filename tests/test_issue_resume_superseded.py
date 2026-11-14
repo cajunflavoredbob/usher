@@ -229,3 +229,25 @@ async def test_f_no_second_issue_resumes_the_submit(h):
     assert any(SUBMITTED in t for t in texts), texts
     assert not any(SUPERSEDED_LINE in t or INCOMPLETE in t for t in texts)
     h.app.bot_data["seerr"].create_issue.assert_awaited_once()
+
+
+async def test_g_new_issue_cancelled_then_relink_still_says_not_sent(h):
+    prompt = await h.interrupted_submit(**_DRAFT)
+    await h.say("/issue")
+    await h.say("/cancel")  # cancels the newer report
+    texts = await h.relink(prompt)
+    _assert_only_the_superseded_line(texts)
+    h.app.bot_data["seerr"].create_issue.assert_not_called()
+
+
+async def test_h_new_issue_timed_out_then_relink_still_says_not_sent(h):
+    from bot.ticket_flow import _ticket_timeout
+    prompt = await h.interrupted_submit(**_DRAFT)
+    await h.say("/issue")
+    h._ids += 1
+    upd = h._update({"update_id": h._ids,
+                     "message": h._message_dict(h._ids, "x")})
+    await _ticket_timeout(upd, CallbackContext.from_update(upd, h.app))
+    texts = await h.relink(prompt)
+    _assert_only_the_superseded_line(texts)
+    h.app.bot_data["seerr"].create_issue.assert_not_called()

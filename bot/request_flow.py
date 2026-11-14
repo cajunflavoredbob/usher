@@ -540,10 +540,16 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
                 return None
             return ConversationHandler.END
     set_hub_origin(ctx, hub)
-    # Another flow may still be parked in a pick state; end everything (this
-    # conversation isn't active yet, so it's untouched) so no stale flow can
-    # fire a timeout notice mid-request.
+    # Another flow may still be parked in a pick state, an open /request
+    # included; end everything so no stale flow can fire a timeout notice
+    # mid-request. Ending an open /request pops its rq_* keys, rq_perms (just
+    # cached by the gate above) among them, so put it back: the confirm needs
+    # it for the 4K button. The force-end can't move before the gate, because
+    # the coverage refusal above must leave an open /request alone.
+    perms = ctx.user_data.get("rq_perms")
     force_end_flow_conversations(ctx, update)
+    if perms is not None:
+        ctx.user_data["rq_perms"] = perms
     try:
         _, media_type, tmdb_id_s = q.data.split(":")
         tmdb_id = int(tmdb_id_s)

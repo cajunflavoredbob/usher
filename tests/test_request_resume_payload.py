@@ -136,3 +136,16 @@ async def test_an_old_marker_with_an_empty_payload_says_the_draft_is_gone(h):
     texts = await h.relink(prompt)
     assert _filed(h) == [], texts
     assert any("draft is gone" in t for t in texts), texts
+
+
+async def test_a_jump_over_an_open_request_keeps_the_four_k_permission(h):
+    from seerr import PERMISSION_REQUEST_4K
+    h.app.bot_data["seerr"].get_my_permissions = AsyncMock(
+        return_value=PERMISSION_REQUEST_4K)
+    await _start_b_unconfirmed(h)  # an open /request
+    record_btn(h.app, USER_ID, SimpleNamespace(message_id=5001, chat_id=USER_ID))
+    from seerr import MediaResult
+    h.user_data["dv_results"] = [MediaResult("movie", 333, "Movie C", "2022", 3)]
+    await h.tap("rqfi:movie:333", 5001)  # a /trending tap while it is open
+    assert h.user_data["rq_media"]["tmdb_id"] == 333
+    assert h.user_data["rq_perms"] == PERMISSION_REQUEST_4K
