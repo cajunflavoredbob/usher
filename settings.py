@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import secrets
+import threading
 from dataclasses import asdict, dataclass, field
 from hashlib import pbkdf2_hmac
 from hmac import compare_digest
@@ -191,6 +192,10 @@ class SettingsStore:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        # Saves run in worker threads (save_async) and share one temp file:
+        # two overlapping saves would race on it, and the loser's rename
+        # would find it gone.
+        self._write_lock = threading.Lock()
         self.settings = self._load_or_seed()
 
     def _load_or_seed(self) -> Settings:
@@ -293,6 +298,10 @@ class SettingsStore:
             logger.debug("directory fsync failed", exc_info=exc)
 
     def _write(self, s: Settings) -> None:
+        with self._write_lock:
+            self._write_unlocked(s)
+
+    def _write_unlocked(self, s: Settings) -> None:
         # Crash-safe write: flush + fsync the temp file's contents to disk
         # BEFORE the atomic rename, then fsync the parent directory so the
         # rename is durable too. Without this, an unsafe shutdown (the host

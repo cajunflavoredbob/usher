@@ -366,8 +366,11 @@ async def edit_or_send(q, text: str, **kwargs):
     or None when both paths failed."""
     try:
         return await q.edit_message_text(text, **kwargs)
-    except telegram.error.BadRequest:
-        pass
+    except telegram.error.BadRequest as exc:
+        # A double tap re-renders identical text; Telegram refuses that
+        # edit, and the message already shows what we wanted.
+        if "not modified" in str(exc).lower():
+            return q.message
     except Exception as exc:
         logger.exception("edit_message_text failed unexpectedly; falling back to send", exc_info=exc)
     try:
@@ -578,7 +581,7 @@ async def prompt_plex_relink(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *,
             "payload": resume_payload or {},
             "saved_at": time.time(),
         }
-    rows = [[InlineKeyboardButton("🔗 Unlink & sign in again",
+    rows = [[InlineKeyboardButton("🔗 Sign in to Plex again",
                                   callback_data=RELINK)]]
     if back is not None:
         rows.append([back])
@@ -586,8 +589,8 @@ async def prompt_plex_relink(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *,
     text = (
         "⚠️ Plex says your sign-in is no longer valid. This usually happens "
         "after a password change or signing out of all devices.\n\n"
-        "Tap below to clear the old session and sign back in - takes about "
-        "a minute."
+        "Tap below to sign back in - takes about a minute. Your Link stays "
+        "as it is until the new sign-in succeeds."
     )
     if resume_kind is not None:
         text += "\n\nI'll pick up where you left off once you're signed back in."
@@ -719,13 +722,26 @@ _FLOW_COMMANDS: Final = frozenset({"link", "issue", "request", "invite"})
 
 def command_name(msg) -> Optional[str]:
     """Return the bot-command at the start of `msg` (lowercased, without the
-    leading slash or a trailing @botname), or None if it isn't a command."""
+    leading slash or a trailing @botname), or None if it isn't a command
+    or is addressed to a different bot (/weather@OtherBot in a group)."""
     if msg is None or not msg.text:
         return None
     for ent in (msg.entities or ()):
         if ent.type == MessageEntity.BOT_COMMAND and ent.offset == 0:
-            return msg.text[1:ent.length].split("@", 1)[0].lower()
+            name, _, target = msg.text[1:ent.length].partition("@")
+            if target and not _addressed_to_this_bot(msg, target):
+                return None
+            return name.lower()
     return None
+
+
+def _addressed_to_this_bot(msg, target: str) -> bool:
+    """True unless the bot's own username is known and differs."""
+    try:
+        own = msg.get_bot().username
+    except Exception:
+        return True
+    return not own or own.lower() == target.lower()
 
 
 async def reset_stale_flows(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:

@@ -169,3 +169,20 @@ async def test_two_live_flows_get_the_generic_notice():
         await reset_stale_flows(upd, _ctx([a, b], names=names))
         upd.effective_message.reply_text.assert_awaited_once_with(
             "Stopped what you were in the middle of.")
+
+
+def _cmd_msg(text, length, bot_username):
+    return SimpleNamespace(
+        text=text,
+        entities=(SimpleNamespace(type=MessageEntity.BOT_COMMAND, offset=0,
+                                  length=length),),
+        get_bot=lambda: SimpleNamespace(username=bot_username),
+    )
+
+
+def test_command_for_another_bot_is_not_ours():
+    assert command_name(_cmd_msg("/weather@OtherBot", 17, "UsherBot")) is None
+
+
+def test_command_for_this_bot_matches_any_case():
+    assert command_name(_cmd_msg("/issue@usherbot", 15, "UsherBot")) == "issue"

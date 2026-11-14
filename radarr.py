@@ -9,7 +9,8 @@ import httpx
 
 from fix_result import (FixResult, ReleaseFingerprint, build_fingerprint,
                         find_grab_for_import, parse_queue_records)
-from http_util import APIError, execute, json_or_raise
+from http_util import (APIError, execute, json_or_raise,
+                       user_friendly_message)
 
 logger = logging.getLogger("usher." + __name__)
 
@@ -172,7 +173,7 @@ class RadarrClient:
                     steps.append("blocklist")
                     blocklisted = True
             except APIError as exc:
-                return FixResult.failed(f"Couldn't blocklist release: {exc.user_message}")
+                return FixResult.failed(f"Couldn't blocklist release {user_friendly_message(exc)}")
 
         if movie.has_file and movie.movie_file_id:
             try:
@@ -186,7 +187,7 @@ class RadarrClient:
                 else:
                     prefix = "Blocklisted release but " if blocklisted else ""
                     return FixResult.partial(
-                        f"{prefix}couldn't delete file: {exc.user_message}",
+                        f"{prefix}couldn't delete file {user_friendly_message(exc)}",
                         steps_done=steps, poll_info=poll_info, before=before,
                     )
 
@@ -195,7 +196,7 @@ class RadarrClient:
             steps.append("search")
         except APIError as exc:
             return FixResult.partial(
-                f"Cleaned up but couldn't trigger search: {exc.user_message}",
+                f"Cleaned up but couldn't trigger search {user_friendly_message(exc)}",
                 steps_done=steps, poll_info=poll_info, before=before,
             )
 
@@ -213,7 +214,7 @@ class RadarrClient:
         try:
             movie = await self.get_movie_by_tmdb(tmdb_id)
         except APIError as exc:
-            return FixResult.failed(f"Radarr lookup failed: {exc.user_message}")
+            return FixResult.failed(f"Radarr lookup failed {user_friendly_message(exc)}")
         if movie is None:
             return FixResult.failed("Movie isn't in Radarr (not monitored).")
         return await self._run_movie_workflow(movie=movie, blocklist=False)
@@ -226,7 +227,7 @@ class RadarrClient:
         try:
             movie = await self.get_movie_by_tmdb(tmdb_id)
         except APIError as exc:
-            return FixResult.failed(f"Radarr lookup failed: {exc.user_message}")
+            return FixResult.failed(f"Radarr lookup failed {user_friendly_message(exc)}")
         if movie is None:
             return FixResult.failed("Movie isn't in Radarr (not monitored).")
         return await self._run_movie_workflow(movie=movie, blocklist=True)

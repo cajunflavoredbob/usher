@@ -474,13 +474,13 @@ def _back_prefix(q) -> str:
 async def tk_close_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Admin tapped [Close] -- show the with/without comment options."""
     q = update.callback_query
+    if not await require_admin(q, ctx, action_label="tk_close_menu"):
+        return
     await q.answer()
     try:
         ticket_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
         logger.warning("Unparseable callback data: %r", q.data)
-        return
-    if not await require_admin(q, ctx, action_label="tk_close_menu"):
         return
     kb = InlineKeyboardMarkup([
         [
@@ -496,13 +496,13 @@ async def tk_close_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Admin tapped [Fix]. Opens the [Redownload] [Mark Failed] [Back] submenu."""
     q = update.callback_query
+    if not await require_admin(q, ctx, action_label="tk_fix"):
+        return
     await q.answer()
     try:
         ticket_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
         logger.warning("Unparseable callback data: %r", q.data)
-        return
-    if not await require_admin(q, ctx, action_label="tk_fix"):
         return
     kb = InlineKeyboardMarkup([
         [
@@ -727,13 +727,15 @@ async def apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy:
     card; one that starts but whose Arr call didn't run does the same and
     deletes the Progress card."""
     q = update.callback_query
+    # Admin check before the blank answer: a query takes one answer, so
+    # answering first would swallow the "Admin only." toast.
+    if not await require_admin(q, ctx, action_label=f"apply_fix:{strategy}"):
+        return
     await q.answer()
     try:
         ticket_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
         logger.warning("Unparseable callback data: %r", q.data)
-        return
-    if not await require_admin(q, ctx, action_label=f"apply_fix:{strategy}"):
         return
     # Read before the first edit below strips the keyboard.
     from_list = _opened_from_list(q.message)
@@ -834,13 +836,13 @@ async def apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy:
 async def tk_close_direct(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Admin tapped [Without comment]. Resolve immediately."""
     q = update.callback_query
+    if not await require_admin(q, ctx, action_label="tk_close_direct"):
+        return
     await q.answer()
     try:
         ticket_id = int(q.data.split(":", 1)[1])
     except (ValueError, IndexError):
         logger.warning("Unparseable callback data: %r", q.data)
-        return
-    if not await require_admin(q, ctx, action_label="tk_close_direct"):
         return
     from_list = _opened_from_list(q.message)
     seerr: SeerrClient = ctx.bot_data["seerr"]
@@ -926,6 +928,8 @@ async def tk_reply_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 async def tk_close_with_comment_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Entry point for `tkcc:<id>` -- post comment then close (admin only)."""
     q = update.callback_query
+    if not await require_admin(q, ctx, action_label="tk_close_with_comment_start"):
+        return ConversationHandler.END
     await q.answer()
     try:
         ticket_id = int(q.data.split(":", 1)[1])
@@ -941,8 +945,6 @@ async def tk_close_with_comment_start(update: Update, ctx: ContextTypes.DEFAULT_
     if not try_begin_action(ctx, start_key):
         return ConversationHandler.END
     try:
-        if not await require_admin(q, ctx, action_label="tk_close_with_comment_start"):
-            return ConversationHandler.END
         # Same text-capture guard as tk_reply_start.
         if user_in_conversation(ctx, update, "issue", "resolve", "request", "invite"):
             await q.message.reply_text(

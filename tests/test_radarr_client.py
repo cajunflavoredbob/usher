@@ -243,3 +243,22 @@ async def test_auto_fix_stays_partial_when_recheck_also_fails(monkeypatch):
 
     assert result.status == "partial"
     assert not any(r.url.path == "/api/v3/command" for r in requests)
+
+
+async def test_lookup_failure_message_names_no_exception_class(monkeypatch):
+    async def _no_sleep(_):
+        return None
+    monkeypatch.setattr("http_util.asyncio.sleep", _no_sleep)
+
+    def handler(request):
+        raise httpx.ConnectError("refused", request=request)
+
+    client = RadarrClient("http://radarr.test", "key")
+    client._client = httpx.AsyncClient(
+        base_url="http://radarr.test/api/v3", headers={"X-Api-Key": "key"},
+        transport=httpx.MockTransport(handler))
+    result = await client.auto_fix(tmdb_id=42)
+    await client.close()
+    assert result.status == "failed"
+    assert "ConnectError" not in result.message
+    assert "isn't responding" in result.message

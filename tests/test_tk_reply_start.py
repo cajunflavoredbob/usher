@@ -106,4 +106,8 @@ async def test_close_with_comment_start_releases_slot_after_early_exit():
     upd = make_update(callback_data="tkcc:42", user_id=1)
     ctx = make_ctx(admin_id=999)  # user 1 is not admin
     assert await tk_close_with_comment_start(upd, ctx) == ConversationHandler.END
-    assert ctx.bot_data.get("inflight_actions") == set()
+    # The admin check now runs before the slot is taken; either way no
+    # slot may be left held.
+    assert not ctx.bot_data.get("inflight_actions")
+    # And the refusal is the one answer the query gets, so it shows.
+    assert upd.callback_query.answers == [("Admin only.", False)]

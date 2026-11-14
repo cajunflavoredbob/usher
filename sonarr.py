@@ -9,7 +9,8 @@ import httpx
 
 from fix_result import (FixResult, ReleaseFingerprint, build_fingerprint,
                         find_grab_for_import, parse_queue_records)
-from http_util import APIError, execute, json_or_raise
+from http_util import (APIError, execute, json_or_raise,
+                       user_friendly_message)
 
 logger = logging.getLogger("usher." + __name__)
 
@@ -185,7 +186,7 @@ class SonarrClient:
                     steps.append("blocklist")
                     blocklisted = True
             except APIError as exc:
-                return FixResult.failed(f"Couldn't blocklist release: {exc.user_message}")
+                return FixResult.failed(f"Couldn't blocklist release {user_friendly_message(exc)}")
 
         if match.has_file and match.episode_file_id:
             try:
@@ -199,7 +200,7 @@ class SonarrClient:
                 else:
                     prefix = "Blocklisted release but " if blocklisted else ""
                     return FixResult.partial(
-                        f"{prefix}couldn't delete file: {exc.user_message}",
+                        f"{prefix}couldn't delete file {user_friendly_message(exc)}",
                         steps_done=steps, poll_info=poll_info, before=before,
                     )
 
@@ -208,7 +209,7 @@ class SonarrClient:
             steps.append("search")
         except APIError as exc:
             return FixResult.partial(
-                f"Cleaned up but couldn't trigger search: {exc.user_message}",
+                f"Cleaned up but couldn't trigger search {user_friendly_message(exc)}",
                 steps_done=steps, poll_info=poll_info, before=before,
             )
 
@@ -236,14 +237,14 @@ class SonarrClient:
         try:
             series = await self.get_series_by_tvdb(tvdb_id)
         except APIError as exc:
-            return None, None, FixResult.failed(f"Sonarr lookup failed: {exc.user_message}")
+            return None, None, FixResult.failed(f"Sonarr lookup failed {user_friendly_message(exc)}")
         if series is None:
             return None, None, FixResult.failed("Series isn't in Sonarr.")
         try:
             episodes = await self.get_episodes(series.id, season)
         except APIError as exc:
             return series, None, FixResult.failed(
-                f"Sonarr episode lookup failed: {exc.user_message}"
+                f"Sonarr episode lookup failed {user_friendly_message(exc)}"
             )
         # Match on BOTH season and episode: if Sonarr ever ignores the
         # seasonNumber filter (or it serializes empty), an episode-only match

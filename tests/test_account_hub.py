@@ -440,3 +440,11 @@ async def test_start_lists_account_and_notes_typed_commands_for_admin(monkeypatc
 def test_hub_origin_key_listed_in_conversation_cleanup_keys():
     from bot.app import _CONVERSATION_USER_DATA_KEYS
     assert "hub_origin" in _CONVERSATION_USER_DATA_KEYS
+
+
+async def test_account_hub_flags_an_undecryptable_link():
+    ctx = make_ctx(link=make_link(decrypt_failed=True))
+    upd = make_update(text="/account")
+    view = await link_flow.render_account(upd, ctx)
+    assert "can't be decrypted" in view.text
+    assert "Linked as" not in view.text

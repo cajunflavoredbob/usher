@@ -617,7 +617,7 @@ def test_request_hub_list_buttons_registered():
 
 # --- the relink prompt (revoked Plex token) ---------------------------------------
 
-RELINK = ("🔗 Unlink & sign in again", "relink")
+RELINK = ("🔗 Sign in to Plex again", "relink")
 
 
 async def test_hub_submit_relink_prompt_has_back():

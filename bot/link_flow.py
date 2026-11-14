@@ -167,8 +167,8 @@ async def _refuse_non_private(update: Update) -> bool:
 
 
 async def cmd_relink(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    """'Unlink & sign in again' tap (revoked-token recovery): clear the dead
-    token and drop straight into the platform-choice step. The consent step
+    """'Sign in to Plex again' tap (revoked-token recovery): drop straight
+    into the platform-choice step. The consent step
     is skipped -- tapping the recovery button IS the consent."""
     q = update.callback_query
     await q.answer()
@@ -576,6 +576,14 @@ async def render_account(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> HubV
             [InlineKeyboardButton("🔗 Link", callback_data=ACCOUNT_LINK)],
         )
     name = link.seerr_display or link.plex_username or ""
+    if link.plex_token_decrypt_failed:
+        # Stored but undecryptable (the encryption key changed): every
+        # action would refuse, so say so instead of "Linked as".
+        return HubView(
+            f"⚠️ Your Link as <b>{html.escape(name)}</b> can't be decrypted "
+            "anymore, so I can't act as you. Unlink, then Link again.",
+            [InlineKeyboardButton("🔓 Unlink", callback_data=ACCOUNT_UNLINK)],
+        )
     return HubView(
         f"🔗 Linked as <b>{html.escape(name)}</b>.",
         [InlineKeyboardButton("🔓 Unlink", callback_data=ACCOUNT_UNLINK)],

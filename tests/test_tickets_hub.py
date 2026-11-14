@@ -497,7 +497,7 @@ async def test_start_lists_tickets_hub_and_typed_note():
 
 # --- the relink prompt (revoked Plex token) ---------------------------------------
 
-RELINK = ("🔗 Unlink & sign in again", "relink")
+RELINK = ("🔗 Sign in to Plex again", "relink")
 
 
 async def test_hub_report_relink_prompt_has_back():

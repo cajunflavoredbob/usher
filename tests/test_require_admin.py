@@ -68,3 +68,15 @@ async def test_anonymous_user_blocked():
     q.answers = []  # type: ignore[attr-defined]
     ctx = _make_ctx(admin_id=999)
     assert await require_admin(q, ctx, action_label="x") is False
+
+
+@pytest.mark.parametrize("data", ["tkc:7", "tkf:7", "tkcd:7"])
+async def test_non_admin_tap_on_a_ticket_button_shows_admin_only(data):
+    from bot import tickets
+    from tests._handler_harness import make_ctx, make_update
+    handler = {"tkc": tickets.tk_close_menu, "tkf": tickets.tk_fix,
+               "tkcd": tickets.tk_close_direct}[data.split(":")[0]]
+    upd = make_update(callback_data=data, user_id=1)
+    ctx = make_ctx(admin_id=999)
+    await handler(upd, ctx)
+    assert upd.callback_query.answers == [("Admin only.", False)]

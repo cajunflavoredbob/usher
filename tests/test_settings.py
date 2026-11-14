@@ -380,3 +380,23 @@ def test_webhook_url_from_request_strips_trailing_admin():
     s = Settings(usher_public_url="https://usher.example.com/admin")
     req = SimpleNamespace(app={"settings_store": SimpleNamespace(settings=s)})
     assert _webhook_url_from_request(req) == "https://usher.example.com/webhook/seerr"
+
+
+def test_overlapping_saves_do_not_race_on_the_temp_file(tmp_path):
+    import threading as _threading
+    store = SettingsStore(tmp_path / "settings.json")
+    errors = []
+
+    def save_many():
+        try:
+            for _ in range(40):
+                store.save()
+        except Exception as exc:  # FileNotFoundError from the tmp race
+            errors.append(exc)
+
+    threads = [_threading.Thread(target=save_many) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
