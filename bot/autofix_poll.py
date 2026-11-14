@@ -96,14 +96,23 @@ async def poll_pending_autofixes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 if done:
                     await store.mark_autofix_status(fix.id, "complete")
                     repeat = await _detect_repeat(fix, radarr, sonarr)
+                    refunded = False
                     if repeat is not None:
+                        # The Admin's own Fixes are never refunded (they
+                        # are not counted against a limit). The DM only
+                        # claims a refund that was actually recorded.
+                        refunded = await _record_repeat(
+                            store, fix,
+                            refund=fix.user_id != ctx.bot_data.get("admin_id"))
                         await _paint_progress(
                             ctx, store, fix,
                             final=f"🔁 {_repeat_sentence(repeat)}")
                     else:
                         await _paint_progress(ctx, store, fix,
                                               final="🎉 Replacement downloaded.")
-                    await _notify_complete(ctx, fix, extra, repeat=repeat)
+                    await _notify_complete(
+                        ctx, fix, extra, repeat=repeat,
+                        refunded=refunded and _limit_enforced(ctx))
                 else:
                     await _paint_progress(ctx, store, fix)
             except NotFoundAPIError:
@@ -140,6 +149,26 @@ async def _detect_repeat(fix, radarr, sonarr) -> Optional[ReleaseFingerprint]:
     if compare_fingerprints(fix.before_fingerprint, after) == "same":
         return after
     return None
+
+
+async def _record_repeat(store: UserStore, fix, *, refund: bool) -> bool:
+    """Record the repeat outcome on the Fix's event (and the refund when
+    `refund`). Returns whether the use was really given back. The completion
+    is already marked; a failure here costs the refund and the 'repeat'
+    outcome mark, and is logged."""
+    try:
+        await store.mark_autofix_repeat(fix.id, refunded=refund)
+    except Exception:
+        logger.exception("couldn't record the repeat for fix %d", fix.id)
+        return False
+    return refund
+
+
+def _limit_enforced(ctx) -> bool:
+    """Whether the daily Auto-fix limit applies (so a refund means something
+    to the Reporter)."""
+    cfg = ctx.bot_data["settings_store"].settings
+    return not getattr(cfg, "daily_autofix_unlimited", False)
 
 
 def _repeat_sentence(after: ReleaseFingerprint) -> str:
@@ -240,10 +269,14 @@ async def _notify_media_gone(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:
 
 
 async def _notify_complete(ctx: ContextTypes.DEFAULT_TYPE, fix, extra: str = "",
-                           repeat: Optional[ReleaseFingerprint] = None) -> None:
+                           repeat: Optional[ReleaseFingerprint] = None,
+                           refunded: bool = False) -> None:
     if repeat is not None:
         head = [f"🔁 {_fix_name(fix)} complete: <b>{html.escape(fix.label)}</b> "
                 f"downloaded{extra}.", _repeat_sentence(repeat)]
+        if refunded:
+            head.append("That use was given back, so it doesn't count "
+                        "against your daily limit.")
     else:
         head = [f"🎉 {_fix_name(fix)} complete: <b>{html.escape(fix.label)}</b> downloaded{extra}."]
     lines = [

@@ -909,7 +909,7 @@ async def _submit_ticket_inner(
                 else:
                     # ok or partial: always log the autofix event; only enqueue the
                     # completion poller when search actually ran.
-                    await store.log_autofix(
+                    event_id = await store.log_autofix(
                         update.effective_user.id,
                         media["type"],
                         media["tmdb_id"],
@@ -927,6 +927,7 @@ async def _submit_ticket_inner(
                                 "ticket_id": created.id,
                                 "ticket_url": created.url,
                                 "before_fingerprint": result.before,
+                                "event_id": event_id,
                             }
                             if media["type"] == "movie":
                                 kwargs["radarr_movie_id"] = poll_info.get("movie_id")

@@ -603,6 +603,7 @@ async def _resolve_fix_context(
 async def _enqueue_fix_completion(
     store: UserStore, *, fix: _FixContext, result: FixResult,
     chat_id: int, user_id: int, ticket_url: str, action_name: str = "",
+    event_id: Optional[int] = None,
 ) -> int:
     """Build the pending_autofix row from result.poll_info; returns the row
     id so the caller can attach the Fix's Progress card to it. Raises on
@@ -617,6 +618,7 @@ async def _enqueue_fix_completion(
         "ticket_url": ticket_url,
         "action_name": action_name,
         "before_fingerprint": result.before,
+        "event_id": event_id,
     }
     if fix.media["type"] == "movie":
         kwargs["radarr_movie_id"] = poll_info.get("movie_id")
@@ -786,9 +788,10 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
         # ok or partial: always log the autofix event (mirrors _submit_ticket,
         # which logs even when no search ran); enqueue the completion poller
         # iff search ran.
-        await store.log_autofix(update.effective_user.id, fix.media["type"],
-                                fix.media["tmdb_id"],
-                                season=fix.season, episode=fix.episode)
+        event_id = await store.log_autofix(
+            update.effective_user.id, fix.media["type"], fix.media["tmdb_id"],
+            season=fix.season, episode=fix.episode,
+            kind="redownload" if strategy == "redownload" else "mark failed")
         pending_id = None
         if result.should_poll:
             try:
@@ -797,7 +800,7 @@ async def _apply_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *, strategy
                     chat_id=q.message.chat_id,
                     user_id=update.effective_user.id,
                     ticket_url=f"{seerr.public_url}/issues/{ticket_id}",
-                    action_name=action_name,
+                    action_name=action_name, event_id=event_id,
                 )
             except Exception:
                 logger.exception("failed to enqueue pending autofix for #%d", ticket_id)

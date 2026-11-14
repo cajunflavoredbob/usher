@@ -220,7 +220,11 @@ class UserStore:
                     media_type TEXT NOT NULL,
                     tmdb_id INTEGER NOT NULL,
                     season INTEGER,
-                    episode INTEGER
+                    episode INTEGER,
+                    kind TEXT NOT NULL DEFAULT 'auto-fix',
+                    outcome TEXT NOT NULL DEFAULT 'pending',
+                    refunded INTEGER NOT NULL DEFAULT 0,
+                    pending_id INTEGER
                 )
                 """
             )
@@ -337,6 +341,16 @@ class UserStore:
         "autofix_events": [
             ("season",  "ALTER TABLE autofix_events ADD COLUMN season INTEGER"),
             ("episode", "ALTER TABLE autofix_events ADD COLUMN episode INTEGER"),
+            # Schema 4 (unreleased): what Fix ran ('auto-fix', 'redownload',
+            # 'mark failed'; older rows read as auto-fix), how it ended
+            # ('pending', 'complete', 'repeat', 'timeout', 'failed'), whether
+            # the Reporter got the use back, and the pending fix row it ties
+            # to. A database already stamped 4 by an earlier build gets them
+            # here too, since the reconcile adds any missing column.
+            ("kind",     "ALTER TABLE autofix_events ADD COLUMN kind TEXT NOT NULL DEFAULT 'auto-fix'"),
+            ("outcome",  "ALTER TABLE autofix_events ADD COLUMN outcome TEXT NOT NULL DEFAULT 'pending'"),
+            ("refunded", "ALTER TABLE autofix_events ADD COLUMN refunded INTEGER NOT NULL DEFAULT 0"),
+            ("pending_id", "ALTER TABLE autofix_events ADD COLUMN pending_id INTEGER"),
         ],
         "pending_autofixes": [
             ("radarr_movie_id",      "ALTER TABLE pending_autofixes ADD COLUMN radarr_movie_id INTEGER"),
@@ -751,6 +765,7 @@ class UserStore:
                     SELECT COUNT(*) FROM autofix_events
                     WHERE telegram_id = ?
                       AND occurred_at >= datetime('now', '-24 hours')
+                      AND refunded = 0
                     """,
                     (telegram_id,),
                 ).fetchone()
@@ -765,15 +780,34 @@ class UserStore:
         tmdb_id: int,
         season: Optional[int] = None,
         episode: Optional[int] = None,
-    ) -> None:
+        kind: str = "auto-fix",
+    ) -> int:
+        """Record a Fix event; returns its id so the caller can tie it to
+        the pending fix row (add_pending_autofix event_id=). kind is
+        'auto-fix', 'redownload' or 'mark failed'."""
+        def _do() -> int:
+            with self._conn() as c:
+                return c.execute(
+                    """
+                    INSERT INTO autofix_events
+                        (telegram_id, media_type, tmdb_id, season, episode, kind)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (telegram_id, media_type, tmdb_id, season, episode, kind),
+                ).lastrowid
+
+        return await self._run(_do)
+
+    async def mark_autofix_repeat(self, pending_id: int, *, refunded: bool) -> None:
+        """The Fix tied to this pending row came back as a repeat: outcome
+        'repeat', and refunded when the Reporter gets the use back (the
+        24-hour count then skips the event)."""
         def _do():
             with self._conn() as c:
                 c.execute(
-                    """
-                    INSERT INTO autofix_events (telegram_id, media_type, tmdb_id, season, episode)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (telegram_id, media_type, tmdb_id, season, episode),
+                    "UPDATE autofix_events SET outcome = 'repeat', refunded = ? "
+                    "WHERE pending_id = ?",
+                    (1 if refunded else 0, pending_id),
                 )
 
         await self._run(_do)
@@ -805,7 +839,10 @@ class UserStore:
         message_id: Optional[int] = None,
         action_name: str = "",
         before_fingerprint: Optional[ReleaseFingerprint] = None,
+        event_id: Optional[int] = None,
     ) -> int:
+        """event_id: the autofix_events row this Fix logged; it is tied to
+        the new pending row so the poller can record the outcome on it."""
         fingerprint_json = before_fingerprint.to_json() if before_fingerprint else ""
 
         def _do() -> int:
@@ -826,6 +863,11 @@ class UserStore:
                         message_id, action_name, fingerprint_json, f"+{timeout_hours} hours",
                     ),
                 )
+                if event_id is not None:
+                    c.execute(
+                        "UPDATE autofix_events SET pending_id = ? WHERE id = ?",
+                        (cur.lastrowid, event_id),
+                    )
                 return cur.lastrowid
 
         return await self._run(_do)
@@ -965,6 +1007,12 @@ class UserStore:
                     "UPDATE pending_autofixes SET status = ? WHERE id = ?",
                     (status, pending_id),
                 )
+                # The tied event ends the same way (a repeat is recorded
+                # after, by mark_autofix_repeat).
+                c.execute(
+                    "UPDATE autofix_events SET outcome = ? WHERE pending_id = ?",
+                    (status, pending_id),
+                )
 
         await self._run(_do)
 
@@ -972,8 +1020,8 @@ class UserStore:
         """Delete rows nothing reads anymore, so neither table grows for the
         life of the install: pending_autofixes rows in a terminal state
         (only 'pending' is ever polled) older than 7 days, and
-        autofix_events older than 48h (count_autofix_24h looks back 24h;
-        double that for slack). Returns (pending_deleted, events_deleted).
+        autofix_events older than 30 days (count_autofix_24h looks back 24h;
+        the rest is kept for later lookups by item). Returns (pending_deleted, events_deleted).
         Called at startup and daily by the bot's job queue."""
         def _do() -> tuple[int, int]:
             with self._conn() as c:
@@ -985,7 +1033,7 @@ class UserStore:
                     """
                 ).rowcount
                 events = c.execute(
-                    "DELETE FROM autofix_events WHERE occurred_at < datetime('now', '-2 days')"
+                    "DELETE FROM autofix_events WHERE occurred_at < datetime('now', '-30 days')"
                 ).rowcount
                 return pending, events
 
