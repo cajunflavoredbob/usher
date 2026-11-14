@@ -925,6 +925,22 @@ async def reset_stale_flows(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
         logger.debug("flow-reset notice failed", exc_info=exc)
 
 
+# Keys the /issue flow owns. Never clear() user_data: the request, invite and
+# discover version counters and relink_resume must survive, or a restarted
+# counter lets an older confirm card pass the version check. The same goes
+# for this flow's own search_version: it is deliberately not listed here, so
+# every button of an ended flow stays stale for the next one.
+ISSUE_KEYS: Final = ("media", "search_results", "seasons", "season", "episode",
+                     "issue_type", "description", "research_parent",
+                     "submitting_ticket", "rq_jump_media",
+                     "_pending_autofix_id", "hub_origin")
+# The ones force-ending the /issue conversation leaves alone: a jump that
+# ends it hands rq_jump_media and the Hub origin to the next flow, and
+# submitting_ticket is the in-flight submit's own guard (its finally pops it).
+_ISSUE_KEYS_KEPT_ON_FORCE_END: Final = ("rq_jump_media", "hub_origin",
+                                        "submitting_ticket")
+
+
 def force_end_flow_conversations(ctx: ContextTypes.DEFAULT_TYPE,
                                  update: Update) -> list:
     """End every registered flow conversation for this update's (chat, user)
@@ -957,6 +973,11 @@ def force_end_flow_conversations(ctx: ContextTypes.DEFAULT_TYPE,
         if key in conv._conversations:
             conv._update_state(ConversationHandler.END, key)
             ended.append(conv)
+            if getattr(conv, "name", None) == "issue":
+                # The abandoned report's draft must not seed the next one.
+                for draft_key in ISSUE_KEYS:
+                    if draft_key not in _ISSUE_KEYS_KEPT_ON_FORCE_END:
+                        ctx.user_data.pop(draft_key, None)
             job = conv.timeout_jobs.pop(key, None)
             if job is not None:
                 job.schedule_removal()

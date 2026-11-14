@@ -44,10 +44,11 @@ def _assert_refused(upd, ctx, state):
 
 
 async def test_stale_cancel_after_restarted_issue_is_refused():
-    ctx = _ctx(search_version=4, media={"title": "Newer"})
+    ctx = _ctx(search_version=4)
     # The old menu was built at version 4; /issue restarts and bumps to 5.
     await ticket_start(make_update(text="/issue", user_id=USER_ID), ctx)
     assert ctx.user_data["search_version"] == 5
+    ctx.user_data["media"] = {"title": "Newer"}
     upd = make_update(callback_data="cancel:4", user_id=USER_ID)
     state = await ticket_cancel(upd, ctx)
     assert state is None
@@ -194,3 +195,83 @@ async def test_version_counter_survives_clear_and_timeout():
 def test_error_cleanup_keeps_version_counter():
     from bot.app import _CONVERSATION_USER_DATA_KEYS
     assert "search_version" not in _CONVERSATION_USER_DATA_KEYS
+
+
+# --- A new report never inherits an old draft ------------------------------
+
+_DRAFT = dict(media={"title": "Old"}, search_results={"version": 1},
+              seasons={}, season=3, episode=5, issue_type=1,
+              description="old", research_parent="Old Show",
+              rq_jump_media={"tmdb_id": 9}, _pending_autofix_id=7,
+              hub_origin="tickets")
+
+
+def _assert_draft_gone(ctx):
+    for key in _DRAFT:
+        assert key not in ctx.user_data, key
+
+
+async def test_ticket_start_clears_an_old_draft():
+    ctx = _ctx(search_version=2, **_DRAFT)
+    await ticket_start(make_update(text="/issue", user_id=USER_ID), ctx)
+    _assert_draft_gone(ctx)
+    assert ctx.user_data["search_version"] == 3
+
+
+async def test_hub_report_clears_an_old_draft():
+    from bot.callback_prefixes import TICKETS_REPORT
+    from bot.ticket_flow import ticket_hub_report
+    ctx = _ctx(search_version=2, **_DRAFT)
+    ctx.application.bot_data["flow_convs"] = []
+    await ticket_hub_report(
+        make_update(callback_data=TICKETS_REPORT, user_id=USER_ID), ctx)
+    for key in _DRAFT:
+        if key != "hub_origin":
+            assert key not in ctx.user_data, key
+    assert ctx.user_data["search_version"] == 3
+
+
+async def test_timeout_clears_every_draft_key():
+    ctx = _ctx(search_version=2, **_DRAFT, submitting_ticket=True)
+    await _ticket_timeout(None, ctx)
+    _assert_draft_gone(ctx)
+    assert "submitting_ticket" not in ctx.user_data
+    assert ctx.user_data["search_version"] == 2
+
+
+async def test_force_end_clears_the_ended_issue_draft():
+    from types import SimpleNamespace
+    from telegram.ext import CommandHandler, ConversationHandler
+    from bot.shared import force_end_flow_conversations
+
+    async def _noop(update, ctx):
+        return None
+
+    conv = ConversationHandler(
+        entry_points=[CommandHandler("x", _noop)],
+        states={1: [CommandHandler("y", _noop)]}, fallbacks=[],
+        per_user=True, per_chat=True, name="issue")
+    key = (100, USER_ID)
+    conv._conversations[key] = 1
+    ctx = _ctx(search_version=2, **_DRAFT)
+    ctx.application.bot_data["flow_convs"] = [conv]
+    upd = SimpleNamespace(effective_chat=SimpleNamespace(id=100),
+                          effective_user=SimpleNamespace(id=USER_ID),
+                          effective_message=None, callback_query=None)
+    ended = force_end_flow_conversations(ctx, upd)
+    assert ended == [conv]
+    for gone in ("media", "season", "episode", "research_parent",
+                 "_pending_autofix_id", "description"):
+        assert gone not in ctx.user_data, gone
+    # The jump to /request reads these after the force-end.
+    assert ctx.user_data["rq_jump_media"] == {"tmdb_id": 9}
+    assert ctx.user_data["hub_origin"] == "tickets"
+    assert ctx.user_data["search_version"] == 2
+
+
+async def test_force_end_leaves_the_draft_when_no_issue_flow_is_live():
+    from bot.shared import force_end_flow_conversations
+    ctx = _ctx(**_DRAFT)
+    ctx.application.bot_data["flow_convs"] = []
+    force_end_flow_conversations(ctx, make_update(text="/x", user_id=USER_ID))
+    assert ctx.user_data["media"] == {"title": "Old"}

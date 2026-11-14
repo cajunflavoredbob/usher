@@ -56,6 +56,7 @@ from bot.shared import (
     AUTOFIX_ELIGIBLE_TYPES,
     CONFIRM_AUTOFIX,
     DESCRIPTION,
+    ISSUE_KEYS,
     ISSUE_TYPES,
     OFFER_AUTOFIX,
     PICK_EPISODE,
@@ -100,15 +101,7 @@ def _tickets_origin(ctx) -> Optional[str]:
     return TICKETS_HUB if hub_origin(ctx) == TICKETS_HUB else None
 
 
-# Keys the /issue flow owns. Never clear() user_data: the request, invite and
-# discover version counters and relink_resume must survive, or a restarted
-# counter lets an older confirm card pass the version check. The same goes
-# for this flow's own search_version: it is deliberately not listed here, so
-# every button of an ended flow stays stale for the next one.
-_ISSUE_KEYS = ("media", "search_results", "seasons", "season", "episode",
-               "issue_type", "description", "research_parent",
-               "submitting_ticket", "rq_jump_media",
-               "_pending_autofix_id", "hub_origin")
+_ISSUE_KEYS = ISSUE_KEYS
 
 
 def _current_version(ctx) -> int:
@@ -164,9 +157,7 @@ async def _ticket_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     the life of the process (a stale research_parent otherwise resurfaces
     as a wrong search suggestion in the next /issue)."""
     hub = _tickets_origin(ctx)
-    for key in ("media", "search_results", "seasons", "season", "episode",
-                "issue_type", "description", "research_parent"):
-        ctx.user_data.pop(key, None)
+    _clear_issue_state(ctx)
     # Without a notice, text typed after the timeout hits a bot that forgot
     # the conversation and answers nothing at all.
     try:
@@ -252,6 +243,7 @@ def _new_ticket_conversation() -> ConversationHandler:
 
 async def ticket_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     # A typed /issue is never a Hub flow, even if a Hub left its mark behind.
+    _clear_issue_state(ctx)
     set_hub_origin(ctx, None)
     # A restart makes every button of the earlier report stale, even before
     # this one runs a search.
@@ -289,6 +281,7 @@ async def ticket_hub_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     q = update.callback_query
     await q.answer()
     force_end_flow_conversations(ctx, update)
+    _clear_issue_state(ctx)
     set_hub_origin(ctx, TICKETS_HUB)
     _bump_version(ctx)
     if await require_seerr(update, ctx,
@@ -529,6 +522,9 @@ async def ticket_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     }
     if media_type == "tv":
         return await _show_season_picker(update, ctx)
+    # A movie has no season or episode; none may carry over from a show.
+    ctx.user_data["season"] = None
+    ctx.user_data["episode"] = None
     return await _show_type_picker(update, ctx)
 
 
