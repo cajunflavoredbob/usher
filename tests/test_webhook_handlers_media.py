@@ -297,5 +297,6 @@ async def test_string_tmdb_id_reaches_card_update_and_fan_out():
          patch("bot.subscriptions.fan_out_availability",
                new=AsyncMock()) as fan:
         await handle_seerr_media(app, payload)
-    card.assert_awaited_once_with(app, "MEDIA_AVAILABLE", "movie", 550)
+    card.assert_awaited_once_with(app, "MEDIA_AVAILABLE", "movie", 550,
+                                  requester_id=USER_ID)
     assert fan.await_args.args[1:3] == ("movie", 550)

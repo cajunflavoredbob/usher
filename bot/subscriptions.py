@@ -27,11 +27,14 @@ from bot.shared import (
     force_end_flow_conversations,
     record_btn,
     require_seerr,
-    send_typing,
     token_for,
 )
 
 logger = logging.getLogger("usher")
+
+# Leaves room under Telegram's 100-button keyboard limit for the back row,
+# and keeps 60 long titles under the 4096-character message limit.
+SUBSCRIPTIONS_SHOWN_MAX = 60
 
 
 async def subscription_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -53,18 +56,23 @@ async def subscription_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
                        else "DM me /link first so I know who to notify.",
                        show_alert=True)
         return
+    store: UserStore = ctx.bot_data["store"]
+    # Answer BEFORE the Seerr title lookup: its retry chain can outlive the
+    # callback query, and a late answer raises out of the handler. The row
+    # is added first with a placeholder label, then given the real title.
+    added = await store.add_subscription(user_id, media_type, tmdb_id,
+                                         f"TMDb {tmdb_id}")
+    if not added:
+        await q.answer("Already on your list. See /subscriptions.")
+        return
+    await q.answer("🔔 Added to your Subscriptions.")
     seerr: SeerrClient = ctx.bot_data["seerr"]
     try:
         title, year = await seerr.get_media_title(media_type, tmdb_id)
-        label = f"{title} ({year})" if year else title
     except Exception:
-        label = f"TMDb {tmdb_id}"
-    store: UserStore = ctx.bot_data["store"]
-    added = await store.add_subscription(user_id, media_type, tmdb_id, label)
-    if added:
-        await q.answer(f"🔔 You'll be DMed when it's available.")
-    else:
-        await q.answer("Already on your list. See /subscriptions.")
+        return
+    label = f"{title} ({year})" if year else title
+    await store.set_subscription_label(user_id, media_type, tmdb_id, label)
 
 
 async def cmd_subscriptions(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -103,7 +111,12 @@ async def _render_subscriptions(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                 "available.")
         await reply_end(ctx, reply_method, text, hub, user_id=user_id)
         return
-    lines = [f"🔔 Your Subscriptions ({len(subscriptions)}):", ""]
+    total = len(subscriptions)
+    # Telegram caps a keyboard at 100 buttons and a message at 4096
+    # characters; past that the send fails and the list can never be
+    # trimmed. Show the first page and say how many more there are.
+    subscriptions = subscriptions[:SUBSCRIPTIONS_SHOWN_MAX]
+    lines = [f"🔔 Your Subscriptions ({total}):", ""]
     rows: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
     for n, (subscription_id, media_type, _tmdb_id, title) in enumerate(
@@ -120,6 +133,9 @@ async def _render_subscriptions(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     if hub:
         rows.append([back_button(hub)])
     lines.append("")
+    if total > len(subscriptions):
+        lines.append(f"Showing the first {len(subscriptions)}. Remove some "
+                     "to see the rest.")
     lines.append("❌ = unsubscribe")
     sent = await reply_method(
         "\n".join(lines),

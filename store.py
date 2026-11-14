@@ -659,6 +659,23 @@ class UserStore:
 
         return await self._run(_do)
 
+    async def set_subscription_label(self, telegram_id: int, media_type: str,
+                                     tmdb_id: int, title: str) -> None:
+        """Replace a subscription's display label (set after the add, once
+        the title lookup comes back)."""
+
+        def _do() -> None:
+            with self._conn() as c:
+                c.execute(
+                    """
+                    UPDATE availability_subs SET title = ?
+                    WHERE telegram_id = ? AND media_type = ? AND tmdb_id = ?
+                    """,
+                    (title, telegram_id, media_type, tmdb_id),
+                )
+
+        await self._run(_do)
+
     async def remove_subscription(self, subscription_id: int, telegram_id: int) -> bool:
         """Delete one subscription -- only the owner's (the telegram_id
         predicate makes a forged subdel callback a no-op)."""

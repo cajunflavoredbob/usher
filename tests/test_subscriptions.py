@@ -39,10 +39,26 @@ async def test_subscription_add_stores_with_title():
     ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
     upd = make_update(callback_data="subadd:movie:550", user_id=USER_ID)
     await subscription_add(upd, ctx)
-    args = ctx.bot_data["store"].add_subscription.call_args.args
-    assert args == (USER_ID, "movie", 550, "Movie Title (2026)")
-    assert any("notified" in a[0].lower() or "DMed" in a[0]
-               for a in upd.callback_query.answers)
+    store = ctx.bot_data["store"]
+    assert store.add_subscription.call_args.args == (USER_ID, "movie", 550,
+                                                     "TMDb 550")
+    store.set_subscription_label.assert_awaited_once_with(
+        USER_ID, "movie", 550, "Movie Title (2026)")
+    assert any("Added" in a[0] for a in upd.callback_query.answers)
+
+
+async def test_subscription_add_answers_before_the_title_lookup():
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
+    upd = make_update(callback_data="subadd:movie:550", user_id=USER_ID)
+    answered_first = []
+
+    async def lookup(*_a, **_k):
+        answered_first.append(bool(upd.callback_query.answers))
+        return "Movie Title", 2026
+
+    ctx.bot_data["seerr"].get_media_title = lookup
+    await subscription_add(upd, ctx)
+    assert answered_first == [True]
 
 
 async def test_subscription_add_gated_for_unlinked():
@@ -146,3 +162,18 @@ async def test_fanout_disabled_keeps_rows_unconsumed():
     await fan_out_availability(app, "movie", 550, "T", already_notified=set())
     app.bot_data["store"].pop_subscribers.assert_not_awaited()
     app.bot.send_message.assert_not_awaited()
+
+
+async def test_long_subscription_list_stays_under_telegram_limits():
+    from bot.subscriptions import SUBSCRIPTIONS_SHOWN_MAX, cmd_subscriptions
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
+    ctx.bot_data["store"].list_subscriptions.return_value = [
+        (i, "movie", i, "A Rather Long Movie Title Number %d (2026)" % i)
+        for i in range(1, 121)]
+    upd = make_update(text="/subscriptions", user_id=USER_ID)
+    await cmd_subscriptions(upd, ctx)
+    sent = upd.effective_message.reply_calls[0]
+    buttons = [b for row in sent["reply_markup"].inline_keyboard for b in row]
+    assert len(buttons) == SUBSCRIPTIONS_SHOWN_MAX < 100
+    assert len(sent["text"]) <= 4096
+    assert "Showing the first" in sent["text"]

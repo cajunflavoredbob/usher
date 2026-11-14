@@ -384,3 +384,36 @@ async def test_tv_cancel_ignores_a_legacy_card_beside_a_matching_one():
               seasons=[2, 1])])
     await rq_list_cancel(make_update(callback_data="rqlc:13", user_id=USER_ID), ctx)
     store.delete_progress_card.assert_awaited_once_with(2)
+
+
+async def test_admin_stale_cancel_leaves_an_approved_request_alone():
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=ADMIN_ID))
+    seerr = ctx.bot_data["seerr"]
+    seerr.get_request.side_effect = None
+    seerr.get_request.return_value = _items()[1]  # #13, approved meanwhile
+    seerr.list_requests.return_value = (_items(), 2)
+    upd = make_update(callback_data="rqlc:13", user_id=ADMIN_ID)
+    await rq_list_cancel(upd, ctx)
+    seerr.delete_request.assert_not_awaited()
+    assert "no longer pending" in upd.callback_query.edits[0]["text"]
+
+
+async def test_admin_cancel_refuses_when_the_request_cannot_be_read():
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=ADMIN_ID))
+    seerr = ctx.bot_data["seerr"]
+    seerr.get_request.side_effect = RuntimeError("seerr down")
+    seerr.list_requests.return_value = (_items(), 2)
+    upd = make_update(callback_data="rqlc:12", user_id=ADMIN_ID)
+    await rq_list_cancel(upd, ctx)
+    seerr.delete_request.assert_not_awaited()
+
+
+async def test_admin_cancel_of_a_pending_request_still_deletes():
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=ADMIN_ID))
+    seerr = ctx.bot_data["seerr"]
+    seerr.get_request.side_effect = None
+    seerr.get_request.return_value = _items()[0]
+    seerr.list_requests.return_value = ([_items()[1]], 1)
+    upd = make_update(callback_data="rqlc:12", user_id=ADMIN_ID)
+    await rq_list_cancel(upd, ctx)
+    assert seerr.delete_request.await_args.args[0] == 12

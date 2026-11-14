@@ -355,3 +355,44 @@ async def test_webhook_final_deletes_row_before_painting():
     assert order == ["delete", "edit"]
 
 
+
+
+async def test_pending_card_survives_the_download_timeout():
+    ctx = make_ctx()
+    ctx.bot_data["store"].list_progress_cards.return_value = [
+        _card_row(status="waiting", timeout_at="2020-01-01 00:00:00")]
+    await poll_progress_cards(ctx)
+    ctx.bot.edit_message_text.assert_not_awaited()
+    ctx.bot_data["store"].delete_progress_card.assert_not_awaited()
+
+
+async def test_decline_closes_only_the_requesters_card():
+    ctx = make_ctx()
+    app = ctx.application
+    app.bot_data["store"].find_progress_cards = AsyncMock(return_value=[
+        _card_row(id=1, user_id=111), _card_row(id=2, user_id=222)])
+    await apply_webhook_event(app, "MEDIA_DECLINED", "movie", 550,
+                              requester_id=222)
+    app.bot_data["store"].delete_progress_card.assert_awaited_once_with(2)
+
+
+async def test_approval_flips_only_the_requesters_card():
+    ctx = make_ctx()
+    app = ctx.application
+    app.bot_data["store"].find_progress_cards = AsyncMock(return_value=[
+        _card_row(id=1, user_id=111, status="waiting"),
+        _card_row(id=2, user_id=222, status="waiting")])
+    await apply_webhook_event(app, "MEDIA_AUTO_APPROVED", "movie", 550,
+                              requester_id=111)
+    app.bot_data["store"].update_progress_card.assert_awaited_once_with(
+        1, status="grabbing")
+
+
+async def test_available_reaches_every_card_for_the_title():
+    ctx = make_ctx()
+    app = ctx.application
+    app.bot_data["store"].find_progress_cards = AsyncMock(return_value=[
+        _card_row(id=1, user_id=111), _card_row(id=2, user_id=222)])
+    await apply_webhook_event(app, "MEDIA_AVAILABLE", "movie", 550,
+                              requester_id=111)
+    assert app.bot_data["store"].delete_progress_card.await_count == 2

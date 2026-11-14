@@ -261,7 +261,8 @@ async def rq_list_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     """Cancel button on the /requests list. Seerr enforces ownership: a
     regular user may only delete their own request while it is PENDING, so
     a stale button (approved meanwhile, someone else's id) fails safely and
-    the message says why."""
+    the message says why. The admin key is not bound by that rule, so the
+    admin's cancel checks the Request is still pending first."""
     q = update.callback_query
     # Keep the back row when the tapped list carried it (opened from the Hub).
     hub = REQUESTS_HUB if came_from_hub(q.message, REQUESTS_HUB) else None
@@ -294,6 +295,16 @@ async def rq_list_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         logger.debug("pre-cancel lookup of #%s failed (non-fatal)",
                      request_id, exc_info=True)
         info = None
+    if is_admin and (info is None or info.status != REQUEST_STATUS_PENDING):
+        # The admin key is not bound by Seerr's pending-only rule for
+        # owners, so a stale button would delete an approved Request.
+        notice = (f"⚠️ Request #{request_id} is no longer pending, so it "
+                  "wasn't cancelled." if info is not None else
+                  f"⚠️ Couldn't check Request #{request_id}, so it wasn't "
+                  "cancelled. Try again in a moment.")
+        await _render_requests(update, ctx, q.edit_message_text,
+                               user_id=user_id, notice=notice, hub=hub)
+        return
     try:
         await seerr.delete_request(request_id, as_plex_token=token)
     except NotFoundAPIError:

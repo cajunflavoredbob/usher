@@ -100,6 +100,8 @@ async def _build_admin_dm(ctx, ticket_id: int) -> tuple[str, InlineKeyboardMarku
     fp = await _release_that_came_back(ctx, ticket_id)
     if fp is not None:
         lines += ["", f"<b>Release that came back:</b> {html.escape(release_description(fp))}"]
+    lines += ["", "⚠️ 🚫 Mark Failed deletes the current file from disk "
+                  "before searching for a replacement."]
     base = new_ticket_dm_kb(ticket_id)
     kb = InlineKeyboardMarkup([[mark_failed_button(ticket_id)],
                                *base.inline_keyboard])
@@ -128,6 +130,9 @@ async def ask_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not await store.claim_ticket_escalation(ticket_id):
             await q.answer(ALREADY_SENT)
             return
+        # Answer BEFORE building the DM: the Seerr and Arr lookups behind it
+        # can outlive the callback query, and a late answer raises.
+        await q.answer()
         try:
             text, kb = await _build_admin_dm(ctx, ticket_id)
             sent = await ctx.bot.send_message(
@@ -137,10 +142,9 @@ async def ask_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception as exc:
             logger.exception("ask admin failed for #%d", ticket_id, exc_info=exc)
             await store.release_ticket_escalation(ticket_id)
-            await q.answer("Couldn't reach the Admin. Try again in a moment.",
-                           show_alert=True)
+            await q.message.reply_text(
+                "⚠️ Couldn't reach the Admin. Try again in a moment.")
             return
-        await q.answer()
         await q.message.reply_text(
             f"📨 Sent to the Admin. Ticket #{ticket_id}: they can try a different release.")
     finally:

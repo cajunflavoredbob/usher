@@ -243,17 +243,18 @@ async def _poll_one(ctx, store: UserStore, card: dict) -> None:
         timed_out = datetime.now(timezone.utc) >= timeout_at
     except Exception:
         timed_out = True
+    # Pending-approval cards have nothing to poll; the MEDIA_APPROVED
+    # webhook flips them to grabbing. The download timeout is for grabbing
+    # cards only: a Request can wait days for the Admin, and closing its
+    # card at 24h would hide the Approved or Declined line that follows.
+    if card["status"] != "grabbing":
+        return
     if timed_out:
         await _edit_card(
             ctx, card,
-            f"⏳ Still processing after {PROGRESS_CARD_TIMEOUT_HOURS}h, "
-            "I'll DM you when Seerr reports it available.")
+            f"⏳ Still processing after {PROGRESS_CARD_TIMEOUT_HOURS}h. "
+            "This card stops updating now; /requests shows the latest.")
         await store.delete_progress_card(card["id"])
-        return
-
-    # Pending-approval cards have nothing to poll; the MEDIA_APPROVED
-    # webhook flips them to grabbing.
-    if card["status"] != "grabbing":
         return
 
     arr_id = await _resolve_arr_id(ctx, card)
@@ -318,10 +319,17 @@ _FAILED_LINE_NO_ALARM = "⚠️ Download failed."
 
 
 async def apply_webhook_event(app, nt: str, media_type: str,
-                              tmdb_id: int) -> None:
-    """Update every Progress card for this media per the lifecycle event.
+                              tmdb_id: int, *,
+                              requester_id: Optional[int] = None) -> None:
+    """Update the Progress cards for this media per the lifecycle event.
     Approved -> grabbing (poller takes over); terminal events paint the
-    final line and close the Progress card."""
+    final line and close the Progress card.
+
+    Approved, declined and failed belong to one Request, so when the
+    requester's Telegram id is known only their cards change: another
+    user's Request for the same title must not flip or close yours.
+    MEDIA_AVAILABLE is about the title being in Plex and reaches every
+    card for it."""
     store: UserStore = app.bot_data["store"]
     try:
         cards = await store.find_progress_cards(media_type, tmdb_id)
@@ -329,6 +337,8 @@ async def apply_webhook_event(app, nt: str, media_type: str,
         logger.exception("progress card lookup failed for %s/%s",
                          media_type, tmdb_id)
         return
+    if requester_id is not None and nt != "MEDIA_AVAILABLE":
+        cards = [c for c in cards if c["user_id"] == requester_id]
     if not cards:
         return
 

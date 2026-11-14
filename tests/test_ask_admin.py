@@ -171,7 +171,10 @@ async def test_a_failed_send_lets_the_reporter_try_again(ctx):
     ctx.bot.send_message = AsyncMock(side_effect=[RuntimeError("down"),
                                                   make_message(message_id=901)])
     first = await _tap(ctx)
-    assert first.callback_query.answers[0][1] is True
+    # Answered before the send; the failure arrives as a reply instead.
+    assert first.callback_query.answers[0][1] is False
+    reply = first.callback_query.message.reply_calls[-1]["text"]
+    assert "Couldn't reach the Admin" in reply
     await _tap(ctx)
     assert ctx.bot.send_message.await_count == 2
 
