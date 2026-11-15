@@ -11,6 +11,7 @@ import pytest
 from bot.callback_prefixes import (SHARE_EXTEND, SHARE_KEEP, SHARE_LET_END,
                                    SHARE_REMOVE_NOW, SHARE_REMOVE_RETRY,
                                    SHARE_REMOVE_YES, SHARE_RETRY)
+from bot import share_expiry_job
 from bot.share_expiry_job import run_share_expiries, share_expiry_action
 from bot.shared import BTN_HISTORY_MAX, global_btn_gate, record_btn
 from http_util import NotFoundAPIError, TransientAPIError
@@ -798,8 +799,8 @@ async def test_extend_is_refused_while_the_job_removes_that_share(
     plex.remove_share.side_effect = extend_mid_removal
     await run_share_expiries(app, NOW)
     edit = upd.callback_query.edits[-1]
-    assert edit["text"] == ("Removal is in progress, try again in a "
-                            "minute.")
+    assert edit["text"] == ("This Share is being removed now because its "
+                            "date passed.")
     assert f"{SHARE_EXTEND}:1" in "".join(_buttons(edit["reply_markup"]))
     assert await fresh_store.get_share_expiry(1) is None
     assert "Removed" in _sent_to(app, ADMIN_ID)[0]["text"]
@@ -970,3 +971,41 @@ async def test_an_unnamed_row_in_the_window_reminds_its_holder_that_tick(
                                        _at(timedelta(days=2)))
     await run_share_expiries(app, NOW)
     assert len(_sent_to(app, HOLDER_ID)) == 1
+
+
+async def test_a_job_alert_retry_leaves_a_share_extended_mid_removal(
+        fresh_store):
+    app, plex = await _setup(fresh_store)
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2020-01-01 00:00:00")
+
+    async def extend_while_listing(*args):
+        await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                           "2031-01-01 00:00:00")
+        return [_share(1)]
+    plex.list_shares.side_effect = extend_while_listing
+    ctx, upd = _tap(app, f"{SHARE_RETRY}:1")
+    await share_expiry_action(upd, ctx)
+    plex.remove_share.assert_not_awaited()
+    assert "left as it is" in upd.callback_query.edits[-1]["text"]
+    assert (await fresh_store.get_share_expiry(1)).expires_at.startswith(
+        "2031")
+    assert not ctx.bot_data.get(share_expiry_job.REMOVING_KEY)
+
+
+async def test_a_job_alert_retry_refuses_extend_while_it_removes(
+        fresh_store):
+    app, plex = await _setup(fresh_store, [_share(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2020-01-01 00:00:00")
+    ctx, upd = _tap(app, f"{SHARE_RETRY}:1")
+    ext_upd = make_update(callback_data=f"{SHARE_EXTEND}:1", user_id=ADMIN_ID)
+
+    async def extend_mid_removal(token, share_id):
+        await share_expiry_action(ext_upd, ctx)
+    plex.remove_share.side_effect = extend_mid_removal
+    await share_expiry_action(upd, ctx)
+    assert ext_upd.callback_query.edits[-1]["text"] == (
+        "This Share is being removed now because its date passed.")
+    assert await fresh_store.get_share_expiry(1) is None
+    assert not ctx.bot_data.get(share_expiry_job.REMOVING_KEY)

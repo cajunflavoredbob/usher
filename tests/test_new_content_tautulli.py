@@ -419,8 +419,9 @@ async def test_more_than_250_items_in_one_second_do_not_stall_the_mark(
 
 async def test_a_full_250_second_with_more_after_it_still_moves_on(
         fresh_store):
-    # Exactly the cap in the oldest second plus later rows: the neighbouring
-    # case that must not take the whole-second path wrongly.
+    # Exactly the cap in the oldest second plus later rows: that second is
+    # taken whole (no more than the cap), the mark passes it, and the later
+    # rows are read on the next poll.
     await fresh_store.set_poller_mark("tautulli_added", MARK)
     same = [_movie(1000 + i, 1700000100, [f"tmdb://{5000 + i}"], f"M{i}")
             for i in range(250)]

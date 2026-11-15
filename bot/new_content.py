@@ -354,8 +354,9 @@ async def _poll_tautulli(store, tautulli, radarr=None, sonarr=None) -> None:
     seconds). A season or show row is expanded to its episodes. An item with
     no TMDb id yet (Plex not matched) holds the mark back so it is read again
     next poll, for TAUTULLI_RETRY_S after it was added. At most
-    TAUTULLI_MAX_ITEMS are handled per poll, oldest first; the mark never
-    passes an item that was not handled. The mark moves only after the items
+    TAUTULLI_MAX_ITEMS are handled per poll, oldest first, except that when
+    that many rows all share the oldest added-at second the whole second is
+    taken; the mark never passes an item that was not handled. The mark moves only after the items
     were stored, so a failure reads them again next time."""
     raw = await store.get_poller_mark(TAUTULLI_MARK)
     if raw is None:

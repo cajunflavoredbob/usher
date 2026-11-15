@@ -6,9 +6,9 @@ Share's username matches a Linked user's stored Plex username, DMs that
 holder once. On or after the date it re-lists the Shares: one already gone
 loses its row quietly and its holder is unlinked, unless that listing names
 the same Plex username on another Share; any other is removed through the
-same call as /uninvite (which re-reads the row right before the removal and
-leaves a Share whose date moved or was cleared), its row dropped and the
-Admin told. While the job removes a Share, Extend on it is refused. A
+same call as /uninvite, which the job gives a check that re-reads the row
+right before the removal and leaves a Share whose date moved or was cleared;
+its row is dropped and the Admin told. While the job removes a Share, Extend on it is refused. A
 removal that fails keeps the row, records the error, is retried every hour,
 and tells the Admin at most once a day, with Retry. A row with no username
 (an Invite stored before it was accepted) makes the job read the listing
@@ -313,7 +313,7 @@ async def share_expiry_action(update: Update,
           and share_id in ctx.bot_data.get(REMOVING_KEY, ())):
         _text, markup = _reminder_card(row)
         await edit_or_send(
-            q, "Removal is in progress, try again in a minute.",
+            q, "This Share is being removed now because its date passed.",
             reply_markup=markup)
     elif action == SHARE_EXTEND:
         base = max(_parse(row.expires_at), datetime.now(timezone.utc))
@@ -352,7 +352,8 @@ async def share_expiry_action(update: Update,
         # one is checked again on every tap.
         retry = (_retry_markup if action == SHARE_RETRY
                  else _remove_retry_markup)
-        await _remove_from_button(q, ctx, store, row, who, retry)
+        await _remove_from_button(q, ctx, store, row, who, retry,
+                                  only_if_due=action == SHARE_RETRY)
 
 
 async def _confirm_removal(q, ctx, store: UserStore, row: ShareExpiry) -> None:
@@ -396,16 +397,31 @@ async def _confirm_removal(q, ctx, store: UserStore, row: ShareExpiry) -> None:
 
 
 async def _remove_from_button(q, ctx, store: UserStore, row: ShareExpiry,
-                              who: str, retry_markup) -> None:
-    """Remove the Share; a failure keeps `retry_markup`'s Retry on the DM."""
+                              who: str, retry_markup, *,
+                              only_if_due: bool = False) -> None:
+    """Remove the Share; a failure keeps `retry_markup`'s Retry on the DM.
+    `only_if_due` (the job's Retry) re-reads the row right before the
+    removal and leaves a Share whose date moved or was cleared, as the job
+    does. The Share is marked as being removed meanwhile, so Extend on it is
+    refused rather than racing the removal."""
     link = await store.get(ctx.bot_data["admin_id"])
     if link is None or not link.plex_token:
         await edit_or_send(q, "Your /link is no longer usable; /link first.",
                            reply_markup=retry_markup(row.share_id))
         return
+    async def still_due() -> bool:
+        fresh = await store.get_share_expiry(row.share_id)
+        return (fresh is not None
+                and _parse(fresh.expires_at) <= datetime.now(timezone.utc))
+
+    removing: set[int] = ctx.bot_data.setdefault(REMOVING_KEY, set())
+    # Only clear a marker this tap set: the job may be removing it too.
+    marked = row.share_id not in removing
+    removing.add(row.share_id)
     try:
         gone = await remove_share_and_forget(
-            store, ctx.bot_data["plex"], link.plex_token, row.share_id)
+            store, ctx.bot_data["plex"], link.plex_token, row.share_id,
+            still_due=still_due if only_if_due else None)
     except Exception as exc:
         logger.exception("share removal failed")
         error = user_friendly_message(exc)
@@ -414,6 +430,20 @@ async def _remove_from_button(q, ctx, store: UserStore, row: ShareExpiry,
         await edit_or_send(
             q, f"⚠️ Couldn't remove <b>{who}</b>. {html.escape(error)}",
             reply_markup=retry_markup(row.share_id), parse_mode="HTML")
+        return
+    finally:
+        if marked:
+            removing.discard(row.share_id)
+    if gone is None:
+        # The date moved or the row went since the failure alert.
+        fresh = await store.get_share_expiry(row.share_id)
+        if fresh is None:
+            await edit_or_send(q, OUT_OF_DATE)
+        else:
+            await edit_or_send(
+                q, f"👍 <b>{who}</b> now ends on "
+                   f"{expiry_date_text(fresh.expires_at)}: left as it is.",
+                parse_mode="HTML")
         return
     await edit_or_send(
         q, "✅ Already removed." if gone else f"✅ Removed <b>{who}</b>.",
