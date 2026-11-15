@@ -596,8 +596,9 @@ async def resolve_fix_context(
     """Fetch the ticket + media title + tvdb_id and return a _FixContext.
     On any unrecoverable failure returns (None, user_facing_error_string).
     Best-effort lookups (title, tvdb_id) don't fail the whole flow.
-    preview: the caller only needs the media ids to describe the target, so
-    the title lookup (the label goes unused) is skipped."""
+    preview: the caller only needs the media to describe the target, so the
+    title lookup (the label goes unused) is skipped for TV; a movie keeps it
+    because its title is the line the preview shows."""
     try:
         ticket = await seerr.get_issue(ticket_id)
     except Exception as exc:
@@ -624,11 +625,17 @@ async def resolve_fix_context(
     media: dict = {"type": media_type, "tmdb_id": tmdb_id}
     label_title = ""
     label_year = ""
-    if not preview:
+    # A preview of a TV Fix has no use for the title (the Sonarr episode is
+    # its line), but a movie's line IS its title, so a movie reads it too.
+    if not preview or media_type == "movie":
         try:
             label_title, label_year = await seerr.get_media_title(media_type, tmdb_id)
         except Exception as exc:
             logger.exception("get_media_title failed for #%d", ticket_id, exc_info=exc)
+    if media_type == "movie" and label_title:
+        # What describe_fix_target shows as "Radarr: <Title> (<Year>)".
+        media["title"] = label_title
+        media["year"] = label_year
     if media_type == "tv":
         try:
             _seasons, tvdb_id = await seerr.get_tv_seasons(tmdb_id)

@@ -134,13 +134,31 @@ async def test_fix_menu_says_couldnt_check_when_the_tvdb_id_is_missing():
         {"type": "tv"}, 1, 3, object())
 
 
-async def test_fix_menu_for_a_movie_skips_the_seerr_media_reads():
-    ctx = _admin_ctx(media_type="movie", problem_season=None, problem_episode=None)
+async def test_fix_menu_for_a_tv_episode_skips_the_title_read():
+    ctx = _admin_ctx()
     upd = make_update(callback_data="tkf:5", user_id=ADMIN)
     await tk_fix(upd, ctx)
     ctx.bot_data["seerr"].get_media_title.assert_not_called()
+
+
+async def test_fix_menu_for_a_movie_names_the_movie():
+    ctx = _admin_ctx(media_type="movie", problem_season=None, problem_episode=None)
+    ctx.bot_data["seerr"].get_media_title.return_value = ("Alien", "1979")
+    upd = make_update(callback_data="tkf:5", user_id=ADMIN)
+    await tk_fix(upd, ctx)
     ctx.bot_data["seerr"].get_tv_seasons.assert_not_called()
-    assert "couldn't check" not in upd.callback_query.edits[-1]["text"]
+    text = upd.callback_query.edits[-1]["text"]
+    assert "Radarr: Alien (1979)" in text
+    assert "couldn't check" not in text
+
+
+async def test_fix_menu_for_a_movie_still_opens_when_the_title_read_fails():
+    ctx = _admin_ctx(media_type="movie", problem_season=None, problem_episode=None)
+    ctx.bot_data["seerr"].get_media_title.side_effect = RuntimeError("down")
+    upd = make_update(callback_data="tkf:5", user_id=ADMIN)
+    await tk_fix(upd, ctx)
+    text = upd.callback_query.edits[-1]["text"]
+    assert "how?" in text and "Radarr:" not in text
 
 
 async def test_fix_menu_for_a_whole_season_ticket_shows_the_refusal_only():

@@ -145,10 +145,14 @@ _RQ_KEYS = RQ_KEYS
 # The confirm screen's snapshot of whom it names (see _show_confirm). One of
 # RQ_KEYS, so ending the flow clears it; entry points never pop it themselves.
 _CONFIRM_KEY = "rq_confirm_for"
-_TARGET_CLEARED_TEXT = ("The person you picked was cleared. Start Request for "
-                        "someone again.")
-_TARGET_CLEARED_TYPED = ("The person you picked was cleared. /request, then "
-                         "Request for someone again.")
+# Starting anything else ends the user's open flows in every chat, so a flow
+# that finds its pick gone was ended behind its back: say that, not that the
+# person was "cleared".
+_TARGET_CLEARED_TEXT = ("That Request for someone was ended when you started "
+                        "something else. Start Request for someone again.")
+_TARGET_CLEARED_TYPED = ("That Request for someone was ended when you started "
+                         "something else. /request, then Request for someone "
+                         "again.")
 
 # Request for someone is DM-only (admin_view), so its pick (rq_for) belongs to
 # the private chat: only an entry point in a private chat pops it, and only a

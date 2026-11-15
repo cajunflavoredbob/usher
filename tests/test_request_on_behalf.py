@@ -200,7 +200,7 @@ async def test_admin_submit_from_another_generation_files_nothing():
     upd = make_update(callback_data="rqgo:1", user_id=ADMIN_ID)
     await request_submit(upd, ctx)
     ctx.bot_data["seerr"].create_request.assert_not_called()
-    assert "The person you picked was cleared" in upd.callback_query.edits[-1]["text"]
+    assert "That Request for someone was ended" in upd.callback_query.edits[-1]["text"]
 
 
 async def test_behalf_progress_card_is_owned_by_the_picked_user():

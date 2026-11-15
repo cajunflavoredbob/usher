@@ -22,7 +22,7 @@ from tests._handler_harness import make_ctx, make_link
 from tests.test_issue_resume_superseded import CHAT_ID, USER_ID, _Harness
 
 GROUP_ID = -100
-CLEARED = "The person you picked was cleared"
+CLEARED = "That Request for someone was ended"
 
 
 @pytest.fixture
