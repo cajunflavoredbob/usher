@@ -1273,11 +1273,18 @@ async def describe_fix_target(
     media: dict, season: Optional[int], episode: Optional[int],
     sonarr: Optional[SonarrClient],
 ) -> str:
-    """For a TV episode Fix: the Sonarr episode (and any other episodes its
-    file holds) the typed number resolves to, shown before the file is
-    deleted so a wrong tap is visible. '' for movies, whole seasons, or when
-    Sonarr is missing; "couldn't check" when the TVDb id is missing. Never
-    raises."""
+    """The file a Fix is about to delete, shown first so a wrong pick is
+    visible. A movie: "Radarr: <Title> (<Year>)" from the picked title (''
+    when the media carries no title). A TV episode: the Sonarr episode (and
+    any other episodes its file holds) the typed number resolves to; '' for
+    whole seasons or when Sonarr is missing, "couldn't check" when the TVDb
+    id is missing. Never raises."""
+    if media.get("type") == "movie":
+        title = media.get("title")
+        if not title:
+            return ""
+        year = media.get("year")
+        return f"Radarr: {title} ({year})" if year else f"Radarr: {title}"
     if (media.get("type") != "tv" or sonarr is None or not episode
             or season is None):
         return ""

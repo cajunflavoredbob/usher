@@ -416,3 +416,16 @@ def test_an_error_clears_the_marker_chats_too():
     assert {"tk_reply_chat", "awaiting_comment_chat"} <= set(
         _CONVERSATION_USER_DATA_KEYS)
 
+
+# --- the movie Auto-fix confirm names its title -------------------------------
+
+
+async def test_the_movie_auto_fix_confirm_names_the_title_it_deletes(rig):
+    await rig.issue_to_description(DM_ID, "movie x", 1)
+    await rig.say(DM_ID, "the picture is green")
+    version = rig.user_data["search_version"]
+    await rig.tap(DM_ID, f"{TICKET_AUTOFIX_OFFER}:{version}:yes",
+                  rig.last_menu(DM_ID))
+    confirm = rig.texts(DM_ID)[-1]
+    assert confirm.startswith("Radarr: Movie X (2001)\n\n"), confirm
+    assert "delete the current file" in confirm

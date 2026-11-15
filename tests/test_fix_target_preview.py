@@ -81,6 +81,13 @@ async def test_describe_fix_target_is_empty_without_an_episode_or_sonarr():
     assert await describe_fix_target({"type": "movie", "tmdb_id": 1}, None, None, sonarr) == ""
 
 
+async def test_describe_fix_target_names_a_movie_by_title_and_year():
+    movie = {"type": "movie", "tmdb_id": 348, "title": "Alien", "year": "1979"}
+    assert await describe_fix_target(movie, None, None, None) == "Radarr: Alien (1979)"
+    no_year = {**movie, "year": ""}
+    assert await describe_fix_target(no_year, None, None, None) == "Radarr: Alien"
+
+
 async def test_reporter_confirm_shows_the_sonarr_episode():
     ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID),
                    user_data={"search_version": 1, "media": MEDIA,
