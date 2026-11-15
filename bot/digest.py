@@ -241,8 +241,14 @@ async def notice_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def digest_info(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """A Digest entry's detail-card button."""
+    """A Digest entry's detail-card button. Like browsing, it is for the Admin
+    and Linked users: a stranger holding a forwarded button gets nothing."""
     q = update.callback_query
+    uid = update.effective_user.id
+    if uid != ctx.bot_data.get("admin_id") and not await is_linked(ctx, uid):
+        await q.answer("DM me /link first so I know which Plex account is yours.",
+                       show_alert=True)
+        return
     await q.answer()
     try:
         _, media_type, tmdb_id_s = q.data.split(":")

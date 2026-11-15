@@ -170,12 +170,25 @@ async def test_the_next_day_sends_again(fresh_store):
 # --- the detail-card button -----------------------------------------------------
 
 async def test_digest_info_sends_the_detail_card():
-    ctx = make_ctx(admin_id=ADMIN_ID)
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=1))
     ctx.bot_data["seerr"].get_media_result = AsyncMock(return_value=MediaResult(
         "tv", 1396, "Breaking Bad", "2008", None))
     await digest_info(make_update(callback_data="dgi:tv:1396", user_id=1), ctx)
     ctx.bot_data["seerr"].get_media_result.assert_awaited_once_with("tv", 1396)
     assert "Breaking Bad" in ctx.bot.send_message.call_args.kwargs["text"]
+
+
+async def test_digest_info_refuses_a_stranger_but_serves_the_admin():
+    ctx = make_ctx(admin_id=ADMIN_ID)
+    ctx.bot_data["seerr"].get_media_result = AsyncMock(return_value=MediaResult(
+        "tv", 1396, "Breaking Bad", "2008", None))
+    upd = make_update(callback_data="dgi:tv:1396", user_id=1)
+    await digest_info(upd, ctx)
+    ctx.bot_data["seerr"].get_media_result.assert_not_awaited()
+    ctx.bot.send_message.assert_not_called()
+    await digest_info(
+        make_update(callback_data="dgi:tv:1396", user_id=ADMIN_ID), ctx)
+    ctx.bot_data["seerr"].get_media_result.assert_awaited_once_with("tv", 1396)
 
 
 # --- Account Hub Notices -------------------------------------------------------
