@@ -590,6 +590,9 @@ RELINK_RESUME_EXECUTORS: dict[str, Callable] = {}
 
 # One canonical decrypt-failed message (it was pasted six times
 # with wording drift across tickets.py / resolve_flow.py / ticket_flow.py).
+# The one wording for "not linked" where the user is asked to /link before a
+# list, stats or button works (the others name what they would act on).
+NOT_LINKED_MSG = "DM me /link first so I know which Plex account is yours."
 DECRYPT_FAILED_MSG = (
     "Your Plex link can't be decrypted (the encryption key may have "
     "rotated). Run /unlink then /link to reconnect."

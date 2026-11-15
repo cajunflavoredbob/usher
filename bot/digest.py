@@ -25,9 +25,10 @@ from telegram.ext import ContextTypes
 from bot.callback_prefixes import DIGEST_INFO, NOTICE_TOGGLE
 from bot.hub import back_button
 from bot.media_card import send_detail_card
+from const import DB_TIME as _DB_TIME
 from bot.shared import (
-    FOLLOW_PINGS_OFF, edit_or_send, follow_pings_off, record_btn,
-    watch_now_button)
+    FOLLOW_PINGS_OFF, NOT_LINKED_MSG, edit_or_send, follow_pings_off,
+    record_btn, watch_now_button)
 
 logger = logging.getLogger("usher")
 
@@ -36,7 +37,6 @@ DIGEST_FIRST_DELAY_S = 120
 DIGEST_SENT_MARK = "digest_sent"
 # Entries listed (and given a button) in one Digest; the rest are counted.
 DIGEST_ENTRIES_MAX = 30
-_DB_TIME = "%Y-%m-%d %H:%M:%S"
 
 
 def _day_window(now: datetime) -> tuple[str, str]:
@@ -246,8 +246,7 @@ async def digest_info(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
     uid = update.effective_user.id
     if uid != ctx.bot_data.get("admin_id") and not await is_linked(ctx, uid):
-        await q.answer("DM me /link first so I know which Plex account is yours.",
-                       show_alert=True)
+        await q.answer(NOT_LINKED_MSG, show_alert=True)
         return
     await q.answer()
     try:

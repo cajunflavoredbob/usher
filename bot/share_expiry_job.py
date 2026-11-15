@@ -25,6 +25,7 @@ from typing import Optional
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
+from const import DB_TIME as _DB_TIME
 from http_util import user_friendly_message
 from store import ShareExpiry, UserStore
 
@@ -34,7 +35,7 @@ from bot.callback_prefixes import (SHARE_EXTEND, SHARE_KEEP, SHARE_LET_END,
                                    SHARE_REMOVE_YES, SHARE_RETRY)
 from bot.invite_flow import (forget_gone_share, remove_share_and_forget,
                              removal_prompt)
-from bot.share_expiry import _DB_TIME, expires_at_text, expiry_date_text
+from bot.share_expiry import expires_at_text, expiry_date_text
 from bot.shared import edit_or_send
 
 logger = logging.getLogger("usher")

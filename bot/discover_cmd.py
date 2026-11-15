@@ -38,6 +38,7 @@ from bot.media_card import STATUS_NOTES, send_detail_card
 from bot.requests_hub import REQUESTS_HUB
 from bot.shared import (
     KEYCAP_DIGITS,
+    NOT_LINKED_MSG,
     edit_or_send,
     force_end_flow_conversations,
     record_btn,
@@ -76,8 +77,6 @@ POPULAR_PER_STAT = 10
 _STALE_BROWSE_TOAST = "That browse list is stale: run /trending again."
 _POPULAR_GONE_TOAST = "Popular here isn't available now: run /trending again."
 
-
-NOT_LINKED_MSG = "DM me /link first so I know which Plex account is yours."
 
 
 async def _may_browse(ctx: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:

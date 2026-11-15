@@ -21,6 +21,7 @@ from typing import Optional
 from telegram.ext import ContextTypes
 
 from bot.shared import format_media_title_line
+from const import DB_TIME as _DB_TIME
 from http_util import APIError, NotFoundAPIError
 from seerr import REQUEST_STATUS_FAILED
 from store import FailedRetry
@@ -33,7 +34,6 @@ AUTO_RETRY_FIRST_DELAY_S = 180
 # last entry.
 RETRY_SCHEDULE_S = (3600, 6 * 3600, 24 * 3600)
 MAX_TRIES_LIMIT = 5
-_DB_TIME = "%Y-%m-%d %H:%M:%S"
 
 
 def delay_before_try(tries_made: int) -> int:

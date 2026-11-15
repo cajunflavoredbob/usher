@@ -63,6 +63,7 @@ from bot.tickets_hub import TICKETS_HUB, list_back_button
 from bot.shared import (
     truncate_message,
     DECRYPT_FAILED_MSG,
+    NOT_LINKED_MSG,
     AWAIT_TICKET_REPLY,
     RELINK_RESUME_EXECUTORS,
     ISSUE_TYPES,
@@ -155,8 +156,7 @@ async def tickets_hub_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
             await show(DECRYPT_FAILED_MSG, back)
             return
         if not link or not link.plex_token:
-            await show("DM me /link first so I know which Plex account is yours.",
-                       back)
+            await show(NOT_LINKED_MSG, back)
             return
 
     # Fetch tickets

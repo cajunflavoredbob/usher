@@ -29,6 +29,7 @@ from bot.hub import back_button, came_from_hub, end_markup, reply_end
 from bot.requests_hub import REQUESTS_HUB
 from bot.shared import (
     DECRYPT_FAILED_MSG,
+    NOT_LINKED_MSG,
     admin_view,
     edit_or_send,
     force_end_flow_conversations,
@@ -163,9 +164,7 @@ async def cmd_requests(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await update.effective_message.reply_text(DECRYPT_FAILED_MSG)
             return
         if not link or not link.plex_token:
-            await update.effective_message.reply_text(
-                "DM me /link first so I know which Plex account is yours."
-            )
+            await update.effective_message.reply_text(NOT_LINKED_MSG)
             return
     await _render_requests(update, ctx, update.effective_message.reply_text,
                            user_id=user_id)
@@ -191,7 +190,7 @@ async def requests_hub_mine(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
         if link and link.plex_token_decrypt_failed:
             guard = DECRYPT_FAILED_MSG
         elif not link or not link.plex_token:
-            guard = "DM me /link first so I know which Plex account is yours."
+            guard = NOT_LINKED_MSG
     if guard is not None:
         sent = await edit_or_send(q, guard, reply_markup=back_only)
         record_btn(ctx.application, user_id, sent)

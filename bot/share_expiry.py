@@ -6,9 +6,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from const import DB_TIME as _DB_TIME
+
 # The Expiry choices, in days. 0 stands for Never (or Clear on a Share view).
 EXPIRY_DAYS = (7, 30, 90)
-_DB_TIME = "%Y-%m-%d %H:%M:%S"
 
 
 def expires_at_text(days: int, now: Optional[datetime] = None) -> str:

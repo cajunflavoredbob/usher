@@ -17,12 +17,12 @@ from tautulli import TautulliClient, find_user_by_plex_username
 from bot.callback_prefixes import MYSTATS
 from bot.hub import came_from_hub, end_markup
 from bot.requests_hub import REQUESTS_HUB
-from bot.shared import DECRYPT_FAILED_MSG, edit_or_send, record_btn, send_typing
+from bot.shared import (DECRYPT_FAILED_MSG, NOT_LINKED_MSG, edit_or_send,
+                        record_btn, send_typing)
 
 logger = logging.getLogger("usher")
 
 TOP_TITLES = 5
-NOT_LINKED_MSG = "DM me /link first so I know which Plex account is yours."
 UNKNOWN_USER_MSG = ("Tautulli doesn't know you yet. Watch something on Plex "
                     "and check back.")
 NOT_CONFIGURED_MSG = "Watch stats aren't available on this server."

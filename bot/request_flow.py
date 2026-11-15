@@ -53,7 +53,6 @@ from http_util import user_friendly_message
 from seerr import (
     MEDIA_STATUS_AVAILABLE,
     MEDIA_STATUS_BLOCKLISTED,
-    MEDIA_STATUS_PARTIALLY_AVAILABLE,
     MEDIA_STATUS_PENDING,
     MEDIA_STATUS_PROCESSING,
     REQUEST_STATUS_APPROVED,
@@ -97,7 +96,7 @@ from bot.hub import (
     send_hub,
     set_hub_origin,
 )
-from bot.media_card import send_detail_card
+from bot.media_card import STATUS_NOTES, send_detail_card
 from bot.progress_card import APPROVED_LINE, card_text
 from bot.remaining import requestable_seasons
 from bot.requests_hub import REQUESTS_HUB
@@ -166,15 +165,9 @@ _TARGET_CLEARED_TYPED = ("That Request for someone was ended when you started "
 # entry points pop it.
 _PICKED_KEY = "rq_for_picked"
 
-# Availability annotations for the search list. UNKNOWN/DELETED get none:
-# they're plainly requestable.
-_STATUS_NOTES = {
-    MEDIA_STATUS_PENDING: "⏳ requested",
-    MEDIA_STATUS_PROCESSING: "⏳ downloading",
-    MEDIA_STATUS_PARTIALLY_AVAILABLE: "🌗 partly available",
-    MEDIA_STATUS_AVAILABLE: "✅ available",
-    MEDIA_STATUS_BLOCKLISTED: "🚫 not requestable",
-}
+# Availability annotations for the search list come from
+# bot.media_card.STATUS_NOTES (shared with the detail cards): UNKNOWN/DELETED
+# get none, they're plainly requestable.
 
 # Standard-track statuses that mean "a plain request would bounce".
 _COVERED_STATUSES = (MEDIA_STATUS_PENDING, MEDIA_STATUS_PROCESSING,
@@ -722,7 +715,7 @@ def _result_line(index: int, r: MediaResult) -> str:
     line = f"{index}. {type_emoji} {r.title}"
     if r.year:
         line += f" ({r.year})"
-    note = _STATUS_NOTES.get(r.status or 0)
+    note = STATUS_NOTES.get(r.status or 0)
     if note:
         line += f" - {note}"
     return line

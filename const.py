@@ -7,6 +7,10 @@ from __future__ import annotations
 
 from typing import Final
 
+# The stored timestamp format (UTC, no zone) that the Share expiry, Digest and
+# auto-retry code read and write.
+DB_TIME: Final = "%Y-%m-%d %H:%M:%S"
+
 # Plex link flow
 # Strong PIN has a 30-min lifetime at plex.tv; we poll for 28 min at 3s = 560
 # iterations under the limit. Weak PIN: 15-min lifetime; we poll for 14 min.
