@@ -31,10 +31,12 @@ def _clear_global_login_throttle():
     mod = sys.modules.get("webui")
     if mod is not None:
         mod._global_throttle._failures.clear()
+        mod._password_change_throttle._failures.clear()
     yield
     mod = sys.modules.get("webui")
     if mod is not None:
         mod._global_throttle._failures.clear()
+        mod._password_change_throttle._failures.clear()
 
 
 @pytest.fixture

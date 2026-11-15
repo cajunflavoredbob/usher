@@ -107,6 +107,10 @@ _device_throttle = LoginThrottle()
 # a client owning many IPv6 /64s cannot guess freely. Under one fixed key.
 _GLOBAL_KEY = "all"
 _global_throttle = LoginThrottle(max_failures=THROTTLE_GLOBAL_MAX_FAILURES)
+# Wrong "current password" answers on the change-password form, per session
+# (the cookie's signature), so a stolen session cookie cannot be used to guess
+# the password at full speed.
+_password_change_throttle = LoginThrottle()
 
 # Verified against instead of the real hash when the username doesn't match,
 # so wrong-username and wrong-password attempts cost the same PBKDF2 work
@@ -1440,11 +1444,12 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
     stored_iters = iterations_of(stored_hash)
     if stored_iters and stored_iters < PBKDF2_ITERATIONS and not restart_pending():
         try:
-            admin.password_hash = hash_password(password)
-            await store.save_async()
-            audit("password_rehashed",
-                  user=username, ip=ip,
-                  from_iters=stored_iters, to_iters=PBKDF2_ITERATIONS)
+            # PBKDF2 off the event loop, as the verify above.
+            admin.password_hash = await asyncio.to_thread(hash_password, password)
+            if await store.save_async():
+                audit("password_rehashed",
+                      user=username, ip=ip,
+                      from_iters=stored_iters, to_iters=PBKDF2_ITERATIONS)
         except Exception:
             # Login itself already succeeded; rehash failure is non-fatal.
             logger.exception("PBKDF2 auto-upgrade rehash failed for %s", username)
@@ -1455,8 +1460,9 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
     resp = web.HTTPFound("/admin")
     _set_session_cookie(resp, cookie, secure=secure)
     # Known-device marker: kept across logout (it marks the browser, not the
-    # session), refreshed on every successful login, and stops counting after
-    # a password change (the password_version it carries no longer matches).
+    # session), refreshed on every successful login. A password change retires
+    # it everywhere (the password_version it carries no longer matches) except
+    # in the browser that made the change, which is re-issued one.
     _set_device_cookie(resp, _make_device_cookie(
         request.app["session_secret"], username,
         stored_version, device_id), secure=secure)
@@ -1513,7 +1519,11 @@ async def _save_and_render(
 ) -> web.Response:
     """Common epilogue: persist, trigger hot reload, render the current tab."""
     store: SettingsStore = request.app["settings_store"]
-    await store.save_async()
+    if not await store.save_async():
+        # A restore froze saves between the restart-pending check and now:
+        # nothing was written, so say so, and do not hot-reload values that
+        # were never saved.
+        return web.Response(text=SAVE_SKIPPED_MSG, status=503)
     msg = success_msg
     err = error
     if not skip_hot_reload:
@@ -1827,9 +1837,18 @@ async def change_password(request: web.Request) -> web.Response:
     new = _form_str(form, "new")
     confirm = _form_str(form, "confirm")
     admin = store.settings.admin
+    user = _current_user(request) or "-"
+    session_key = (request.cookies.get(SESSION_COOKIE) or "-").rsplit(".", 1)[-1]
+    locked = _password_change_throttle.is_locked(session_key)
+    if locked is not None:
+        return web.Response(
+            text=f"Too many wrong current passwords. Try again in {int(locked)}s.",
+            status=429, headers={"Retry-After": str(int(locked))})
     # PBKDF2 off the event loop, as login does: two 600k-iteration runs on
     # the loop would stall the bot and the webhook receiver.
     if not await asyncio.to_thread(verify_password, current, admin.password_hash):
+        _password_change_throttle.record_failure(session_key)
+        audit("password_change_fail", user=user, ip=client_ip(request))
         return web.Response(
             text=_settings_page(store.settings, error="Current password is incorrect.",
                                 active_tab="account",
@@ -1854,7 +1873,7 @@ async def change_password(request: web.Request) -> web.Response:
                                 csrf_token=csrf_for_request(request)),
             content_type="text/html", status=400,
         )
-    user = _current_user(request) or "-"
+    _password_change_throttle.record_success(session_key)
     new_hash = await asyncio.to_thread(hash_password, new)
     # The write waits for any login in flight (it holds login_lock from its
     # hash read to its cookie), so no login can verify the old password and
@@ -1863,8 +1882,7 @@ async def change_password(request: web.Request) -> web.Response:
         # A restore can land while this waits on a login in flight; saving
         # now would write the old settings back over it.
         if restart_pending():
-            return web.Response(
-                text="Usher is restarting; try again in a moment.", status=503)
+            return web.Response(text=RESTARTING_MSG, status=503)
         # Read before the bump: the cookie is bound to the old version.
         old_device_id = _verify_device_cookie(
             request.app["session_secret"], request.cookies.get(DEVICE_COOKIE),
@@ -1874,7 +1892,8 @@ async def change_password(request: web.Request) -> web.Response:
         # admin rotates the password in response to it. The current session
         # is kept by re-issuing it at the new version below.
         admin.password_version += 1
-        await store.save_async()
+        if not await store.save_async():
+            return web.Response(text=SAVE_SKIPPED_MSG, status=503)
     audit("password_changed", user=user, ip=client_ip(request))
     # Re-issue THIS session at the new version so the admin who changed the
     # password isn't logged out mid-page. The session signature changes, so
@@ -2508,6 +2527,7 @@ PUBLIC_ADMIN_PATHS = {"/admin/setup", "/admin/login"}
 # POSTs that never write settings, so they stay open during a pending restart.
 _READ_ONLY_POSTS = {"/admin/logout", "/admin/backup"}
 RESTARTING_MSG = "Usher is restarting. Refresh in a moment."
+SAVE_SKIPPED_MSG = "Usher is restarting; your change was not saved."
 
 
 def _blocked_by_restart(request: web.Request) -> bool:

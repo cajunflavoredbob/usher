@@ -128,10 +128,12 @@ async def test_a_restore_failing_before_any_write_does_not_restart_or_freeze(env
     monkeypatch.setattr(webui, "schedule_clean_exit",
                         lambda *a, **k: exits.append(a))
 
-    def boom(data):
+    # The real write_restored: its write fails, so it must not freeze saves.
+    def boom(path, data, *a, **k):
         raise OSError("read-only volume")
 
-    monkeypatch.setattr(store, "write_restored", boom)
+    import settings as settings_mod
+    monkeypatch.setattr(settings_mod, "atomic_write_bytes", boom)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("settings.json", (data_dir / "settings.json").read_bytes())

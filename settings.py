@@ -343,13 +343,16 @@ class SettingsStore:
         except OSError as exc:
             logger.debug("directory fsync failed", exc_info=exc)
 
-    def _write(self, s: Settings) -> None:
+    def _write(self, s: Settings) -> bool:
+        """Write the settings; False when a restore froze saves (nothing was
+        written), so a caller can tell the user instead of saying "Saved"."""
         with self._write_lock:
             if self._restored:
                 logger.info("settings save skipped: a restore replaced "
                             "settings.json and a restart is pending")
-                return
+                return False
             self._write_unlocked(s)
+            return True
 
     def write_restored(self, data: bytes) -> None:
         """Replace settings.json with a restored copy under the write lock
@@ -379,14 +382,15 @@ class SettingsStore:
         os.replace(tmp, self.path)
         self._fsync_parent_dir()
 
-    def save(self) -> None:
-        self._write(self.settings)
+    def save(self) -> bool:
+        """True when written, False when skipped by the restore freeze."""
+        return self._write(self.settings)
 
-    async def save_async(self) -> None:
+    async def save_async(self) -> bool:
         """save() off the event loop: _write does two fsyncs synchronously,
         which stalls the webhook receiver and bot when called from an
         aiohttp handler on slow storage."""
-        await asyncio.to_thread(self.save)
+        return await asyncio.to_thread(self.save)
 
 
 def hash_password(plaintext: str) -> str:
