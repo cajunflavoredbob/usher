@@ -1833,6 +1833,19 @@ async def change_password(request: web.Request) -> web.Response:
     csrf_resp = _csrf_check_or_403(request, form)
     if csrf_resp is not None:
         return csrf_resp
+    # One lock across the throttle check, the verify, the failure record and
+    # the write, as login does: parallel guesses would otherwise all pass
+    # is_locked before the first failure was recorded, and a right guess
+    # inside a burst would change the password. It also makes the write wait
+    # for a login in flight (the login holds this lock from its hash read to
+    # its cookie), so no login can verify the old password and then stamp the
+    # new version.
+    async with request.app["login_lock"]:
+        return await _change_password_attempt(request, form)
+
+
+async def _change_password_attempt(request: web.Request, form) -> web.Response:
+    store: SettingsStore = request.app["settings_store"]
     current = _form_str(form, "current")
     new = _form_str(form, "new")
     confirm = _form_str(form, "confirm")
@@ -1875,25 +1888,21 @@ async def change_password(request: web.Request) -> web.Response:
         )
     _password_change_throttle.record_success(session_key)
     new_hash = await asyncio.to_thread(hash_password, new)
-    # The write waits for any login in flight (it holds login_lock from its
-    # hash read to its cookie), so no login can verify the old password and
-    # then stamp the new version.
-    async with request.app["login_lock"]:
-        # A restore can land while this waits on a login in flight; saving
-        # now would write the old settings back over it.
-        if restart_pending():
-            return web.Response(text=RESTARTING_MSG, status=503)
-        # Read before the bump: the cookie is bound to the old version.
-        old_device_id = _verify_device_cookie(
-            request.app["session_secret"], request.cookies.get(DEVICE_COOKIE),
-            admin.username, admin.password_version)
-        admin.password_hash = new_hash
-        # Sign out every other session: a stolen cookie must die when the
-        # admin rotates the password in response to it. The current session
-        # is kept by re-issuing it at the new version below.
-        admin.password_version += 1
-        if not await store.save_async():
-            return web.Response(text=SAVE_SKIPPED_MSG, status=503)
+    # A restore can land while this waits on the lock; saving now would
+    # write the old settings back over it.
+    if restart_pending():
+        return web.Response(text=RESTARTING_MSG, status=503)
+    # Read before the bump: the cookie is bound to the old version.
+    old_device_id = _verify_device_cookie(
+        request.app["session_secret"], request.cookies.get(DEVICE_COOKIE),
+        admin.username, admin.password_version)
+    admin.password_hash = new_hash
+    # Sign out every other session: a stolen cookie must die when the
+    # admin rotates the password in response to it. The current session
+    # is kept by re-issuing it at the new version below.
+    admin.password_version += 1
+    if not await store.save_async():
+        return web.Response(text=SAVE_SKIPPED_MSG, status=503)
     audit("password_changed", user=user, ip=client_ip(request))
     # Re-issue THIS session at the new version so the admin who changed the
     # password isn't logged out mid-page. The session signature changes, so
