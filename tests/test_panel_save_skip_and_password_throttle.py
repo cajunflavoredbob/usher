@@ -140,6 +140,9 @@ async def test_wrong_current_passwords_are_throttled_per_session_and_audited(
     resp = await client.post("/admin/password", data=form, cookies=_cookies())
     assert resp.status == 429
     assert "Retry-After" in resp.headers
+    page = await resp.text()
+    assert "Too many wrong current passwords" in page  # the Account tab, not bare text
+    assert 'name="current"' in page
     # Even the right password is refused while the session is locked.
     ok = dict(form, current=REAL_PW)
     resp = await client.post("/admin/password", data=ok, cookies=_cookies())
@@ -160,3 +163,12 @@ async def test_a_right_current_password_clears_the_count(env):
                               cookies=_cookies())).status == 200
     # The four wrong answers no longer count: not even a bucket is left.
     assert _SESSION.rsplit(".", 1)[-1] not in webui._password_change_throttle._failures
+
+
+async def test_the_dismiss_script_shows_a_failed_save_and_keeps_the_banner(env):
+    client, _, _ = env
+    page = await (await client.get("/admin", cookies=_cookies())).text()
+    # The 503 reason is shown in the banner and the banner stays visible.
+    assert 'id="newplex-dismiss-error"' in page
+    assert "if (!r.ok)" in page
+    assert "banner.hidden = false;" in page.split("if (!r.ok)")[1]

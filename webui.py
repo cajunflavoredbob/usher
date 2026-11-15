@@ -723,10 +723,24 @@ SCRIPT = """
       var fd = new FormData();
       var tok = document.querySelector('#seerr-form input[name="csrf_token"]');
       if (tok) fd.append('csrf_token', tok.value);
+      var failed = '';
       try {
-        await fetch('/admin/seerr/newplex-warning/dismiss',
-                    { method: 'POST', body: fd });
-      } catch (e) {}
+        var r = await fetch('/admin/seerr/newplex-warning/dismiss',
+                            { method: 'POST', body: fd });
+        if (!r.ok) {
+          var why = '';
+          try {
+            var raw = await r.text();
+            try { why = JSON.parse(raw).reason || ''; } catch (e) { why = raw.slice(0, 200); }
+          } catch (e) {}
+          failed = why || 'Could not save the dismissal (' + r.status + ').';
+        }
+      } catch (e) { failed = 'Could not reach Usher to save the dismissal.'; }
+      if (failed) {
+        banner.hidden = false;
+        var note = document.getElementById('newplex-dismiss-error');
+        if (note) note.textContent = failed;
+      }
     });
   })();
 })();
@@ -900,6 +914,7 @@ def _settings_page(
     sign-in, including through /link. Disable it in Seerr under Settings
     &rarr; Users if unwanted; Usher works either way.
     <button type="button" id="newplex-dismiss">Dismiss</button>
+    <div id="newplex-dismiss-error" role="alert"></div>
   </div>
   <label>Seerr URL</label>
   <input type="text" name="seerr_url" value="{_esc(s.seerr_url)}" placeholder="http://192.0.2.10:5056" required>
@@ -1828,7 +1843,6 @@ async def webhook_post(request: web.Request) -> web.Response:
 
 
 async def change_password(request: web.Request) -> web.Response:
-    store: SettingsStore = request.app["settings_store"]
     form = await request.post()
     csrf_resp = _csrf_check_or_403(request, form)
     if csrf_resp is not None:
@@ -1855,8 +1869,14 @@ async def _change_password_attempt(request: web.Request, form) -> web.Response:
     locked = _password_change_throttle.is_locked(session_key)
     if locked is not None:
         return web.Response(
-            text=f"Too many wrong current passwords. Try again in {int(locked)}s.",
-            status=429, headers={"Retry-After": str(int(locked))})
+            text=_settings_page(
+                store.settings,
+                error=f"Too many wrong current passwords. Try again in {int(locked)}s.",
+                active_tab="account",
+                webhook_url=_webhook_url_from_request(request),
+                csrf_token=csrf_for_request(request)),
+            content_type="text/html", status=429,
+            headers={"Retry-After": str(int(locked))})
     # PBKDF2 off the event loop, as login does: two 600k-iteration runs on
     # the loop would stall the bot and the webhook receiver.
     if not await asyncio.to_thread(verify_password, current, admin.password_hash):
@@ -1888,7 +1908,7 @@ async def _change_password_attempt(request: web.Request, form) -> web.Response:
         )
     _password_change_throttle.record_success(session_key)
     new_hash = await asyncio.to_thread(hash_password, new)
-    # A restore can land while this waits on the lock; saving now would
+    # A restore can land while the hash runs; saving now would
     # write the old settings back over it.
     if restart_pending():
         return _restarting_response()
