@@ -64,7 +64,9 @@ async def test_tab_post_refused_while_restart_pending(client):
               "seerr_api_key": "k2"},
         cookies=_cookies(), allow_redirects=False)
     assert resp.status == 503
-    assert "Usher is restarting. Refresh in a moment." in await resp.text()
+    text = await resp.text()
+    assert "Usher is restarting" in text and 'href="/admin"' in text
+    assert "<form" not in text and "Refresh" not in text
     assert client.settings_store.settings.seerr_url == "http://seerr.test"
 
 
@@ -89,10 +91,45 @@ async def test_newplex_autosave_refused_while_restart_pending(client, monkeypatc
     assert s.seerr_new_plex_login_ack is True
 
 
-async def test_get_pages_still_served_while_restart_pending(client):
+async def test_admin_get_is_the_no_form_restart_page_while_pending(client):
     procutil.mark_restart_pending()
     resp = await client.get("/admin", cookies=_cookies(), allow_redirects=False)
+    assert resp.status == 503
+    text = await resp.text()
+    assert "Usher is restarting" in text and 'href="/admin"' in text
+    assert "<form" not in text and "seerr_url" not in text
+    assert "Refresh" not in text
+
+
+async def test_admin_get_served_again_once_not_pending(client):
+    resp = await client.get("/admin", cookies=_cookies(), allow_redirects=False)
     assert resp.status == 200
+    assert "<form" in await resp.text()
+
+
+async def test_login_page_and_logged_out_get_unchanged_while_pending(client):
+    procutil.mark_restart_pending()
+    resp = await client.get("/admin/login", allow_redirects=False)
+    assert resp.status == 200
+    resp = await client.get("/admin", allow_redirects=False)
+    assert resp.status == 302  # logged out: to the login page, not the restart page
+
+
+async def test_second_restore_submit_gets_the_restart_page(client):
+    procutil.mark_restart_pending()
+    resp = await client.post("/admin/restore", data={"csrf_token": CSRF},
+                             cookies=_cookies(), allow_redirects=False)
+    assert resp.status == 503
+    text = await resp.text()
+    assert "Usher is restarting" in text and "<form" not in text
+
+
+async def test_newplex_dismiss_during_restart_is_plain_text(client):
+    procutil.mark_restart_pending()
+    resp = await client.post("/admin/seerr/newplex-warning/dismiss",
+                             data={"csrf_token": CSRF}, cookies=_cookies())
+    assert resp.status == 503
+    assert await resp.text() == webui.RESTARTING_MSG
 
 
 @pytest.mark.parametrize("source", ["bot_data", "procutil"])

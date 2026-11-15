@@ -1294,7 +1294,7 @@ async def setup_post(request: web.Request) -> web.Response:
 
     body = _page("Setup", """
 <h1>Setup Complete</h1>
-<p>Usher is restarting. Refresh in about 10 seconds and log in.</p>
+<p>Usher is restarting. In about 10 seconds, <a href="/admin">open the panel</a> and log in.</p>
 """)
     return web.Response(text=body, content_type="text/html")
 
@@ -1891,7 +1891,7 @@ async def _change_password_attempt(request: web.Request, form) -> web.Response:
     # A restore can land while this waits on the lock; saving now would
     # write the old settings back over it.
     if restart_pending():
-        return web.Response(text=RESTARTING_MSG, status=503)
+        return _restarting_response()
     # Read before the bump: the cookie is bound to the old version.
     old_device_id = _verify_device_cookie(
         request.app["session_secret"], request.cookies.get(DEVICE_COOKIE),
@@ -2540,18 +2540,30 @@ PUBLIC_ADMIN_PATHS = {"/admin/setup", "/admin/login"}
 
 # POSTs that never write settings, so they stay open during a pending restart.
 _READ_ONLY_POSTS = {"/admin/logout", "/admin/backup"}
-RESTARTING_MSG = "Usher is restarting. Refresh in a moment."
+RESTARTING_MSG = "Usher is restarting. In a moment, open /admin again."
 SAVE_SKIPPED_MSG = "Usher is restarting; your change was not saved."
+
+
+def _restarting_response() -> web.Response:
+    """The no-form page served while a restart is pending: the in-memory
+    settings are stale after a restore, so no settings page or form is shown."""
+    body = _page("Restarting", """
+<h1>Usher is restarting</h1>
+<p>In a moment, <a href="/admin">open the panel</a> again.</p>
+""")
+    return web.Response(text=body, content_type="text/html", status=503)
 
 
 def _blocked_by_restart(request: web.Request) -> bool:
     """True when a restart is scheduled and this request would save settings
-    (the in-memory copy is stale after a restore, so a save would undo it)."""
+    or render the stale in-memory ones (after a restore, a save would undo it)."""
     if not restart_pending():
         return False
     path = request.path
     if path == "/admin/seerr/newplex-warning":
         return True  # GET that auto-saves
+    if request.method == "GET" and path == "/admin":
+        return True  # the settings page itself, with live forms
     return (request.method == "POST" and path not in _READ_ONLY_POSTS
             and not path.startswith("/admin/test/"))
 
@@ -2575,7 +2587,10 @@ async def auth_middleware(request: web.Request, handler) -> web.Response:
             raise web.HTTPFound("/admin/setup")
         if _blocked_by_restart(request) and (
                 path in PUBLIC_ADMIN_PATHS or _current_user(request)):
-            return _no_store(web.Response(text=RESTARTING_MSG, status=503))
+            if path.startswith("/admin/seerr/newplex-warning"):
+                # Fetched by the panel's script, which shows the text.
+                return _no_store(web.Response(text=RESTARTING_MSG, status=503))
+            return _no_store(_restarting_response())
         if path in PUBLIC_ADMIN_PATHS:
             return _no_store(await handler(request))
         if _current_user(request):
