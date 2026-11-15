@@ -2167,7 +2167,11 @@ async def _restore_upload_locked(request: web.Request) -> web.Response:
             # secret, and chmod=None would land them world-readable on the
             # host-mounted volume.
             if "settings.json" in names:
-                atomic_write_bytes(settings_path, zf.read("settings.json"))
+                # Through the store's write lock: a save thread still in
+                # flight must not rename over (or after) the restored file.
+                await asyncio.to_thread(
+                    request.app["settings_store"].write_restored,
+                    zf.read("settings.json"))
             if "mappings.sqlite" in names:
                 atomic_write_bytes(db_path, zf.read("mappings.sqlite"))
                 # Drop stale WAL/SHM sidecars: SQLite would otherwise pair

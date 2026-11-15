@@ -72,3 +72,20 @@ async def test_restore_writes_key_to_custom_path_and_snapshots_it(env):
     assert not (data_dir / "encryption.key").exists()
     snaps = list(data_dir.glob("pre-restore-*/custom.key"))
     assert len(snaps) == 1 and snaps[0].read_bytes() == old_key
+
+
+async def test_a_save_after_a_restore_does_not_write_over_it(env):
+    client, data_dir, key_path = env
+    store = client.server.app["settings_store"]
+    restored = (data_dir / "settings.json").read_text().replace(
+        '"admin"', '"restored-admin"', 1)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("settings.json", restored)
+    form = {"csrf_token": CSRF, "passphrase": "", "backup": buf.getvalue()}
+    resp = await client.post("/admin/restore", data=form, cookies=_cookies())
+    assert resp.status == 200
+    # A save thread that was queued before the restore runs now, holding the
+    # old in-memory settings: it must not rename over the restored file.
+    await store.save_async()
+    assert (data_dir / "settings.json").read_text() == restored

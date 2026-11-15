@@ -237,6 +237,10 @@ class SettingsStore:
         # two overlapping saves would race on it, and the loser's rename
         # would find it gone.
         self._write_lock = threading.Lock()
+        # Set once a restore has replaced settings.json: a save still queued
+        # in a worker thread would otherwise write the stale in-memory
+        # settings back over it.
+        self._restored = False
         self.settings = self._load_or_seed()
 
     def _load_or_seed(self) -> Settings:
@@ -341,7 +345,19 @@ class SettingsStore:
 
     def _write(self, s: Settings) -> None:
         with self._write_lock:
+            if self._restored:
+                logger.info("settings save skipped: a restore replaced "
+                            "settings.json and a restart is pending")
+                return
             self._write_unlocked(s)
+
+    def write_restored(self, data: bytes) -> None:
+        """Replace settings.json with a restored copy under the write lock
+        (so no save is mid-rename) and stop every later save from writing
+        the old in-memory settings over it. Lasts until the restart."""
+        with self._write_lock:
+            atomic_write_bytes(self.path, data)
+            self._restored = True
 
     def _write_unlocked(self, s: Settings) -> None:
         # Crash-safe write: flush + fsync the temp file's contents to disk

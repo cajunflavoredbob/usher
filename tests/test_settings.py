@@ -400,3 +400,11 @@ def test_overlapping_saves_do_not_race_on_the_temp_file(tmp_path):
     for t in threads:
         t.join()
     assert errors == []
+
+
+def test_a_save_after_write_restored_leaves_the_restored_file(tmp_path):
+    store = SettingsStore(tmp_path / "settings.json")
+    store.save()
+    store.write_restored(b'{"restored": true}')
+    store.save()
+    assert (tmp_path / "settings.json").read_bytes() == b'{"restored": true}'
