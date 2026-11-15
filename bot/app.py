@@ -167,6 +167,7 @@ from bot.shared import (
     force_end_flow_conversations,
     guard_flow_steps,
     format_status,
+    drop_draft_claim,
     global_btn_gate,
     owns_draft,
     record_btn,
@@ -1123,6 +1124,10 @@ def _error_cleanup_keys(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> list:
         elif owner_key in _DRAFT_OWNER_KEYS:
             here = owns_draft(ctx, update, owner_key)
             every_draft_here = every_draft_here and here
+            if here:
+                # The chat's own draft is cleared while its conversation stays
+                # open: its next step must not be told it was replaced.
+                drop_draft_claim(ctx, update, owner_key)
         else:
             owner = ctx.user_data.get(owner_key)
             here = owner is None or owner == chat.id

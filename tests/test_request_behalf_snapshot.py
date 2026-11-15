@@ -249,7 +249,10 @@ async def test_a_pick_cleared_by_a_group_flow_refuses_the_title(h):
     await _say_in_group(h, "/cancel")
     assert "rq_for" not in h.user_data
     await h.say("movie b")
-    assert CLEARED in h.sent[-1]
+    # The group's /request took the draft over, so the DM flow says it was
+    # replaced, also once the group's request has ended.
+    assert h.sent[-1].startswith(
+        "That request was replaced by one you started in another chat.")
     assert _filed_user_ids(h) == []
     h.app.bot_data["seerr"].search.assert_awaited_once()  # only the group's
 

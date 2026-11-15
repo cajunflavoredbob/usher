@@ -1069,25 +1069,48 @@ def owns_draft(ctx, update, owner_key: str) -> bool:
     """True when the per-user draft whose owner chat is kept under
     `owner_key` belongs to this update's chat. user_data is per user while
     each conversation is per chat, so a flow started in another chat
-    overwrites the draft and its owner. A draft with no owner recorded (none
-    written yet, or already cleared) and an update that names no chat (a bare
-    timeout) count as owned."""
+    overwrites the draft and its owner. A chat whose own claim (see
+    claim_draft) names another draft than the current one was replaced, and
+    stays replaced once the newer draft is cleared too. Otherwise a draft
+    with no owner recorded (none written yet, or already cleared) and an
+    update that names no chat (a bare timeout) count as owned."""
     owner = ctx.user_data.get(owner_key)
     chat_id = _chat_id(update)
-    return owner is None or chat_id is None or owner == chat_id
+    if chat_id is None:
+        return True
+    claimed = (ctx.user_data.get(owner_key + _CLAIMS_SUFFIX) or {}).get(chat_id)
+    if claimed is not None and claimed != ctx.user_data.get(owner_key + "_draft"):
+        return False
+    return owner is None or owner == chat_id
 
 
 _DRAFT_SEQ_KEY: Final = "draft_seq"
+# Per draft kind, the id of the draft each chat's flow last claimed:
+# {chat_id: draft id} under `<owner_key>_claims`. No draft clear empties it, so
+# a chat whose draft a newer flow in another chat took over keeps refusing
+# after that newer draft is cleared (owns_draft). Only a new claim in a chat,
+# or an error there (drop_draft_claim), changes that chat's entry.
+_CLAIMS_SUFFIX: Final = "_claims"
+
+
+def drop_draft_claim(ctx, update, owner_key: str) -> None:
+    """Forget this update's chat's claim, for an error that cleared the chat's
+    own draft while its conversation stays open: that chat was not replaced."""
+    claims = ctx.user_data.get(owner_key + _CLAIMS_SUFFIX)
+    if claims:
+        claims.pop(_chat_id(update), None)
 
 
 def claim_draft(ctx, update, owner_key: str) -> None:
     """Record this update's chat as the owner of a new flow's draft, and give
     the draft an id of its own (a per-user counter no reset clears, so an id
-    is never reused)."""
-    ctx.user_data[owner_key] = _chat_id(update)
+    is never reused), also kept as this chat's claim."""
+    chat_id = _chat_id(update)
+    ctx.user_data[owner_key] = chat_id
     seq = (ctx.user_data.get(_DRAFT_SEQ_KEY) or 0) + 1
     ctx.user_data[_DRAFT_SEQ_KEY] = seq
     ctx.user_data[owner_key + "_draft"] = seq
+    ctx.user_data.setdefault(owner_key + _CLAIMS_SUFFIX, {})[chat_id] = seq
 
 
 def draft_identity(ctx, owner_key: str) -> tuple:

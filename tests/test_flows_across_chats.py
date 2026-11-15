@@ -1101,3 +1101,89 @@ async def test_an_error_in_a_group_keeps_the_dm_reports_back_button(rig, monkeyp
     assert rig.user_data["hub_origin"] == TICKETS_HUB
     await _error_in_the_group(rig, monkeypatch)
     assert rig.user_data["hub_origin"] == TICKETS_HUB
+
+
+# --- a replaced flow stays replaced after the newer flow ends -----------------
+
+
+async def _end_group_issue(rig, how: str) -> None:
+    if how == "filed":
+        await rig.say(GROUP_ID, "no sound at all")
+        rig.seerr.create_issue.assert_awaited_once()
+    elif how == "cancelled":
+        await rig.say(GROUP_ID, "/cancel")
+    else:
+        await rig.say(GROUP_ID, "/status")
+    assert not _live(rig, "issue", GROUP_ID)
+    assert "issue_chat" not in rig.user_data
+
+
+@pytest.mark.parametrize("how", ["filed", "cancelled", "ended by a command"])
+async def test_a_replaced_report_says_so_after_the_newer_report_ends(rig, how):
+    await rig.issue_to_description(DM_ID, "movie x", 4)
+    await rig.issue_to_description(GROUP_ID, "alien", 4)
+    await _end_group_issue(rig, how)
+    filed = rig.seerr.create_issue.await_count
+    await rig.say(DM_ID, "the picture is green")
+    assert rig.texts(DM_ID)[-1].startswith(ISSUE_REPLACED)
+    assert not any("/link" in t for t in rig.texts(DM_ID))
+    assert rig.seerr.create_issue.await_count == filed
+    assert not _live(rig, "issue", DM_ID)
+
+
+async def _end_group_request(rig, how: str, version: int) -> None:
+    if how == "filed":
+        await rig.tap(GROUP_ID, f"{RQ_GO}:{version}", rig.last_menu(GROUP_ID))
+        assert _requests(rig) == [348]
+    elif how == "cancelled":
+        await rig.say(GROUP_ID, "/cancel")
+    else:
+        await rig.say(GROUP_ID, "/status")
+    assert not _live(rig, "request", GROUP_ID)
+    assert "rq_chat" not in rig.user_data
+
+
+@pytest.mark.parametrize("how", ["filed", "cancelled", "ended by a command"])
+async def test_a_replaced_request_says_so_after_the_newer_request_ends(rq_rig, how):
+    rig = rq_rig
+    dm_version = await _request_to_confirm(rig, DM_ID, "movie x")
+    dm_confirm = rig.last_menu(DM_ID)
+    group_version = await _request_to_confirm(rig, GROUP_ID, "alien")
+    await _end_group_request(rig, how, group_version)
+    await rig.tap(DM_ID, f"{RQ_GO}:{dm_version}", dm_confirm)
+    assert rig.texts(DM_ID)[-1].startswith(RQ_REPLACED)
+    assert 100 not in _requests(rig)
+
+
+async def test_a_replaced_request_title_says_so_after_the_newer_request_ends(rq_rig):
+    """The title step, which reads no draft at all: the DM's flow waits for a
+    title while a group /request is filed."""
+    rig = rq_rig
+    rig.recorded(DM_ID, 622)
+    from bot.callback_prefixes import REQUESTS_NEW
+    await rig.tap(DM_ID, REQUESTS_NEW, 622)
+    group_version = await _request_to_confirm(rig, GROUP_ID, "alien")
+    await _end_group_request(rig, "filed", group_version)
+    searches = rig.seerr.search.await_count
+    await rig.say(DM_ID, "movie x")
+    assert rig.texts(DM_ID)[-1].startswith(RQ_REPLACED)
+    assert rig.seerr.search.await_count == searches
+
+
+async def test_a_report_restarted_in_its_own_chat_is_not_replaced(rig):
+    """A second /issue in the same chat takes its own draft: the chat's newer
+    report files."""
+    await rig.issue_to_description(DM_ID, "movie x", 4)
+    await rig.issue_to_description(DM_ID, "alien", 4)
+    await rig.say(DM_ID, "no sound at all")
+    rig.seerr.create_issue.assert_awaited_once()
+    assert rig.seerr.create_issue.call_args.kwargs["seerr_media_id"] == 20
+
+
+async def test_an_error_in_the_reports_own_chat_is_not_called_a_replacement(rig, monkeypatch):
+    from bot import ticket_flow
+    await rig.issue_to_description(DM_ID, "movie x", 4)
+    _fail_once(monkeypatch, ticket_flow, "send_typing")
+    await rig.say(DM_ID, "the picture is green")
+    await rig.say(DM_ID, "the picture is green")
+    assert not any(t.startswith(ISSUE_REPLACED) for t in rig.texts(DM_ID))
