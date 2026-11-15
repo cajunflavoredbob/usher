@@ -114,6 +114,7 @@ from bot.shared import (
     RQ_KEYS,
     RQ_OWNER_KEY,
     claim_draft,
+    claimed_hub,
     edit_or_send,
     begin_submit,
     end_submit,
@@ -365,7 +366,7 @@ async def request_hub_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     await send_typing(update, ctx)
     if not await _gate_entry(update, ctx, hub=REQUESTS_HUB):
         return ConversationHandler.END
-    claim_draft(ctx, update, RQ_OWNER_KEY)
+    claim_draft(ctx, update, RQ_OWNER_KEY, hub=REQUESTS_HUB)
     await edit_or_send(q, "What movie or show do you want? (Reply with the title.)")
     return RQ_TITLE
 
@@ -417,7 +418,7 @@ async def request_hub_behalf(update: Update,
     await send_typing(update, ctx)
     if not await _gate_entry(update, ctx, hub=REQUESTS_HUB):
         return ConversationHandler.END
-    claim_draft(ctx, update, RQ_OWNER_KEY)
+    claim_draft(ctx, update, RQ_OWNER_KEY, hub=REQUESTS_HUB)
     store: UserStore = ctx.bot_data["store"]
     users = await store.list_linked_users()
     if not users:
@@ -651,7 +652,7 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     force_end_flow_conversations(ctx, update)
     if perms is not None:
         ctx.user_data["rq_perms"] = perms
-    claim_draft(ctx, update, RQ_OWNER_KEY)
+    claim_draft(ctx, update, RQ_OWNER_KEY, hub=hub)
     try:
         media_type, tmdb_id, _ = _split_jump(q.data)
     except (ValueError, AttributeError):
@@ -686,7 +687,8 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
 
 async def request_title(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if _replaced(update, ctx):
-        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
+        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx,
+                                           RQ_OWNER_KEY)
     if _behalf_pick_lost(update, ctx):
         return await _refuse_lost_pick(update, ctx)
     query = update.effective_message.text.strip()
@@ -1189,7 +1191,8 @@ async def _quota_line(ctx: ContextTypes.DEFAULT_TYPE, tg_id: int,
 async def _show_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     if _replaced(update, ctx):
-        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
+        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx,
+                                           RQ_OWNER_KEY)
     if _behalf_pick_lost(update, ctx):
         return await _refuse_lost_pick(update, ctx)
     # The person this confirm names, taken before any await and kept under a
@@ -1251,7 +1254,8 @@ async def request_submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     if _replaced(update, ctx):
         # Another chat's /request owns the draft: file nothing of it.
-        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
+        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx,
+                                           RQ_OWNER_KEY)
     try:
         prefix, version_s = q.data.split(":")
         version = int(version_s)
@@ -1787,8 +1791,10 @@ async def request_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if q:
         await q.answer("Cancelled")
     if replaced:
-        # The draft is another chat's request now: end only this chat's flow.
-        await end_flow(update, ctx, "Cancelled.", None,
+        # The draft is another chat's request now: end only this chat's flow,
+        # with this chat's own Hub (hub_origin is the newer request's).
+        await end_flow(update, ctx, "Cancelled.",
+                       claimed_hub(ctx, update, RQ_OWNER_KEY),
                        typed_text="Cancelled. /request to start over.")
         return ConversationHandler.END
     await end_flow(update, ctx, "Cancelled.", hub_origin(ctx),

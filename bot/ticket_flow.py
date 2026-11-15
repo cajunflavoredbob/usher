@@ -78,6 +78,7 @@ from bot.shared import (
     force_end_flow_conversations,
     owns_draft,
     claim_draft,
+    claimed_hub,
     draft_identity,
     refuse_replaced_draft,
     send_typing,
@@ -324,7 +325,7 @@ async def ticket_hub_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     await q.answer()
     force_end_flow_conversations(ctx, update)
     _clear_issue_state(ctx, keep_resume=True, keep_submit=True)
-    claim_draft(ctx, update, ISSUE_OWNER_KEY)
+    claim_draft(ctx, update, ISSUE_OWNER_KEY, hub=TICKETS_HUB)
     set_hub_origin(ctx, TICKETS_HUB)
     _bump_version(ctx)
     if await require_seerr(update, ctx,
@@ -462,7 +463,8 @@ async def _show_search_results(
 
 async def ticket_title(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if _replaced(update, ctx):
-        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
+        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx,
+                                           ISSUE_OWNER_KEY)
     query = update.effective_message.text.strip()
     await send_typing(update, ctx)  # search can take seconds on a big library
     return await _show_search_results(
@@ -778,7 +780,8 @@ async def _show_type_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
 
 async def ticket_pick_type(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if _replaced(update, ctx):
-        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
+        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx,
+                                           ISSUE_OWNER_KEY)
     q = update.callback_query
     await q.answer()
     version, args = _split_cb(q.data)
@@ -807,7 +810,8 @@ async def ticket_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     if _replaced(update, ctx):
         # The draft is another chat's report: its title must not get this
         # text, and an Auto-fix must not delete its file.
-        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
+        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx,
+                                           ISSUE_OWNER_KEY)
     description = update.effective_message.text.strip()
     if not description:
         await update.effective_message.reply_text(
@@ -931,7 +935,8 @@ def _has_arr_for_media(ctx: ContextTypes.DEFAULT_TYPE) -> bool:
 
 async def ticket_offer_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if _replaced(update, ctx):
-        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
+        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx,
+                                           ISSUE_OWNER_KEY)
     q = update.callback_query
     version, args = _split_cb(q.data)
     # Before the first await, so a submit's marker is set before the tap is
@@ -967,7 +972,8 @@ async def ticket_offer_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
 
 async def ticket_confirm_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if _replaced(update, ctx):
-        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
+        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx,
+                                           ISSUE_OWNER_KEY)
     q = update.callback_query
     version, args = _split_cb(q.data)
     if version is None or version != _current_version(ctx):
@@ -1027,7 +1033,8 @@ async def _submit_ticket(
     is found to be a second one): answering first would let a Cancel arrive
     before the marker."""
     if not resumed and _replaced(update, ctx):
-        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
+        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx,
+                                           ISSUE_OWNER_KEY)
     # The marker holds the identity of this report's draft (owner chat plus
     # a per-draft id), not the user's flow generation, which a command in
     # another chat bumps between two taps: it blocks only this report's
@@ -1361,8 +1368,10 @@ async def ticket_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Optio
     if q:
         await q.answer("Cancelled")
     if replaced:
-        # The draft is another chat's report now: end only this chat's flow.
-        await end_flow(update, ctx, "Cancelled.", None,
+        # The draft is another chat's report now: end only this chat's flow,
+        # with this chat's own Hub (hub_origin is the newer report's).
+        await end_flow(update, ctx, "Cancelled.",
+                       claimed_hub(ctx, update, ISSUE_OWNER_KEY),
                        typed_text="Cancelled. /issue to start over.")
         return ConversationHandler.END
     await end_flow(update, ctx, "Cancelled.", _tickets_origin(ctx),

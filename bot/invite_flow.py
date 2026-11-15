@@ -240,7 +240,7 @@ async def invite_hub_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
     ctx.user_data.pop("inv_access_ask", None)
     if await _admin_gate(update, ctx, ADMIN_HUB) is None:
         return ConversationHandler.END
-    claim_draft(ctx, update, _OWNER_KEY)
+    claim_draft(ctx, update, _OWNER_KEY, hub=ADMIN_HUB)
     await edit_or_send(
         q, "Who am I inviting? Reply with their email (or Plex username).")
     return INV_EMAIL
@@ -285,7 +285,8 @@ async def invite_access_start(update: Update,
 
 async def invite_email(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if not owns_draft(ctx, update, _OWNER_KEY):
-        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
+        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx,
+                                           _OWNER_KEY)
     return await _accept_email(update, ctx,
                                update.effective_message.text.strip())
 
@@ -518,7 +519,8 @@ async def invite_send(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await q.answer()
         return ConversationHandler.END
     if not owns_draft(ctx, update, _OWNER_KEY):
-        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
+        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx,
+                                           _OWNER_KEY)
     if _stale(ctx, version):
         await q.answer(_STALE_INVITE_TOAST,
                        show_alert=True)

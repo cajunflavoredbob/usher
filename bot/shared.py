@@ -1122,6 +1122,11 @@ _DRAFT_SUFFIX: Final = "_draft"
 # after that newer draft is cleared (owns_draft). Only a new claim in a chat,
 # or an error there (drop_draft_claim), changes that chat's entry.
 _CLAIMS_SUFFIX: Final = "_claims"
+# Beside it, the Hub each chat's claim was started from ({chat_id: hub name or
+# None} under `<owner_key>_claim_hubs`), so a refusal or /cancel in a replaced
+# chat ends with that chat's own back button: hub_origin is per user and the
+# replacing flow overwrote it.
+_CLAIM_HUBS_SUFFIX: Final = "_claim_hubs"
 
 
 def drop_draft_claim(ctx, update, owner_key: str) -> None:
@@ -1132,16 +1137,26 @@ def drop_draft_claim(ctx, update, owner_key: str) -> None:
         claims.pop(_chat_id(update), None)
 
 
-def claim_draft(ctx, update, owner_key: str) -> None:
+def claim_draft(ctx, update, owner_key: str, *,
+                hub: Optional[str] = None) -> None:
     """Record this update's chat as the owner of a new flow's draft, and give
     the draft an id of its own (a per-user counter no reset clears, so an id
-    is never reused), also kept as this chat's claim."""
+    is never reused), also kept as this chat's claim, with `hub`, the Hub the
+    flow was started from (None for a typed command)."""
     chat_id = _chat_id(update)
     ctx.user_data[owner_key] = chat_id
     seq = (ctx.user_data.get(_DRAFT_SEQ_KEY) or 0) + 1
     ctx.user_data[_DRAFT_SEQ_KEY] = seq
     ctx.user_data[owner_key + _DRAFT_SUFFIX] = seq
     ctx.user_data.setdefault(owner_key + _CLAIMS_SUFFIX, {})[chat_id] = seq
+    ctx.user_data.setdefault(owner_key + _CLAIM_HUBS_SUFFIX, {})[chat_id] = hub
+
+
+def claimed_hub(ctx, update, owner_key: str) -> Optional[str]:
+    """The Hub this update's chat last claimed a draft from (claim_draft),
+    or None."""
+    return (ctx.user_data.get(owner_key + _CLAIM_HUBS_SUFFIX) or {}).get(
+        _chat_id(update))
 
 
 def draft_identity(ctx, owner_key: str) -> tuple:
@@ -1178,20 +1193,18 @@ def end_submit(ctx, marker_key: str, marker: tuple) -> None:
         ctx.user_data.pop(marker_key, None)
 
 
-async def refuse_replaced_draft(update, text: str, ctx=None) -> int:
-    """A step in the chat whose draft a newer flow in another chat took
-    over: say so, act on nothing, and end this chat's conversation. A tap
-    edits its message (dropping the buttons); text gets a reply. In a DM whose
-    flow came from a Hub the message carries that Hub's back button, as every
-    other end of a Hub flow does (hub_origin is per user, so it can be the
-    newer flow's Hub; a back button to any Hub is harmless)."""
+async def refuse_replaced_draft(update, text: str, ctx,
+                                owner_key: str) -> int:
+    """A step in the chat whose draft (kept under `owner_key`) a newer flow
+    in another chat took over: say so, act on nothing, and end this chat's
+    conversation. A tap edits its message (dropping the buttons); text gets a
+    reply. When this chat's flow came from a Hub (claimed_hub) the message
+    carries that Hub's back button, as every other end of a Hub flow does."""
+    from bot.hub import HUBS, end_markup  # hub imports shared
     markup = None
-    if ctx is not None and getattr(update.effective_chat, "type",
-                                   ChatType.PRIVATE) == ChatType.PRIVATE:
-        from bot.hub import HUBS, end_markup, hub_origin  # hub imports shared
-        hub = hub_origin(ctx)
-        if hub in HUBS:
-            markup = end_markup(hub)
+    hub = claimed_hub(ctx, update, owner_key)
+    if hub in HUBS:
+        markup = end_markup(hub)
     sent = None
     q = update.callback_query
     if q is not None:

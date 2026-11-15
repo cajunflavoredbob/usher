@@ -73,8 +73,10 @@ class _Rig:
         self.seerr.search = AsyncMock(side_effect=search)
         store = self.app.bot_data["store"]
         store.recent_fix_event = AsyncMock(return_value=None)
-        # (chat_id, text) of every message the bot sent or edited.
+        # (chat_id, text) of every message the bot sent or edited, and the
+        # keyboard each one carried.
         self.sent: list[tuple[int, str]] = []
+        self.markups: list = []
         self._ids = 1000
         rig = self
 
@@ -89,11 +91,13 @@ class _Rig:
 
         async def send_message(self_, chat_id=None, text=None, *a, **kw):
             rig.sent.append((chat_id, text))
+            rig.markups.append(kw.get("reply_markup"))
             return _msg(chat_id)
 
         async def edit_message_text(self_, text=None, chat_id=None,
                                     message_id=None, *a, **kw):
             rig.sent.append((chat_id, text))
+            rig.markups.append(kw.get("reply_markup"))
             return _msg(chat_id, message_id)
 
         async def noop(self_, *a, **kw):
@@ -111,6 +115,14 @@ class _Rig:
 
     def texts(self, chat_id: int) -> list[str]:
         return [t for c, t in self.sent if c == chat_id]
+
+    def last_buttons(self, chat_id: int) -> list[str]:
+        """The callback data of the newest message the bot sent or edited in
+        that chat."""
+        markup = [m for (c, _), m in zip(self.sent, self.markups)
+                  if c == chat_id][-1]
+        return [b.callback_data for row in getattr(markup, "inline_keyboard", ())
+                for b in row]
 
     def last_menu(self, chat_id: int) -> int:
         """The newest recorded button message in that chat."""
@@ -156,17 +168,33 @@ class _Rig:
         record_btn(self.app, USER_ID,
                    SimpleNamespace(message_id=message_id, chat_id=chat_id))
 
-    async def issue_to_description(self, chat_id: int, title: str,
-                                   issue_type: int) -> None:
-        """/issue, the title, its one result, the issue type: the flow then
-        waits for the description."""
-        await self.say(chat_id, "/issue")
+    async def start_report(self, chat_id: int, how: str = "typed") -> None:
+        """A typed /issue, or the Tickets Hub's Report a problem."""
+        if how == "typed":
+            await self.say(chat_id, "/issue")
+        else:
+            self._ids += 1
+            self.recorded(chat_id, self._ids)
+            await self.tap(chat_id, TICKETS_REPORT, self._ids)
+
+    async def issue_to_type(self, chat_id: int, title: str,
+                            how: str = "typed") -> None:
+        """The report started, the title, its one result: the flow then waits
+        for the issue type."""
+        await self.start_report(chat_id, how)
         await self.say(chat_id, title)
         version = self.user_data["search_version"]
         result = self.user_data["search_results"]["by_key"]
         (media_type, tmdb_id), = result.keys()
         await self.tap(chat_id, f"{TICKET_MEDIA}:{version}:{media_type}:{tmdb_id}",
                        self.last_menu(chat_id))
+
+    async def issue_to_description(self, chat_id: int, title: str,
+                                   issue_type: int, how: str = "typed") -> None:
+        """/issue (or Report a problem), the title, its one result, the issue
+        type: the flow then waits for the description."""
+        await self.issue_to_type(chat_id, title, how)
+        version = self.user_data["search_version"]
         await self.tap(chat_id, f"{ISSUE_TYPE}:{version}:{issue_type}",
                        self.last_menu(chat_id))
         assert self.user_data["issue_type"] == issue_type
@@ -1281,38 +1309,80 @@ async def test_an_error_after_a_comment_prompt_was_reopened_is_not_called_a_repl
 
 # --- the replaced refusal keeps a Hub flow's back button ---------------------
 
+@pytest.mark.parametrize("newer", ["typed", "hub"])
 @pytest.mark.parametrize("kind", ["tap", "text"])
 async def test_a_replaced_refusal_of_a_hub_flow_carries_the_back_button(
-        kind, monkeypatch):
-    from bot import hub as hubmod
-    from bot import ticket_flow as tf
-    from tests._handler_harness import make_update
-    monkeypatch.setitem(hubmod.HUBS, "tickets", hubmod.Hub("Tickets", None))
-    ctx = make_ctx(admin_id=USER_ID, link=make_link(telegram_id=USER_ID),
-                   user_data={**_issue_draft(), "hub_origin": "tickets"})
+        rig, kind, newer):
+    """The DM's report came from the Tickets Hub; a report started in the
+    group (typed, which clears the user's Hub mark, or from the Hub there)
+    replaces it. The DM's refusal still ends with the Tickets back button."""
     if kind == "tap":
-        upd = make_update(callback_data=f"{ISSUE_TYPE}:3:1",
-                          user_id=USER_ID, chat_id=DM_ID)
-        await tf.ticket_pick_type(upd, ctx)
-        shown = upd.callback_query.edits[-1]
+        await rig.issue_to_type(DM_ID, "movie x", "hub")
     else:
-        upd = make_update(text="the dm's words", user_id=USER_ID, chat_id=DM_ID)
-        await tf.ticket_description(upd, ctx)
-        shown = upd.effective_message.reply_calls[-1]
-    assert shown["text"].startswith(ISSUE_REPLACED)
-    buttons = [b.callback_data for row in shown["reply_markup"].inline_keyboard
-               for b in row]
-    assert buttons == ["hubo:tickets"]
+        await rig.issue_to_description(DM_ID, "movie x", 4, "hub")
+    version = rig.user_data["search_version"]
+    menu = rig.last_menu(DM_ID)
+    await rig.start_report(GROUP_ID, newer)
+    if kind == "tap":
+        await rig.tap(DM_ID, f"{ISSUE_TYPE}:{version}:4", menu)
+    else:
+        await rig.say(DM_ID, "the dm's words")
+    assert rig.texts(DM_ID)[-1].startswith(ISSUE_REPLACED)
+    assert rig.last_buttons(DM_ID) == ["hubo:tickets"]
+    rig.seerr.create_issue.assert_not_awaited()
 
 
-async def test_a_replaced_refusal_without_a_hub_origin_has_no_buttons():
-    from bot import ticket_flow as tf
-    from tests._handler_harness import make_update
-    ctx = make_ctx(admin_id=USER_ID, link=make_link(telegram_id=USER_ID),
-                   user_data=_issue_draft())
-    upd = make_update(text="the dm's words", user_id=USER_ID, chat_id=DM_ID)
-    await tf.ticket_description(upd, ctx)
-    assert upd.effective_message.reply_calls[-1].get("reply_markup") is None
+async def test_a_replaced_refusal_in_a_group_carries_its_hub_back_button(rig):
+    await rig.issue_to_description(GROUP_ID, "alien", 4, "hub")
+    await rig.start_report(DM_ID)
+    await rig.say(GROUP_ID, "no sound at all")
+    assert rig.texts(GROUP_ID)[-1].startswith(ISSUE_REPLACED)
+    assert rig.last_buttons(GROUP_ID) == ["hubo:tickets"]
+
+
+async def test_a_replaced_refusal_of_a_typed_report_has_no_buttons(rig):
+    """A typed /issue in the DM, replaced by a report from the Tickets Hub in
+    the group: the user's Hub mark is now the group's, but the DM's flow never
+    came from a Hub."""
+    await rig.issue_to_description(DM_ID, "movie x", 4)
+    await rig.start_report(GROUP_ID, "hub")
+    assert rig.user_data["hub_origin"] == "tickets"
+    await rig.say(DM_ID, "the dm's words")
+    assert rig.texts(DM_ID)[-1].startswith(ISSUE_REPLACED)
+    assert rig.last_buttons(DM_ID) == []
+
+
+@pytest.mark.parametrize("how", ["typed", "hub"])
+async def test_a_cancel_in_a_replaced_chat_ends_with_its_own_hub(rig, how):
+    await rig.issue_to_description(DM_ID, "movie x", 4, how)
+    await rig.start_report(GROUP_ID, "hub" if how == "typed" else "typed")
+    await rig.say(DM_ID, "/cancel")
+    assert rig.texts(DM_ID)[-1].startswith("Cancelled.")
+    assert rig.last_buttons(DM_ID) == (["hubo:tickets"] if how == "hub" else [])
+    assert rig.user_data["issue_chat"] == GROUP_ID
+
+
+async def test_a_replaced_request_refusal_carries_its_hub_back_button(rq_rig):
+    from bot.callback_prefixes import REQUESTS_NEW
+    rig = rq_rig
+    rig.recorded(DM_ID, 640)
+    await rig.tap(DM_ID, REQUESTS_NEW, 640)
+    await rig.say(GROUP_ID, "/request movie x")
+    await rig.say(DM_ID, "alien")
+    assert rig.texts(DM_ID)[-1].startswith(RQ_REPLACED)
+    assert rig.last_buttons(DM_ID) == ["hubo:requests"]
+
+
+async def test_a_cancel_in_a_replaced_request_chat_ends_with_its_own_hub(rq_rig):
+    from bot.callback_prefixes import REQUESTS_NEW
+    rig = rq_rig
+    rig.recorded(DM_ID, 641)
+    await rig.tap(DM_ID, REQUESTS_NEW, 641)
+    await rig.say(GROUP_ID, "/request movie x")
+    await rig.say(DM_ID, "/cancel")
+    assert rig.texts(DM_ID)[-1].startswith("Cancelled.")
+    assert rig.last_buttons(DM_ID) == ["hubo:requests"]
+    assert rig.user_data["rq_chat"] == GROUP_ID
 
 
 # --- a /cancel in a replaced chat whose own submit still files ---------------
