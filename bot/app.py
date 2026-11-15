@@ -8,7 +8,6 @@ import html
 import logging
 import os
 import signal
-import sys
 from pathlib import Path
 from aiohttp import web
 import telegram
@@ -114,7 +113,8 @@ from bot.callback_prefixes import (
 from bot.ticket_flow import _new_ticket_conversation
 from bot.admin_hub import ADMIN_HUB, cmd_admin, refuse_outside_admin_dm
 from bot.broadcast import (_BC_KEYS, _broadcast_conversation,
-                           cancel_broadcast_tasks, resume_broadcasts)
+                           broadcast_cancel_late, cancel_broadcast_tasks,
+                           resume_broadcasts)
 from bot.downloads import downloads
 from bot.nowplaying import now_playing_section, stop_ask, stop_confirmed
 from bot.auto_retry import (AUTO_RETRY_FIRST_DELAY_S, AUTO_RETRY_INTERVAL_S,
@@ -703,6 +703,10 @@ def _build_app(settings_store: SettingsStore, session_secret: bytes, user_store:
     # MUST stay the last callback handler in the default group:
     # catches taps on keyboards whose conversation has timed out or ended.
     app.add_handler(CallbackQueryHandler(unmatched_callback))
+    # A typed /cancel no conversation took: the Admin's, while a broadcast
+    # whose Send already ended its conversation is still sending. Last, so
+    # it never sees a /cancel a conversation's fallback handles.
+    app.add_handler(CommandHandler("cancel", broadcast_cancel_late))
     app.add_error_handler(on_error)
 
     app.job_queue.run_repeating(

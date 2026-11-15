@@ -121,6 +121,7 @@ from bot.shared import (
     record_btn,
     require_seerr,
     send_typing,
+    submit_in_flight,
     token_for,
     user_in_conversation,
 )
@@ -1745,7 +1746,17 @@ async def request_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.answer(_STALE_MENU_TOAST, show_alert=True)
             return None
         await q.answer("Cancelled")
+    elif submit_in_flight(ctx, "rq_submitting"):
+        # A typed /cancel while the Request is being filed: it completes, so
+        # do not say it was cancelled.
+        await update.effective_message.reply_text(
+            "Already sending. The request can't be cancelled now.")
+        return None
     await end_flow(update, ctx, "Cancelled.", hub_origin(ctx),
                    typed_text="Cancelled. /request to start over.")
+    # A running submit's marker is its own: it pops it when it finishes.
+    submitting = ctx.user_data.get("rq_submitting")
     _clear_rq_state(ctx)
+    if submitting is not None:
+        ctx.user_data["rq_submitting"] = submitting
     return ConversationHandler.END

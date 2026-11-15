@@ -42,6 +42,7 @@ _SENT_VER_KEY = "bc_sent_ver"  # the preview whose Send was taken
 _SENDING_KEY = "bc_sending"  # a Send handler is running (typed /cancel check)
 _BC_KEYS = (_TEXT_KEY,)  # the version counter is never cleared
 _RETRY_AFTER_TRIES = 3
+SENDING_NOTE = "The broadcast is sending and can't be cancelled."
 
 
 def broadcast_body(text: str) -> str:
@@ -162,9 +163,12 @@ async def broadcast_text(update: Update,
 
 async def broadcast_cancel(update: Update,
                            ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    """Cancel on the preview, or /cancel at any step: nothing more is sent
-    from here. A Cancel tap once this preview's Send was taken is refused
-    ("Already sending.") and the job carries on."""
+    """Cancel on the preview, or typed /cancel at any step before Send:
+    nothing is sent. Once this preview's Send was taken the broadcast goes
+    out: a Cancel tap is refused ("Already sending.") and a typed /cancel
+    while the Send is being taken is answered with SENDING_NOTE. A typed
+    /cancel after the Send returned (its conversation has ended) is answered
+    by broadcast_cancel_late."""
     q = update.callback_query
     if q is not None:
         if await refuse_outside_admin_dm(update, ctx):
@@ -180,8 +184,7 @@ async def broadcast_cancel(update: Update,
     elif ctx.user_data.get(_SENDING_KEY):
         # A typed /cancel while Send is being taken: the job is about to
         # send, so say that rather than "nothing was sent".
-        await update.effective_message.reply_text(
-            "Already sending. The broadcast can't be cancelled now.")
+        await update.effective_message.reply_text(SENDING_NOTE)
         return ConversationHandler.END
     _clear(ctx)
     markup = end_markup(ADMIN_HUB)
@@ -193,6 +196,19 @@ async def broadcast_cancel(update: Update,
             "Cancelled. Nothing was sent.", reply_markup=markup)
     record_btn(ctx.application, update.effective_user.id, sent)
     return ConversationHandler.END
+
+
+async def broadcast_cancel_late(update: Update,
+                                ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """A typed /cancel that no conversation took, from the Admin while a
+    broadcast is still sending (the Send tap already ended its conversation).
+    Registered after every conversation, so it never sees a /cancel one of
+    them handles. Says the job can't be cancelled; otherwise stays silent."""
+    user = update.effective_user
+    if (user is None or user.id != ctx.bot_data.get("admin_id")
+            or not ctx.bot_data.get("broadcasts_running")):
+        return
+    await update.effective_message.reply_text(SENDING_NOTE)
 
 
 async def _timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:

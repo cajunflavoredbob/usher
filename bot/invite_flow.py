@@ -78,6 +78,7 @@ from bot.shared import (
     force_end_flow_conversations,
     record_btn,
     send_typing,
+    submit_in_flight,
 )
 from bot.share_expiry import EXPIRY_DAYS, expires_at_text, expiry_date_text
 from const import INVITE_FLOW_TIMEOUT_S
@@ -650,9 +651,19 @@ async def invite_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.answer(_STALE_INVITE_TOAST, show_alert=True)
             return None
         await q.answer("Cancelled")
+    elif submit_in_flight(ctx, "inv_submitting"):
+        # A typed /cancel while the invite is being sent: the send completes,
+        # so do not say it was cancelled.
+        await update.effective_message.reply_text(
+            "Already sending. The invite can't be cancelled now.")
+        return None
     await end_flow(update, ctx, "Cancelled.", _admin_origin(ctx),
                    typed_text="Cancelled. /invite to start over.")
+    # A running send's marker is its own: it pops it when it finishes.
+    submitting = ctx.user_data.get("inv_submitting")
     _clear(ctx)
+    if submitting is not None:
+        ctx.user_data["inv_submitting"] = submitting
     return ConversationHandler.END
 
 

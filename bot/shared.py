@@ -1151,6 +1151,16 @@ def flow_step_gen(ctx) -> int:
     return cell[0] if cell is not None else _flow_gen(ctx)
 
 
+def submit_in_flight(ctx, marker_key: str) -> bool:
+    """True when this flow's own submit is running: its in-flight marker holds
+    the flow generation the step runs under. An older submit still finishing
+    (the user has since started a newer flow) carries an older generation and
+    does not count. A typed /cancel asks this to say "Already sending" instead
+    of "Cancelled." while the submit goes on to complete."""
+    marker = ctx.user_data.get(marker_key)
+    return marker is not None and marker == flow_step_gen(ctx)
+
+
 def guard_flow_steps(conv: ConversationHandler) -> None:
     """Wrap every step callback of `conv` so a step that was overtaken by a
     force-end returns END instead of the state it computed (PTB would store

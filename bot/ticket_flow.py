@@ -71,6 +71,7 @@ from bot.shared import (
     edit_or_send,
     end_action,
     flow_step_gen,
+    submit_in_flight,
     flow_step_is_stale,
     force_end_flow_conversations,
     send_typing,
@@ -1202,9 +1203,19 @@ async def ticket_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Optio
             await _refuse_stale(update, ctx)
             return None
         await q.answer("Cancelled")
+    elif submit_in_flight(ctx, "submitting_ticket"):
+        # A typed /cancel while the report is being filed: it completes, so
+        # do not say it was cancelled.
+        await update.effective_message.reply_text(
+            "Already sending. The report can't be cancelled now.")
+        return None
     await end_flow(update, ctx, "Cancelled.", _tickets_origin(ctx),
                    typed_text="Cancelled. /issue to start over.")
+    # A running submit's marker is its own: it pops it when it finishes.
+    submitting = ctx.user_data.get("submitting_ticket")
     _clear_issue_state(ctx)
+    if submitting is not None:
+        ctx.user_data["submitting_ticket"] = submitting
     return ConversationHandler.END
 
 
