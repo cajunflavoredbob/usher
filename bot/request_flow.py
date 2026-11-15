@@ -128,6 +128,7 @@ from bot.shared import (
     submit_in_flight,
     token_for,
     user_in_conversation,
+    timeout_is_live,
 )
 from const import (
     KB_BUTTONS_PER_ROW,
@@ -192,6 +193,8 @@ def _current_version(ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def _request_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    if not timeout_is_live(ctx, update, "request"):
+        return ConversationHandler.END
     if _replaced(update, ctx):
         # A newer /request in another chat owns the draft: end quietly.
         return ConversationHandler.END
@@ -1777,7 +1780,9 @@ async def request_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # do not say it was cancelled.
         await update.effective_message.reply_text(
             "Already sending. The request can't be cancelled now.")
-        return None
+        # END, not None: None would make PTB arm a fresh timeout that the
+        # submit's own END never removes, and it would fire after the send.
+        return ConversationHandler.END
     await end_flow(update, ctx, "Cancelled.", hub_origin(ctx),
                    typed_text="Cancelled. /request to start over.")
     # A running submit's marker is its own: it pops it when it finishes.

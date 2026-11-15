@@ -30,6 +30,7 @@ from bot.shared import (
     token_for,
     try_begin_action,
     user_in_conversation,
+    timeout_is_live,
 )
 from const import RESOLVE_FLOW_TIMEOUT_S
 
@@ -67,6 +68,8 @@ async def _resolve_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     solicited text, so silence would lose their later message). A
     conversation whose prompt a newer one in another chat took over ends
     quietly and leaves it."""
+    if not timeout_is_live(ctx, update, "resolve"):
+        return ConversationHandler.END
     if not _owns_comment_prompt(ctx, update):
         return ConversationHandler.END
     awaiting = ctx.user_data.get("awaiting_comment_for")

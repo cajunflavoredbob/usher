@@ -1220,6 +1220,23 @@ def flow_step_gen(ctx) -> int:
     return cell[0] if cell is not None else _flow_gen(ctx)
 
 
+def timeout_is_live(ctx, update, name: str) -> bool:
+    """For a conversation's TIMEOUT handler: True while the conversation
+    `name` (bot_data["conversations"]) still holds this update's key. PTB arms
+    a timeout for any state a step returns but END, None included, and a
+    later step's END does not remove it, so a job left behind can fire after
+    its conversation ended; it must then do nothing (no notice, no clearing a
+    newer flow's draft). True when the registry or the update is missing."""
+    conv = (ctx.application.bot_data.get("conversations") or {}).get(name)
+    if conv is None or update is None:
+        return True
+    try:
+        key = conv._get_key(update)
+    except Exception:
+        return True
+    return key in conv._conversations
+
+
 def submit_in_flight(ctx, marker_key: str) -> bool:
     """True when this flow's own submit is running: its in-flight marker holds
     the flow generation the submit started under, and this chat's flows were

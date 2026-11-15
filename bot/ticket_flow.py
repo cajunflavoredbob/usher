@@ -84,6 +84,7 @@ from bot.shared import (
     record_btn,
     try_begin_action,
     user_in_conversation,
+    timeout_is_live,
 )
 from bot.tickets import describe_fix_target, run_arr_action
 from telegram.helpers import escape_markdown
@@ -180,6 +181,8 @@ def _clear_issue_state(ctx, *, keep_resume: bool = False) -> None:
 
 
 async def _ticket_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    if not timeout_is_live(ctx, update, "issue"):
+        return ConversationHandler.END
     """Conversation_timeout handler. Clears every user_data key the new-Ticket
     flow can populate so an abandoned conversation doesn't leak state for
     the life of the process (a stale research_parent otherwise resurfaces
@@ -1246,7 +1249,9 @@ async def ticket_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Optio
         # do not say it was cancelled.
         await update.effective_message.reply_text(
             "Already sending. The report can't be cancelled now.")
-        return None
+        # END, not None: None would make PTB arm a fresh timeout that the
+        # submit's own END never removes, and it would fire after the send.
+        return ConversationHandler.END
     await end_flow(update, ctx, "Cancelled.", _tickets_origin(ctx),
                    typed_text="Cancelled. /issue to start over.")
     # A running submit's marker is its own: it pops it when it finishes.

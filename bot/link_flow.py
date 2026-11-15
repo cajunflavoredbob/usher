@@ -59,6 +59,7 @@ from bot.shared import (
     record_btn,
     run_relink_resume,
     track_flow_generation,
+    timeout_is_live,
 )
 from const import (
     LINK_FLOW_TIMEOUT_S,
@@ -74,6 +75,8 @@ logger = logging.getLogger("usher")
 async def _link_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Conversation_timeout handler. Clears link_active_loop so an abandoned
     link flow doesn't keep an orphaned poll alive in user_data."""
+    if not timeout_is_live(ctx, update, "link"):
+        return ConversationHandler.END
     ctx.user_data.pop("link_active_loop", None)
     ctx.user_data.pop(LINK_RETRY_KEY, None)
     set_hub_origin(ctx, None)

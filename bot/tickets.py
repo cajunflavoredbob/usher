@@ -84,6 +84,7 @@ from bot.shared import (
     send_typing,
     try_begin_action,
     user_in_conversation,
+    timeout_is_live,
 )
 
 logger = logging.getLogger("usher")
@@ -1185,6 +1186,8 @@ async def tk_reply_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     the user (the flow explicitly solicited text, so silence loses their
     later reply with no explanation). A conversation whose markers a newer
     start in another chat took over ends quietly and leaves them."""
+    if not timeout_is_live(ctx, update, "ticket_reply"):
+        return ConversationHandler.END
     if not _owns_reply_state(ctx, update):
         return ConversationHandler.END
     ticket_id = ctx.user_data.get("tk_reply_id")

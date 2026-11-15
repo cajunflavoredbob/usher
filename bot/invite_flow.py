@@ -82,6 +82,7 @@ from bot.shared import (
     refuse_replaced_draft,
     send_typing,
     submit_in_flight,
+    timeout_is_live,
 )
 from bot.share_expiry import EXPIRY_DAYS, expires_at_text, expiry_date_text
 from const import INVITE_FLOW_TIMEOUT_S
@@ -145,6 +146,8 @@ async def _invite_expect_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def _invite_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    if not timeout_is_live(ctx, update, "invite"):
+        return ConversationHandler.END
     hub = _admin_origin(ctx)
     for key in _INV_KEYS:
         ctx.user_data.pop(key, None)
@@ -672,7 +675,9 @@ async def invite_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # so do not say it was cancelled.
         await update.effective_message.reply_text(
             "Already sending. The invite can't be cancelled now.")
-        return None
+        # END, not None: None would make PTB arm a fresh timeout that the
+        # submit's own END never removes, and it would fire after the send.
+        return ConversationHandler.END
     await end_flow(update, ctx, "Cancelled.", _admin_origin(ctx),
                    typed_text="Cancelled. /invite to start over.")
     # A running send's marker is its own: it pops it when it finishes.

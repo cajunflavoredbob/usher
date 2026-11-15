@@ -29,7 +29,8 @@ from bot.callback_prefixes import (BROADCAST_CANCEL, BROADCAST_SEND,
                                    BROADCAST_START)
 from bot.hub import end_markup, set_hub_origin
 from bot.shared import (BC_CONFIRM, BC_TEXT, edit_or_send,
-                        force_end_flow_conversations, record_btn)
+                        force_end_flow_conversations, record_btn,
+                        timeout_is_live)
 from const import (BROADCAST_FLOW_TIMEOUT_S, BROADCAST_MAX_CHARS,
                    BROADCAST_SEND_INTERVAL_S)
 
@@ -212,6 +213,8 @@ async def broadcast_cancel_late(update: Update,
 
 
 async def _timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    if not timeout_is_live(ctx, update, "broadcast"):
+        return ConversationHandler.END
     _clear(ctx)
     try:
         if update is not None and update.effective_chat is not None:
