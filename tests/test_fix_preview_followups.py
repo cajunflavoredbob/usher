@@ -44,6 +44,7 @@ async def test_reporter_submit_keeps_the_episode_ids():
                               "episode": 1, "description": "no sound"})
     ctx.bot_data["seerr"].create_issue = AsyncMock(
         return_value=CreatedIssue(id=77, url="http://seerr.example/issues/77"))
+    ctx.bot_data["allowlist"] = {USER}
     ctx.bot_data["settings_store"].settings.daily_autofix_unlimited = True
     result = FixResult.success("ok", steps_done=["delete", "search"],
                                poll_info=POLL_INFO)

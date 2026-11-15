@@ -1085,21 +1085,31 @@ async def _submit_ticket_inner(
     # 2. If auto-fix requested, run it. Serialized per title:
     # an admin fix and a user auto-fix racing on the same media must not
     # interleave delete/blocklist/search.
+    quota: Optional[int] = None
     if autofix:
-        # Re-check the daily quota at execution time: the offer-time check
-        # can be raced by the same user confirming concurrently in two
-        # chats (conversations are per-chat), and the delete+search below
-        # is destructive.
+        # Re-check eligibility at execution time: the offer-time checks can be
+        # raced by the same user confirming concurrently in two chats
+        # (conversations are per-chat), and a settings change can remove the
+        # user from the Auto-fix allowlist while a confirm is pending. The
+        # delete+search below is destructive. The daily quota is reserved
+        # atomically just before the action runs (see log_autofix below).
         tg_id = update.effective_user.id
         if tg_id != ctx.bot_data.get("admin_id"):
             s_cfg = ctx.bot_data["settings_store"].settings
-            if not s_cfg.daily_autofix_unlimited:
+            if not (ctx.bot_data.get("autofix_allow_all")
+                    or tg_id in (ctx.bot_data.get("allowlist") or ())):
+                autofix = False
+                lines.append("⚠️ Auto-fix skipped: it's no longer turned on for you.")
+                fix_note = (_FIX_NOTE_SKIPPED
+                            + "the reporter is no longer allowed to use Auto-fix.")
+            elif not s_cfg.daily_autofix_unlimited:
+                quota = s_cfg.daily_autofix_limit
                 used = await store.count_autofix_24h(tg_id)
-                if used >= s_cfg.daily_autofix_limit:
+                if used >= quota:
                     autofix = False
                     lines.append(
                         f"⚠️ Auto-fix skipped: you've used your "
-                        f"{s_cfg.daily_autofix_limit} auto-fixes today."
+                        f"{quota} auto-fixes today."
                     )
                     fix_note = (_FIX_NOTE_SKIPPED
                                 + "the reporter's daily Auto-fix limit was reached.")
@@ -1110,13 +1120,43 @@ async def _submit_ticket_inner(
             fix_note = (_FIX_NOTE_SKIPPED
                         + "another fix for this title was already running.")
         else:
+            # The use is reserved before the action runs, in the same write as
+            # the daily count, so overlapping submits cannot all pass a count
+            # taken before any of them logged. A Fix that did not run gives it
+            # back.
+            event_id: Optional[int] = None
+            limit_hit = False
             try:
                 try:
-                    result = await run_arr_action(media, season, episode, radarr, sonarr, action="fix")
+                    event_id = await store.log_autofix(
+                        update.effective_user.id,
+                        media["type"],
+                        media["tmdb_id"],
+                        season=season,
+                        episode=episode,
+                        limit=quota,
+                    )
+                    if event_id is None:
+                        limit_hit = True
+                        result = None
+                    else:
+                        result = await run_arr_action(media, season, episode, radarr, sonarr, action="fix")
                 except Exception as exc:
                     logger.exception("auto-fix raised")
                     result = FixResult.failed(user_friendly_message(exc))
-                if result.status == "failed":
+                if limit_hit:
+                    lines.append(
+                        f"⚠️ Auto-fix skipped: you've used your "
+                        f"{quota} auto-fixes today."
+                    )
+                    fix_note = (_FIX_NOTE_SKIPPED
+                                + "the reporter's daily Auto-fix limit was reached.")
+                elif result.status == "failed":
+                    if event_id is not None:
+                        try:
+                            await store.release_autofix(event_id)
+                        except Exception:
+                            logger.exception("couldn't release the Auto-fix use")
                     lines.append(f"⚠️ Auto-fix didn't run: {result.message}")
                     fix_note = f"{_FIX_NOTE_FAILED}: {result.message}"
                 else:
@@ -1125,13 +1165,6 @@ async def _submit_ticket_inner(
                                 else f"{_FIX_NOTE_NO_SEARCH}: {result.message}")
                     # ok or partial: always log the autofix event; only enqueue the
                     # completion poller when search actually ran.
-                    event_id = await store.log_autofix(
-                        update.effective_user.id,
-                        media["type"],
-                        media["tmdb_id"],
-                        season=season,
-                        episode=episode,
-                    )
                     if result.should_poll:
                         try:
                             poll_info = result.poll_info or {}

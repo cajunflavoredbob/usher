@@ -1549,12 +1549,30 @@ class UserStore:
         season: Optional[int] = None,
         episode: Optional[int] = None,
         kind: str = KIND_AUTO_FIX,
-    ) -> int:
+        limit: Optional[int] = None,
+    ) -> Optional[int]:
         """Record a Fix event; returns its id so the caller can tie it to
         the pending fix row (add_pending_autofix event_id=). kind is
-        'auto-fix', 'redownload' or 'mark failed'."""
-        def _do() -> int:
+        'auto-fix', 'redownload' or 'mark failed'. With limit, the daily
+        count and the insert happen in one write transaction and None comes
+        back, with nothing recorded, when the user already has limit uses in
+        the last 24 hours: overlapping submits cannot all pass a count taken
+        before any of them recorded its use."""
+        def _do() -> Optional[int]:
             with self._conn() as c:
+                if limit is not None:
+                    c.execute("BEGIN IMMEDIATE")
+                    row = c.execute(
+                        """
+                        SELECT COUNT(*) FROM autofix_events
+                        WHERE telegram_id = ?
+                          AND occurred_at >= datetime('now', '-24 hours')
+                          AND refunded = 0
+                        """,
+                        (telegram_id,),
+                    ).fetchone()
+                    if row and row[0] >= limit:
+                        return None
                 return c.execute(
                     """
                     INSERT INTO autofix_events
@@ -1565,6 +1583,18 @@ class UserStore:
                 ).lastrowid
 
         return await self._run(_do)
+
+    async def release_autofix(self, event_id: int) -> None:
+        """Give back a use that log_autofix reserved for a Fix that then did
+        not run. Only a row no pending fix has claimed is removed."""
+        def _do() -> None:
+            with self._conn() as c:
+                c.execute(
+                    "DELETE FROM autofix_events WHERE id = ? AND pending_id IS NULL",
+                    (event_id,),
+                )
+
+        await self._run(_do)
 
     async def recent_fix_event(
         self,

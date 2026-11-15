@@ -738,6 +738,7 @@ async def test_reply_from_dm_ends_without_buttons():
 
 def _autofix_ctx(hub_name=None):
     ctx = _submit_ctx(hub_name)
+    ctx.bot_data["allowlist"] = {USER_ID}
     ctx.bot_data["settings_store"].settings.daily_autofix_unlimited = True
     ctx.bot_data["radarr"].auto_fix.return_value = FixResult.success(
         "Deleted file and triggered re-search.", steps_done=["delete", "search"],

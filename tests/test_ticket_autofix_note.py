@@ -22,6 +22,7 @@ def _ctx(*, used=0):
         return_value=CreatedIssue(id=77, url="http://seerr.example/issues/77"))
     s = ctx.bot_data["settings_store"].settings
     s.daily_autofix_unlimited = False
+    ctx.bot_data["allowlist"] = {USER}
     ctx.bot_data["store"].count_autofix_24h.return_value = used
     return ctx
 
