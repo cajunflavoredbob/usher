@@ -202,8 +202,7 @@ def test_error_cleanup_keeps_version_counter():
 _DRAFT = dict(media={"title": "Old"}, search_results={"version": 1},
               seasons={}, season=3, episode=5, issue_type=1,
               description="old", research_parent="Old Show",
-              rq_jump_media={"tmdb_id": 9}, _pending_autofix_id=7,
-              hub_origin="tickets")
+              rq_jump_media={"tmdb_id": 9}, hub_origin="tickets")
 
 
 def _assert_draft_gone(ctx):
@@ -263,9 +262,7 @@ async def test_force_end_clears_the_ended_issue_draft():
     for gone in ("media", "season", "episode", "research_parent",
                  "rq_jump_media", "description"):
         assert gone not in ctx.user_data, gone
-    # The Hub origin goes to the next flow; the in-flight submit pops its own
-    # Auto-fix Progress card id when it finishes.
-    assert ctx.user_data["_pending_autofix_id"] == 7
+    # The Hub origin goes to the next flow.
     assert ctx.user_data["hub_origin"] == "tickets"
     assert ctx.user_data["search_version"] == 2
 

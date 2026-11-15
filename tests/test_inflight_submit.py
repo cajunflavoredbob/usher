@@ -220,3 +220,73 @@ async def test_a_double_tap_on_the_same_issue_still_files_once(h):
     release.set()
     await a
     assert len(calls) == 1
+
+
+# --- Auto-fix Progress card of an in-flight submit ---------------------------
+
+def _autofix_runs(h, monkeypatch, row_ids):
+    """Every Auto-fix starts a fresh download, and each enqueued poller row
+    gets the next id of `row_ids`."""
+    from bot import ticket_flow
+    from fix_result import FixResult
+
+    async def fix(*a, **kw):
+        return FixResult.success("Deleted file and triggered re-search.",
+                                 steps_done=["delete", "search"],
+                                 poll_info={"movie_id": 555})
+    monkeypatch.setattr(ticket_flow, "run_arr_action", fix)
+    h.app.bot_data["settings_store"].settings.daily_autofix_unlimited = True
+    store = h.app.bot_data["store"]
+    store.add_pending_autofix = AsyncMock(side_effect=list(row_ids))
+    store.set_autofix_message = AsyncMock()
+    return store
+
+
+def _park_autofix_at_confirm(h, version: int) -> None:
+    _park_issue_at_confirm(h, version)
+    h.user_data["media"] = {**h.user_data["media"], "tmdb_id": 603}
+
+
+def _attached(store) -> list[int]:
+    return [c.args[0] for c in store.set_autofix_message.call_args_list]
+
+
+async def test_a_newer_issue_leaves_the_older_submits_autofix_card(h, monkeypatch):
+    store = _autofix_runs(h, monkeypatch, [41])
+    h.app.bot_data["seerr"].create_issue = AsyncMock(
+        return_value=CreatedIssue(id=5, url="u"))
+    release = asyncio.Event()
+    note, _ = _slow_first_call(release, None)
+    h.app.bot_data["seerr"].add_issue_comment = (
+        lambda *a, **kw: note(**kw))
+    _park_autofix_at_confirm(h, 1)
+    record_btn(h.app, USER_ID, SimpleNamespace(message_id=6000, chat_id=CHAT_ID))
+    a = asyncio.ensure_future(h.tap(f"{TICKET_AUTOFIX_CONFIRM}:1:yes", 6000))
+    await _settle()
+    store.add_pending_autofix.assert_awaited_once()  # A is at its Ticket note
+    await h.say("/issue")  # a new report clears its draft
+    release.set()
+    await a
+    assert _attached(store) == [41]
+
+
+async def test_two_submits_each_attach_their_own_autofix_card(h, monkeypatch):
+    store = _autofix_runs(h, monkeypatch, [41, 42])
+    h.app.bot_data["seerr"].create_issue = AsyncMock(
+        return_value=CreatedIssue(id=5, url="u"))
+    release = asyncio.Event()
+    note, _ = _slow_first_call(release, None)
+    h.app.bot_data["seerr"].add_issue_comment = (
+        lambda *a, **kw: note(**kw))
+    _park_autofix_at_confirm(h, 1)
+    record_btn(h.app, USER_ID, SimpleNamespace(message_id=6000, chat_id=CHAT_ID))
+    a = asyncio.ensure_future(h.tap(f"{TICKET_AUTOFIX_CONFIRM}:1:yes", 6000))
+    await _settle()
+    await h.say("/issue")
+    _park_autofix_at_confirm(h, 7)
+    record_btn(h.app, USER_ID, SimpleNamespace(message_id=6001, chat_id=CHAT_ID))
+    await h.tap(f"{TICKET_AUTOFIX_CONFIRM}:7:yes", 6001)  # B runs to the end
+    assert _attached(store) == [42]
+    release.set()
+    await a
+    assert sorted(_attached(store)) == [41, 42]

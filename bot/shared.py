@@ -1003,14 +1003,11 @@ async def reset_stale_flows(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
 # every button of an ended flow stays stale for the next one.
 ISSUE_KEYS: Final = ("media", "search_results", "seasons", "season", "episode",
                      "issue_type", "description", "research_parent",
-                     "submitting_ticket", "rq_jump_media",
-                     "_pending_autofix_id", "hub_origin")
+                     "submitting_ticket", "rq_jump_media", "hub_origin")
 # The ones force-ending the /issue conversation leaves alone: a jump that
-# ends it hands the Hub origin to the next flow, and submitting_ticket and
-# _pending_autofix_id belong to the in-flight submit (it pops both itself; the
-# second carries the Auto-fix Progress card's row id).
-_ISSUE_KEYS_KEPT_ON_FORCE_END: Final = ("hub_origin", "submitting_ticket",
-                                        "_pending_autofix_id")
+# ends it hands the Hub origin to the next flow, and submitting_ticket belongs
+# to the in-flight submit (it pops its own marker itself).
+_ISSUE_KEYS_KEPT_ON_FORCE_END: Final = ("hub_origin", "submitting_ticket")
 
 
 # Keys the /request flow owns (cleared on timeout/cancel/finish and when its

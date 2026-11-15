@@ -783,7 +783,6 @@ _COUNTERS = {"rq_search_version": 5, "inv_version": 3, "dv_version": 4,
 async def test_issue_submit_keeps_version_counters_and_relink_resume():
     ctx = _submit_ctx()
     ctx.user_data.update(_COUNTERS)
-    ctx.user_data["_pending_autofix_id"] = None
     upd = make_update(text="no sound", user_id=USER_ID)
     await _submit_ticket(upd, ctx, autofix=False)
     for key, value in _COUNTERS.items():
@@ -831,7 +830,3 @@ async def test_stale_confirm_version_does_not_match_after_issue_then_request():
     new_version = request_flow._current_version(ctx) + 1
     assert new_version != 5 and new_version > 5
 
-
-def test_on_error_cleanup_covers_pending_autofix_id():
-    from bot.app import _CONVERSATION_USER_DATA_KEYS
-    assert "_pending_autofix_id" in _CONVERSATION_USER_DATA_KEYS

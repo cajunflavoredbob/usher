@@ -1035,6 +1035,10 @@ async def _submit_ticket_inner(
 
     # What the Auto-fix did, for the note added to the Seerr Ticket once known.
     fix_note: Optional[str] = None
+    # The poller row this submit enqueued. A local, not user_data: a newer
+    # report's draft clear, or another submit running meanwhile, must not
+    # take or replace it before its Progress card is attached below.
+    pending_id: Optional[int] = None
 
     lines = [
         f"✅ Reported as ticket #{created.id}",
@@ -1113,8 +1117,7 @@ async def _submit_ticket_inner(
                                 kwargs["sonarr_series_id"] = poll_info.get("series_id")
                                 kwargs["sonarr_episode_id"] = poll_info.get("episode_id")
                                 kwargs["expected_episode_ids"] = poll_info.get("episode_ids")
-                            ctx.user_data["_pending_autofix_id"] = (
-                                await store.add_pending_autofix(**kwargs))
+                            pending_id = await store.add_pending_autofix(**kwargs)
                             prefix = "🔧" if result.ok else "⚠️"
                             lines.append(f"{prefix} Auto-fix: {result.message}")
                             lines.append(
@@ -1147,7 +1150,6 @@ async def _submit_ticket_inner(
         record_btn(ctx.application, update.effective_user.id, sent)
     # If a poller row was enqueued this submit, attach the confirmation
     # message so the poll ticks can turn it into a Progress card.
-    pending_id = ctx.user_data.pop("_pending_autofix_id", None)
     if pending_id and getattr(sent, "message_id", None):
         try:
             await store.set_autofix_message(

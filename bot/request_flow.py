@@ -1665,7 +1665,9 @@ async def _resume_submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         approved=created.status == REQUEST_STATUS_APPROVED,
         seasons=(sorted(created.seasons or seasons)
                  if media["type"] == "tv" else None))
-    _clear_rq_state(ctx)
+    # A /request started while this resume waited on Seerr owns the keys now
+    # (the re-link step it runs in, strong or weak PIN, is then stale).
+    _clear_finished_rq_state(ctx)
 
 
 RELINK_RESUME_EXECUTORS["submit_request"] = _resume_submit_request

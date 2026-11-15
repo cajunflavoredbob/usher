@@ -5,6 +5,7 @@ wired as in bot/app.py; only the Telegram network calls and the Plex/Seerr
 clients are faked. Reuses the rig of test_issue_resume_superseded."""
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -18,7 +19,7 @@ from bot.link_flow import _link_conversation
 from bot.request_flow import _request_conversation
 from bot.shared import (global_btn_gate, guard_flow_steps, prompt_plex_relink,
                         record_btn, reset_stale_flows)
-from seerr import CreatedRequest, REQUEST_STATUS_APPROVED
+from seerr import CreatedRequest, MediaResult, REQUEST_STATUS_APPROVED
 from tests._handler_harness import make_ctx, make_link
 from tests.test_issue_resume_superseded import USER_ID, _Harness
 
@@ -149,3 +150,78 @@ async def test_a_jump_over_an_open_request_keeps_the_four_k_permission(h):
     await h.tap("rqfi:movie:333", 5001)  # a /trending tap while it is open
     assert h.user_data["rq_media"]["tmdb_id"] == 333
     assert h.user_data["rq_perms"] == PERMISSION_REQUEST_4K
+
+
+# --- a resume still waiting on Seerr leaves a newer /request alone ------------
+
+async def _settle():
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+
+def _slow_create(h) -> asyncio.Event:
+    """create_request waits for the returned event on its first call."""
+    release = asyncio.Event()
+    calls = []
+
+    async def create(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            await release.wait()
+        return CreatedRequest(id=9, status=REQUEST_STATUS_APPROVED)
+    h.app.bot_data["seerr"].create_request = create
+    h.app.bot_data["seerr"].search = AsyncMock(return_value=[
+        MediaResult("movie", 444, "Movie B", "2021", None)])
+    return release
+
+
+async def _start_b_at_the_list(h) -> None:
+    await h.say("/request movie b")
+    assert h.user_data["rq_results"]
+
+
+async def test_a_resume_waiting_on_seerr_leaves_a_newer_request_alone(h):
+    release = _slow_create(h)
+    prompt = await _interrupted_request(h)
+    resume = asyncio.ensure_future(h.relink(prompt))  # strong PIN
+    await _settle()
+    await _start_b_at_the_list(h)
+    version = h.user_data["rq_search_version"]
+    release.set()
+    await resume
+    assert any("Movie A" in t and "Approved" in t for t in h.sent), h.sent
+    assert h.user_data.get("rq_results")
+    assert h.user_data["rq_search_version"] == version
+
+
+async def test_a_weak_pin_resume_waiting_on_seerr_leaves_a_newer_request_alone(h):
+    from telegram.ext import CallbackQueryHandler
+    from bot.callback_prefixes import LINK_HELP, LINK_PLATFORM
+    from bot.link_flow import cmd_link_didnt_work
+    h.app.add_handler(CallbackQueryHandler(cmd_link_didnt_work,
+                                           pattern=f"^{LINK_HELP}$"))
+    plex = h.app.bot_data["plex"]
+
+    async def request_pin(strong=True):
+        return SimpleNamespace(id=1 if strong else 2, code="ABCD",
+                               auth_url="https://plex.example/auth")
+
+    async def poll_pin(pin_id):
+        return "new-token" if pin_id == 2 else None  # only the weak PIN signs in
+    plex.request_pin = request_pin
+    plex.poll_pin = poll_pin
+    release = _slow_create(h)
+    prompt = await _interrupted_request(h)
+    await h.tap(RELINK, prompt)
+    strong = asyncio.ensure_future(h.tap(f"{LINK_PLATFORM}:desktop", prompt))
+    await _settle()
+    weak = asyncio.ensure_future(h.tap(LINK_HELP, prompt))  # "Having trouble?"
+    await _settle()
+    await _start_b_at_the_list(h)
+    version = h.user_data["rq_search_version"]
+    release.set()
+    await weak
+    await strong
+    assert any("Movie A" in t and "Approved" in t for t in h.sent), h.sent
+    assert h.user_data.get("rq_results")
+    assert h.user_data["rq_search_version"] == version
