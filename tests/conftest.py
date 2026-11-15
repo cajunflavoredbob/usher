@@ -25,18 +25,21 @@ def _clear_restart_pending():
 
 @pytest.fixture(autouse=True)
 def _clear_global_login_throttle():
-    """webui's global failed-login counter is process-wide: failures one test
-    records must not lock the next test's logins out."""
+    """webui's global failed-login counter, password-change throttle and
+    revoked-session map are process-wide: what one test records must not lock
+    the next test's logins out or sign its sessions out."""
     import sys
     mod = sys.modules.get("webui")
     if mod is not None:
         mod._global_throttle._failures.clear()
         mod._password_change_throttle._failures.clear()
+        mod._revoked_sessions.clear()
     yield
     mod = sys.modules.get("webui")
     if mod is not None:
         mod._global_throttle._failures.clear()
         mod._password_change_throttle._failures.clear()
+        mod._revoked_sessions.clear()
 
 
 @pytest.fixture

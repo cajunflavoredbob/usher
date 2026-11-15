@@ -5,11 +5,22 @@ number through the codebase.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Final
 
 # The stored timestamp format (UTC, no zone) that the Share expiry, Digest and
 # auto-retry code read and write.
 DB_TIME: Final = "%Y-%m-%d %H:%M:%S"
+
+
+def db_time(when: datetime) -> str:
+    """`when` (any zone) as a stored UTC timestamp."""
+    return when.astimezone(timezone.utc).strftime(DB_TIME)
+
+
+def parse_db_time(text: str) -> datetime:
+    """A stored UTC timestamp as an aware datetime."""
+    return datetime.strptime(text, DB_TIME).replace(tzinfo=timezone.utc)
 
 # Plex link flow
 # Strong PIN has a 30-min lifetime at plex.tv; we poll for 28 min at 3s = 560

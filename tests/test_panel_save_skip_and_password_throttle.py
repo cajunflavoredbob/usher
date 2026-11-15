@@ -1,6 +1,8 @@
-"""Pass 6 Lows in the panel: a save skipped by the restore freeze is said and
-not hot-reloaded, the PBKDF2 auto-upgrade hashes off the event loop, and the
-change-password form throttles wrong current passwords per session."""
+"""Panel behaviour while a restore freezes saves and around the password: a
+settings or password save skipped by the freeze is said and not hot-reloaded,
+the PBKDF2 auto-upgrade at login hashes off the event loop, and the
+change-password form throttles wrong current passwords per session (a right
+one clears the count)."""
 from __future__ import annotations
 
 import logging

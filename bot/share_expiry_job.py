@@ -25,7 +25,7 @@ from typing import Optional
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from const import DB_TIME as _DB_TIME
+from const import db_time as _stamp, parse_db_time as _parse
 from http_util import user_friendly_message
 from store import ShareExpiry, UserStore
 
@@ -61,14 +61,6 @@ _REMOVING_NOTE = {
 # cannot tell which.
 OUT_OF_DATE = ("This reminder is out of date: the Share was removed or its "
                "expiry was cleared. Open the Share view to check.")
-
-
-def _parse(text: str) -> datetime:
-    return datetime.strptime(text, _DB_TIME).replace(tzinfo=timezone.utc)
-
-
-def _stamp(now: datetime) -> str:
-    return now.astimezone(timezone.utc).strftime(_DB_TIME)
 
 
 def _who(row: ShareExpiry) -> str:
@@ -235,11 +227,12 @@ async def run_share_expiries(app, now: Optional[datetime] = None) -> None:
         return
     removing: dict[int, str] = app.bot_data.setdefault(REMOVING_KEY, {})
     for row in due:
-        # A removal the Admin's button already started keeps its own mark
-        # (and its reason); the job only clears a mark it set.
-        marked = row.share_id not in removing
-        if marked:
-            removing[row.share_id] = BY_DATE
+        if row.share_id in removing:
+            # A removal the Admin's button already started keeps its own mark
+            # and reports its own result: the job leaves the row to it rather
+            # than call Plex a second time for the same Share.
+            continue
+        removing[row.share_id] = BY_DATE
         try:
             if await _remove_due(app, store, plex, token, row, shares,
                                  admin_id, now):
@@ -247,8 +240,7 @@ async def run_share_expiries(app, now: Optional[datetime] = None) -> None:
                 # gone row's holder linked.
                 shares = [s for s in shares if s.id != row.share_id]
         finally:
-            if marked:
-                removing.pop(row.share_id, None)
+            removing.pop(row.share_id, None)
 
 
 async def _remove_due(app, store: UserStore, plex, token: str,
@@ -431,8 +423,14 @@ async def _remove_from_button(q, ctx, store: UserStore, row: ShareExpiry,
                 and _parse(fresh.expires_at) <= datetime.now(timezone.utc))
 
     removing: dict[int, str] = ctx.bot_data.setdefault(REMOVING_KEY, {})
-    if row.share_id in removing:
-        # A double tap, or the job is removing it: that removal reports.
+    mark = removing.get(row.share_id)
+    if mark is not None:
+        # A double tap: the removal already running reports. When it is the
+        # hourly check's, say so on this DM, which would otherwise sit still.
+        if mark == BY_DATE:
+            await edit_or_send(
+                q, f"⏳ <b>{who}</b> is being removed by the hourly check "
+                   "right now.", parse_mode="HTML")
         return
     # Check and mark with no await between, so two taps cannot both pass.
     removing[row.share_id] = BY_DATE if only_if_due else BY_ADMIN

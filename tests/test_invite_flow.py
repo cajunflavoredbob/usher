@@ -173,7 +173,7 @@ async def test_uninvite_confirms_then_removes():
     go = make_update(callback_data="uninv:71:a", user_id=ADMIN_ID)
     await uninvite_go(go, ctx)
     assert ctx.bot_data["plex"].remove_share.call_args.args[1] == 71
-    assert "removed" in go.callback_query.edits[0]["text"]
+    assert "removed" in go.callback_query.edits[-1]["text"]
 
 
 async def test_uninvite_pending_invite_wording():
@@ -194,7 +194,7 @@ async def test_uninvite_pending_invite_wording():
     assert "uninv:9:p" in _callbacks(card["reply_markup"])
     go = make_update(callback_data="uninv:9:p", user_id=ADMIN_ID)
     await uninvite_go(go, ctx)
-    assert "Invite cancelled" in go.callback_query.edits[0]["text"]
+    assert "Invite cancelled" in go.callback_query.edits[-1]["text"]
 
 
 async def test_invite_cancel_stale_version_toasts():
@@ -945,3 +945,25 @@ async def test_a_404_with_a_listing_failing_first_is_read_again(fresh_store):
     plex.remove_share.side_effect = NotFoundAPIError("gone", status_code=404)
     assert await remove_share_and_forget(fresh_store, plex, "tok", 71) is True
     assert await fresh_store.get(5) is None
+
+
+async def test_remove_shows_a_working_state_and_keep_is_refused_meanwhile():
+    ctx = _shares_ctx()
+    go = make_update(callback_data="uninv:71:p", user_id=ADMIN_ID)
+    keep = make_update(callback_data=UNINV_KEEP, user_id=ADMIN_ID)
+    seen = {}
+
+    async def during(token, share_id):
+        seen["edits"] = [e["text"] for e in go.callback_query.edits]
+        # A second Remove and a Keep tapped while Plex is called.
+        again = make_update(callback_data="uninv:71:p", user_id=ADMIN_ID)
+        await uninvite_go(again, ctx)
+        seen["again"] = again.callback_query.edits
+        await uninvite_cancel(keep, ctx)
+    ctx.bot_data["plex"].remove_share.side_effect = during
+    await uninvite_go(go, ctx)
+    assert seen["edits"] == ["⏳ Removing..."]
+    assert seen["again"] == []
+    assert keep.callback_query.edits == []
+    assert ctx.bot_data["plex"].remove_share.await_count == 1
+    assert "Invite cancelled" in go.callback_query.edits[-1]["text"]

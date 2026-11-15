@@ -1078,3 +1078,27 @@ async def test_the_job_leaves_a_mark_the_admins_removal_set(fresh_store):
     # The job finished its pass, but the mark the button set is still there.
     assert app.bot_data[share_expiry_job.REMOVING_KEY] == {
         1: share_expiry_job.BY_ADMIN}
+
+
+async def test_the_job_skips_a_due_row_a_button_already_marked(fresh_store):
+    app, plex = await _setup(fresh_store, [_share(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2020-01-01 00:00:00")
+    app.bot_data[share_expiry_job.REMOVING_KEY] = {1: share_expiry_job.BY_ADMIN}
+    await run_share_expiries(app, NOW)
+    plex.remove_share.assert_not_awaited()
+    assert (await fresh_store.get_share_expiry(1)) is not None
+
+
+async def test_a_confirmed_remove_during_the_jobs_removal_says_so(fresh_store):
+    app, plex = await _setup(fresh_store, [_share(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       _at(timedelta(days=2)))
+    ctx, upd = _tap(app, f"{SHARE_REMOVE_YES}:1")
+    ctx.bot_data[share_expiry_job.REMOVING_KEY] = {1: share_expiry_job.BY_DATE}
+    await share_expiry_action(upd, ctx)
+    plex.remove_share.assert_not_awaited()
+    assert "hourly check" in upd.callback_query.edits[-1]["text"]
+    # The job's mark is not the tap's to clear.
+    assert ctx.bot_data[share_expiry_job.REMOVING_KEY] == {
+        1: share_expiry_job.BY_DATE}

@@ -21,7 +21,7 @@ from typing import Optional
 from telegram.ext import ContextTypes
 
 from bot.shared import format_media_title_line
-from const import DB_TIME as _DB_TIME
+from const import db_time as _db_time, parse_db_time as _parse_db_time
 from http_util import APIError, NotFoundAPIError
 from seerr import REQUEST_STATUS_FAILED
 from store import FailedRetry
@@ -47,14 +47,6 @@ def max_tries(cfg) -> int:
     except (TypeError, ValueError):
         return 3
     return min(max(n, 1), MAX_TRIES_LIMIT)
-
-
-def _db_time(when: datetime) -> str:
-    return when.astimezone(timezone.utc).strftime(_DB_TIME)
-
-
-def _parse_db_time(text: str) -> datetime:
-    return datetime.strptime(text, _DB_TIME).replace(tzinfo=timezone.utc)
 
 
 def wait_words(seconds: float) -> str:
