@@ -539,7 +539,7 @@ async def _spray_global(client, monkeypatch, limit=5):
                         LoginThrottle(max_failures=limit))
     for i in range(limit):
         resp = await _post_login_from(
-            client, f"2001:db8:{i + 1:x}::1", "u" * 500, "x")
+            client, f"2001:db8:{i + 1:x}::1", "nobody", "x")
         assert resp.status == 401
 
 
@@ -599,6 +599,64 @@ async def test_a_blocked_attempt_is_not_counted_again(
     await _spray_global(proxied_client, monkeypatch)
     for _ in range(3):
         await _post_login_from(
-            proxied_client, "2001:db8:ff::1", "u" * 500, "x")
+            proxied_client, "2001:db8:ff::1", "nobody", "x")
     (bucket,) = webui._global_throttle._failures.values()
     assert len(bucket) == 5
+
+
+async def test_bad_input_does_not_count_toward_the_global_cap(
+        proxied_client, monkeypatch):
+    monkeypatch.setattr(webui, "_global_throttle", LoginThrottle(max_failures=2))
+    for i in range(4):
+        resp = await _post_login_from(
+            proxied_client, f"2001:db8:{i + 1:x}::1", "u" * 500, "x")
+        assert resp.status == 401
+    assert webui._global_throttle._failures == {}
+    # A new browser still gets through, and a real wrong password still counts.
+    resp = await _post_login_from(
+        proxied_client, "2001:db8:ff::1", "admin", "wrong")
+    assert resp.status == 401
+    (bucket,) = webui._global_throttle._failures.values()
+    assert len(bucket) == 1
+
+
+async def test_bad_input_still_counts_on_the_address_gate(
+        proxied_client, monkeypatch):
+    for _ in range(THROTTLE_IP_MAX_FAILURES):
+        resp = await _post_login_from(
+            proxied_client, "2001:db8:1::1", "u" * 500, "x")
+        assert resp.status == 401
+    resp = await _post_login_from(
+        proxied_client, "2001:db8:1::2", "admin", "right-password")
+    assert resp.status == 429
+
+
+async def test_password_change_reissues_the_known_device_cookie(client):
+    session0 = webui._make_session_cookie(SECRET, "admin", 0)
+    bound = webui.generate_csrf_token(SECRET, session0.rsplit(".", 1)[-1])
+    device0 = webui._make_device_cookie(SECRET, "admin", 0, "dev-1")
+    resp = await client.post(
+        "/admin/password",
+        data={"csrf_token": bound, "current": "right-password",
+              "new": "brand-new-password-1", "confirm": "brand-new-password-1"},
+        cookies={webui.SESSION_COOKIE: session0, "usher_csrf": bound,
+                 webui.DEVICE_COOKIE: device0},
+        allow_redirects=False)
+    assert resp.status == 200
+    new = resp.cookies[webui.DEVICE_COOKIE].value
+    assert webui._verify_device_cookie(SECRET, new, "admin", 1) == "dev-1"
+    assert webui._verify_device_cookie(SECRET, new, "admin", 0) is None
+
+
+async def test_password_change_without_a_device_cookie_mints_one(client):
+    session0 = webui._make_session_cookie(SECRET, "admin", 0)
+    bound = webui.generate_csrf_token(SECRET, session0.rsplit(".", 1)[-1])
+    resp = await client.post(
+        "/admin/password",
+        data={"csrf_token": bound, "current": "right-password",
+              "new": "brand-new-password-1", "confirm": "brand-new-password-1"},
+        cookies={webui.SESSION_COOKIE: session0, "usher_csrf": bound},
+        allow_redirects=False)
+    assert resp.status == 200
+    new = resp.cookies[webui.DEVICE_COOKIE].value
+    assert webui._verify_device_cookie(SECRET, new, "admin", 1)

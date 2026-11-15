@@ -263,11 +263,14 @@ segment, and Usher logs a startup warning saying so. Recommended setups:
   keeps working during such a flood, with its own limit of 5 failures per
   5 minutes. A new browser can be locked out until the flood stops, so set
   `TRUSTED_PROXIES`.
-  Across all addresses together, more than 100 failed logins in 5 minutes from
+  Across all addresses together, 100 or more failed logins in 5 minutes from
   browsers without that cookie block every such login until they age out, so
   an attacker spreading guesses over many IPv6 addresses cannot guess freely.
-  A browser that signed in before keeps working during such a flood; a new
-  browser waits.
+  Only a login that checked the password counts toward this; input refused
+  as malformed does not. A browser that signed in before keeps working during
+  such a flood; a new browser waits, so an attacker making 100 real guesses
+  per 5 minutes can keep new browsers out. Set `TRUSTED_PROXIES` so the
+  per-address limits see real clients.
   Usher logs a warning once when it sees `X-Forwarded-For` from an address
   that is not in `TRUSTED_PROXIES`; set the variable to the proxy's IP or
   CIDR to fix it.

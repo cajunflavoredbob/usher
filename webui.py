@@ -1418,7 +1418,11 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
             if throttle_key is not None:
                 _throttle.record_failure(throttle_key)
             _ip_throttle.record_failure(tip)
-            _global_throttle.record_failure(_GLOBAL_KEY)
+            # Only an attempt that ran PBKDF2 counts toward the global cap:
+            # bad input costs the server nothing, so a few addresses sending
+            # it could otherwise hold every new browser at 429.
+            if not bad_input:
+                _global_throttle.record_failure(_GLOBAL_KEY)
         audit("login_fail", user=username or "-", ip=ip)
         body = _page("Login", _flash(error="Invalid credentials.") +
                      '<p><a href="/admin/login">Try again</a></p>')
@@ -1867,6 +1871,10 @@ async def change_password(request: web.Request) -> web.Response:
         if restart_pending():
             return web.Response(
                 text="Usher is restarting; try again in a moment.", status=503)
+        # Read before the bump: the cookie is bound to the old version.
+        old_device_id = _verify_device_cookie(
+            request.app["session_secret"], request.cookies.get(DEVICE_COOKIE),
+            admin.username, admin.password_version)
         admin.password_hash = new_hash
         # Sign out every other session: a stolen cookie must die when the
         # admin rotates the password in response to it. The current session
@@ -1894,6 +1902,14 @@ async def change_password(request: web.Request) -> web.Response:
     )
     _set_session_cookie(resp, cookie, secure=secure)
     attach_csrf_cookie(resp, new_csrf, secure=secure)
+    # The password_version bump also retires this browser's known-device
+    # cookie; re-issue it at the new version so the browser that made the
+    # change keeps its exemption. A browser without a valid cookie gets a
+    # fresh device id, as at login.
+    _set_device_cookie(resp, _make_device_cookie(
+        request.app["session_secret"], admin.username,
+        admin.password_version, old_device_id),
+        secure=secure)
     return resp
 
 
