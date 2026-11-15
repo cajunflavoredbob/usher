@@ -502,6 +502,13 @@ async def tk_close_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     record_btn(ctx.application, update.effective_user.id, q.message)
 
 
+# The Fix menu's line when the Ticket could not be read, so its kind (and so
+# which arr to name) is not known.
+PREVIEW_UNKNOWN_FILE = "Couldn't check which file this is."
+RADARR_NOT_CONFIGURED = "Radarr: not configured."
+SONARR_NOT_CONFIGURED = "Sonarr: not configured."
+
+
 async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Admin tapped [Fix]. Opens the [Redownload] [Mark Failed] [Back] submenu."""
     q = update.callback_query
@@ -524,8 +531,7 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     refusal = ""
     seerr = ctx.bot_data.get("seerr")
     sonarr = ctx.bot_data.get("sonarr")
-    # Without Sonarr only a movie can be fixed, and its line needs Seerr only.
-    unknown = PREVIEW_UNKNOWN if sonarr is not None else PREVIEW_UNKNOWN_MOVIE
+    radarr = ctx.bot_data.get("radarr")
     if seerr is not None:
         # Edit BEFORE the network calls: the preview reads Seerr and Sonarr,
         # and the Fix choices stay off until the menu is drawn below.
@@ -536,8 +542,15 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             if fix_ctx is not None:
                 target = await describe_fix_target(
                     fix_ctx.media, fix_ctx.season, fix_ctx.episode, sonarr)
+                # The line is the Ticket's own kind: a missing arr for that
+                # kind says so, and the other kind's arr is never mentioned.
+                if fix_ctx.media.get("type") == "movie" and radarr is None:
+                    target = RADARR_NOT_CONFIGURED
+                elif (fix_ctx.media.get("type") == "tv" and sonarr is None
+                        and fix_ctx.episode):
+                    target = SONARR_NOT_CONFIGURED
             elif err is not None and err.startswith(_FETCH_FAILED):
-                target = unknown
+                target = PREVIEW_UNKNOWN_FILE
             elif err is not None:
                 # A whole-season or resolved Ticket: show the refusal the
                 # Fix itself would give, with no Fix choices.
@@ -545,7 +558,7 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception:
             logger.warning("couldn't preview the Fix target for #%d",
                            ticket_id, exc_info=True)
-            target = unknown
+            target = PREVIEW_UNKNOWN_FILE
     if refusal:
         await q.edit_message_text(
             f"🔧 Fix #{ticket_id}\n{refusal}",

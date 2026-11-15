@@ -122,7 +122,10 @@ async def test_fix_menu_says_couldnt_check_when_the_ticket_read_fails():
     ctx.bot_data["seerr"].get_issue.side_effect = RuntimeError("down")
     upd = make_update(callback_data="tkf:5", user_id=ADMIN)
     await tk_fix(upd, ctx)
-    assert "couldn't check which episode" in upd.callback_query.edits[-1]["text"]
+    text = upd.callback_query.edits[-1]["text"]
+    # The kind is unknown, so neither arr is named.
+    assert "Couldn't check which file this is." in text
+    assert "Sonarr" not in text and "Radarr" not in text
 
 
 async def test_fix_menu_says_couldnt_check_when_the_tvdb_id_is_missing():
@@ -174,15 +177,44 @@ async def test_fix_menu_for_a_movie_names_it_when_sonarr_is_not_configured():
     assert "how?" in text
 
 
-async def test_fix_menu_without_sonarr_says_the_movie_could_not_be_checked_when_the_ticket_read_fails():
+async def test_fix_menu_without_sonarr_names_no_arr_when_the_ticket_read_fails():
     ctx = _admin_ctx(media_type="movie", problem_season=None, problem_episode=None)
     ctx.bot_data["sonarr"] = None
     ctx.bot_data["seerr"].get_issue.side_effect = RuntimeError("down")
     upd = make_update(callback_data="tkf:5", user_id=ADMIN)
     await tk_fix(upd, ctx)
     text = upd.callback_query.edits[-1]["text"]
-    assert "Radarr: couldn't check which movie this is." in text
-    assert "episode" not in text
+    assert "Couldn't check which file this is." in text
+    assert "episode" not in text and "Radarr" not in text
+
+
+async def test_fix_menu_for_a_movie_never_shows_a_sonarr_line():
+    ctx = _admin_ctx(media_type="movie", problem_season=None, problem_episode=None)
+    ctx.bot_data["seerr"].get_media_title.return_value = ("Alien", "1979")
+    ctx.bot_data["sonarr"].describe_episode = AsyncMock(return_value="Sonarr: x")
+    upd = make_update(callback_data="tkf:5", user_id=ADMIN)
+    await tk_fix(upd, ctx)
+    assert "Sonarr" not in upd.callback_query.edits[-1]["text"]
+    ctx.bot_data["sonarr"].describe_episode.assert_not_called()
+
+
+async def test_fix_menu_for_a_movie_says_radarr_is_not_configured():
+    ctx = _admin_ctx(media_type="movie", problem_season=None, problem_episode=None)
+    ctx.bot_data["radarr"] = None
+    ctx.bot_data["seerr"].get_media_title.return_value = ("Alien", "1979")
+    upd = make_update(callback_data="tkf:5", user_id=ADMIN)
+    await tk_fix(upd, ctx)
+    text = upd.callback_query.edits[-1]["text"]
+    assert "Radarr: not configured." in text and "Sonarr" not in text
+
+
+async def test_fix_menu_for_an_episode_says_sonarr_is_not_configured():
+    ctx = _admin_ctx()
+    ctx.bot_data["sonarr"] = None
+    upd = make_update(callback_data="tkf:5", user_id=ADMIN)
+    await tk_fix(upd, ctx)
+    text = upd.callback_query.edits[-1]["text"]
+    assert "Sonarr: not configured." in text and "Radarr" not in text
 
 
 async def test_fix_menu_for_a_whole_season_ticket_shows_the_refusal_only():

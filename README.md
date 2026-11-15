@@ -142,7 +142,9 @@ bot:  Try to auto-fix? This will delete the file and trigger a new search.
       (Auto-fixes remaining today: 3)
       [✅ Try auto-fix] [📨 Report to Admin]
 user: (taps Try auto-fix)
-bot:  ⚠️ This will delete the current file from disk and trigger a new download. Confirm?
+bot:  Radarr: Solo: A Star Wars Story (2018)
+
+      ⚠️ This will delete the current file from disk and trigger a new download. Confirm?
       [⚠️ Yes, delete & re-search] [No, report to Admin]
 user: (taps Yes)
 bot:  ✅ Reported as ticket #14
