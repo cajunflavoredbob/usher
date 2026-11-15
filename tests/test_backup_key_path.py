@@ -89,3 +89,52 @@ async def test_a_save_after_a_restore_does_not_write_over_it(env):
     # old in-memory settings: it must not rename over the restored file.
     await store.save_async()
     assert (data_dir / "settings.json").read_text() == restored
+
+
+async def test_a_restore_failing_after_settings_was_written_restarts(env, monkeypatch):
+    client, data_dir, key_path = env
+    exits = []
+    monkeypatch.setattr(webui, "schedule_clean_exit",
+                        lambda *a, **k: exits.append(a))
+    real = webui.atomic_write_bytes
+
+    def fail_on_key(path, data, *a, **k):
+        if path == key_path:
+            raise OSError("disk full")
+        return real(path, data, *a, **k)
+
+    monkeypatch.setattr(webui, "atomic_write_bytes", fail_on_key)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("settings.json", (data_dir / "settings.json").read_bytes())
+        zf.writestr("encryption.key", Fernet.generate_key())
+    form = {"csrf_token": CSRF, "passphrase": "", "backup": buf.getvalue()}
+    resp = await client.post("/admin/restore", data=form, cookies=_cookies())
+    assert resp.status == 500
+    text = await resp.text()
+    assert "partway" in text and "restarting" in text
+    assert exits == [(2.0,)]
+
+
+async def test_a_restore_failing_before_any_write_does_not_restart_or_freeze(env, monkeypatch):
+    client, data_dir, key_path = env
+    store = client.server.app["settings_store"]
+    exits = []
+    monkeypatch.setattr(webui, "schedule_clean_exit",
+                        lambda *a, **k: exits.append(a))
+
+    def boom(data):
+        raise OSError("read-only volume")
+
+    monkeypatch.setattr(store, "write_restored", boom)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("settings.json", (data_dir / "settings.json").read_bytes())
+    form = {"csrf_token": CSRF, "passphrase": "", "backup": buf.getvalue()}
+    resp = await client.post("/admin/restore", data=form, cookies=_cookies())
+    assert resp.status == 500
+    assert "partway" not in await resp.text()
+    assert exits == []
+    store.settings.admin.username = "after"
+    await store.save_async()
+    assert '"after"' in (data_dir / "settings.json").read_text()

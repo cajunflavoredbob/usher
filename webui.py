@@ -2026,7 +2026,7 @@ async def restore_upload(request: web.Request) -> web.Response:
 
 async def _restore_upload_locked(request: web.Request) -> web.Response:
     data_dir: Path = request.app["data_dir"]
-    settings_path: Path = request.app["settings_path"]
+    settings_path: Path = request.app["settings_store"].path
     db_path: Path = Path(request.app["db_path"])
     enc_key_path: Path = request.app["enc_key_path"]
 
@@ -2153,6 +2153,7 @@ async def _restore_upload_locked(request: web.Request) -> web.Response:
     user_store = request.app.get("user_store")
     maintenance_lock = getattr(user_store, "maintenance_lock", None)
     lock_held = False
+    wrote_any = False
     try:
         if maintenance_lock is not None:
             await maintenance_lock.acquire()
@@ -2172,8 +2173,10 @@ async def _restore_upload_locked(request: web.Request) -> web.Response:
                 await asyncio.to_thread(
                     request.app["settings_store"].write_restored,
                     zf.read("settings.json"))
+                wrote_any = True
             if "mappings.sqlite" in names:
                 atomic_write_bytes(db_path, zf.read("mappings.sqlite"))
+                wrote_any = True
                 # Drop stale WAL/SHM sidecars: SQLite would otherwise pair
                 # the restored DB with the OLD database's write-ahead log
                 # and replay unrelated frames into it.
@@ -2182,6 +2185,23 @@ async def _restore_upload_locked(request: web.Request) -> web.Response:
             if "encryption.key" in names:
                 atomic_write_bytes(enc_key_path, zf.read("encryption.key"))
     except Exception as exc:
+        if wrote_any:
+            # write_restored froze later settings saves, and a swapped DB or
+            # key no longer matches what the running bot holds: only a
+            # restart gets back to a consistent state.
+            audit("restore_partial", user=_current_user(request) or "-",
+                  ip=client_ip(request), backup_dir=str(backup_dir))
+            logger.error("Restore failed after writing files; restarting in 2s "
+                         "(snapshot at %s): %s", backup_dir, exc)
+            schedule_clean_exit(2.0)
+            return _restore_error(
+                request,
+                f"Restore failed partway: {exc}. Some files were already "
+                f"replaced, so the app is restarting. Check the restored "
+                f"settings after it is back"
+                + (f"; the earlier files are in {backup_dir}." if snapshot_ok
+                   else "."),
+                status=500)
         return _restore_error(request, f"Restore failed: {exc}", status=500)
     finally:
         # Release only if THIS handler acquired it: lock.locked() is true when
