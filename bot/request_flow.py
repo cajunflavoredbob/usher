@@ -147,6 +147,17 @@ _RQ_KEYS = RQ_KEYS
 _CONFIRM_KEY = "rq_confirm_for"
 _TARGET_CLEARED_TEXT = ("The person you picked was cleared. Start Request for "
                         "someone again.")
+_TARGET_CLEARED_TYPED = ("The person you picked was cleared. /request, then "
+                         "Request for someone again.")
+
+# Request for someone is DM-only (admin_view), so its pick (rq_for) belongs to
+# the private chat: only an entry point in a private chat pops it, and only a
+# flow in a private chat reads it. _PICKED_KEY marks that the DM flow was
+# started as Request for someone. It is NOT one of RQ_KEYS: ending a /request
+# in another chat clears RQ_KEYS (rq_for among them, user_data is per user)
+# while the DM flow runs on, and the marker is how the DM flow then knows its
+# person is gone. Only the private-chat entry points pop it.
+_PICKED_KEY = "rq_for_picked"
 
 # Availability annotations for the search list. UNKNOWN/DELETED get none:
 # they're plainly requestable.
@@ -287,10 +298,22 @@ async def _gate_entry(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *,
     return True
 
 
+def _in_private_chat(update: Update) -> bool:
+    return getattr(update.effective_chat, "type", None) == "private"
+
+
+def _forget_behalf_pick(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """A new request started in the private chat forgets a Request for
+    someone pick. One started in another chat leaves the DM's pick alone."""
+    if _in_private_chat(update):
+        ctx.user_data.pop("rq_for", None)
+        ctx.user_data.pop(_PICKED_KEY, None)
+
+
 async def request_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     # A typed /request is never a Hub flow, even if a Hub left its mark behind.
     set_hub_origin(ctx, None)
-    ctx.user_data.pop("rq_for", None)
+    _forget_behalf_pick(update, ctx)
     # Bare `/request` opens the Requests Hub; it needs no gate (each button
     # runs the same checks as its typed command).
     query = " ".join(ctx.args or ()).strip()
@@ -317,7 +340,7 @@ async def request_hub_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     await q.answer()
     force_end_flow_conversations(ctx, update)
     set_hub_origin(ctx, REQUESTS_HUB)
-    ctx.user_data.pop("rq_for", None)
+    _forget_behalf_pick(update, ctx)
     await send_typing(update, ctx)
     if not await _gate_entry(update, ctx, hub=REQUESTS_HUB):
         return ConversationHandler.END
@@ -368,7 +391,7 @@ async def request_hub_behalf(update: Update,
     await q.answer()
     force_end_flow_conversations(ctx, update)
     set_hub_origin(ctx, REQUESTS_HUB)
-    ctx.user_data.pop("rq_for", None)
+    _forget_behalf_pick(update, ctx)
     await send_typing(update, ctx)
     if not await _gate_entry(update, ctx, hub=REQUESTS_HUB):
         return ConversationHandler.END
@@ -423,6 +446,7 @@ async def request_behalf_pick(update: Update,
     name = picked[2] or f"User {seerr_id}"
     ctx.user_data["rq_for"] = {"seerr_id": seerr_id, "name": name,
                                "telegram_id": picked[0]}
+    ctx.user_data[_PICKED_KEY] = True
     sent = await edit_or_send(
         q, f"Requesting for <b>{html.escape(name)}</b>. What movie or show "
            "do you want? (Reply with the title.)", parse_mode="HTML")
@@ -430,10 +454,31 @@ async def request_behalf_pick(update: Update,
     return RQ_TITLE
 
 
-def _behalf_target(ctx: ContextTypes.DEFAULT_TYPE) -> Optional[dict]:
+def _behalf_target(update: Update,
+                   ctx: ContextTypes.DEFAULT_TYPE) -> Optional[dict]:
     """The Linked user the Admin is requesting for, or None. Only the Admin
-    can have one: nobody else can reach the picker."""
+    can have one: nobody else can reach the picker. A flow outside the
+    private chat never has one: the pick belongs to the DM flow."""
+    if not _in_private_chat(update):
+        return None
     return ctx.user_data.get("rq_for")
+
+
+def _behalf_pick_lost(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
+    """True when the private chat's flow was started as Request for someone
+    and its person has since been cleared (by a /request flow ending in
+    another chat). Such a flow must not go on as the Admin's own Request."""
+    return (_in_private_chat(update) and bool(ctx.user_data.get(_PICKED_KEY))
+            and ctx.user_data.get("rq_for") is None)
+
+
+async def _refuse_lost_pick(update: Update,
+                            ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    # The marker stays: the next request in the private chat starts at an
+    # entry point, which pops it.
+    await end_flow(update, ctx, _TARGET_CLEARED_TEXT, hub_origin(ctx),
+                   REQUESTS_BEHALF, typed_text=_TARGET_CLEARED_TYPED)
+    return ConversationHandler.END
 
 
 def _coverage_verdict(ctx: ContextTypes.DEFAULT_TYPE, media_type: str,
@@ -569,8 +614,9 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
                 return None
             return ConversationHandler.END
     # The jump files for the tapper. Only a tap that goes ahead forgets a
-    # Request for someone pick: a refused one leaves the open flow's pick.
-    ctx.user_data.pop("rq_for", None)
+    # Request for someone pick: a refused one leaves the open flow's pick, and
+    # a tap in another chat leaves the DM's.
+    _forget_behalf_pick(update, ctx)
     set_hub_origin(ctx, hub)
     # Another flow may still be parked in a pick state, an open /request
     # included; end everything so no stale flow can fire a timeout notice
@@ -615,6 +661,8 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def request_title(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    if _behalf_pick_lost(update, ctx):
+        return await _refuse_lost_pick(update, ctx)
     query = update.effective_message.text.strip()
     await send_typing(update, ctx)
     return await _run_search(
@@ -1075,15 +1123,17 @@ def _summarize_seasons(numbers: list[int]) -> str:
 
 
 async def _quota_line(ctx: ContextTypes.DEFAULT_TYPE, tg_id: int,
-                      media_type: str, *, for_picked: bool = True) -> str:
+                      media_type: str, *, target: Optional[dict] = None) -> str:
     """One line of quota context for the confirm screen, or "" when the
     user's quota is unlimited, unknown, or the lookup fails (the submit
     itself is the authority; this is a courtesy preview). An exhausted
-    quota says so plainly instead of offering doomed arithmetic."""
+    quota says so plainly instead of offering doomed arithmetic. `target` is
+    the Request for someone person the confirm names, read only for the
+    Admin."""
     try:
         is_admin, token, _ = await token_for(ctx, tg_id)
-        target = (_behalf_target(ctx) if is_admin and for_picked
-                  else None)
+        if not is_admin:
+            target = None
         if target is not None:
             # The Admin's own key reads the picked user's quota.
             seerr_id, token, whose = target["seerr_id"], None, "Their"
@@ -1112,10 +1162,12 @@ async def _quota_line(ctx: ContextTypes.DEFAULT_TYPE, tg_id: int,
 
 async def _show_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
+    if _behalf_pick_lost(update, ctx):
+        return await _refuse_lost_pick(update, ctx)
     # The person this confirm names, taken before any await and kept under a
     # key of its own: the submit files with this snapshot only, so a later
     # entry point clearing rq_for cannot turn it into the Admin's own Request.
-    target = _behalf_target(ctx)
+    target = _behalf_target(update, ctx)
     ctx.user_data[_CONFIRM_KEY] = {
         "gen": flow_step_gen(ctx), "version": _current_version(ctx),
         "target": dict(target) if target is not None else None}
@@ -1124,7 +1176,8 @@ async def _show_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     label = _media_label(media)
     if media["type"] == "tv":
         label += f" - {_summarize_seasons(sorted(ctx.user_data.get('rq_selected') or ()))}"
-    quota_note = await _quota_line(ctx, update.effective_user.id, media["type"])
+    quota_note = await _quota_line(ctx, update.effective_user.id, media["type"],
+                                   target=target)
     perms = ctx.user_data.get("rq_perms", 0)
     offer_4k = can_request_4k(perms, media["type"])
     force_4k = bool(media.get("force_4k"))
@@ -1239,10 +1292,7 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             # command or a Hub button, maybe in another chat): the pick is no
             # longer this flow's to file.
             await end_flow(update, ctx, _TARGET_CLEARED_TEXT, hub,
-                           REQUESTS_BEHALF,
-                           typed_text=("The person you picked was cleared. "
-                                       "/request, then Request for someone "
-                                       "again."))
+                           REQUESTS_BEHALF, typed_text=_TARGET_CLEARED_TYPED)
             return ConversationHandler.END
 
     seasons = None
@@ -1485,7 +1535,7 @@ async def remaining_seasons_ask(update: Update,
         title, year = f"TMDb {tmdb_id}", ""
     label = _media_label({"title": title, "year": year})
     # Outside the conversation: a stale pick must not change whose quota shows.
-    quota_note = await _quota_line(ctx, user_id, "tv", for_picked=False)
+    quota_note = await _quota_line(ctx, user_id, "tv")
     text = (f"Request the remaining seasons of <b>{html.escape(label)}</b>?\n"
             f"Seasons: {_summarize_seasons(left)}" + html.escape(quota_note))
     sent = await q.message.reply_text(
