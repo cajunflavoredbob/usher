@@ -1011,10 +1011,29 @@ async def test_a_job_alert_retry_refuses_extend_while_it_removes(
         await share_expiry_action(ext_upd, ctx)
     plex.remove_share.side_effect = extend_mid_removal
     await share_expiry_action(upd, ctx)
-    assert ext_upd.callback_query.edits[-1]["text"] == (
-        "This Share is being removed now because its date passed.")
+    text = ext_upd.callback_query.edits[-1]["text"]
+    # The Retry has its own reason: it is not the hourly check's removal.
+    assert text == ("This Share is being removed now because you chose Retry "
+                    "after its date passed.")
     assert await fresh_store.get_share_expiry(1) is None
     assert not ctx.bot_data.get(share_expiry_job.REMOVING_KEY)
+
+
+async def test_a_second_retry_tap_says_a_retry_is_running_not_the_hourly_check(
+        fresh_store):
+    app, plex = await _setup(fresh_store, [_share(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2020-01-01 00:00:00")
+    ctx, upd = _tap(app, f"{SHARE_RETRY}:1")
+    second = make_update(callback_data=f"{SHARE_RETRY}:1", user_id=ADMIN_ID)
+
+    async def retap(token, share_id):
+        await share_expiry_action(second, ctx)
+    plex.remove_share.side_effect = retap
+    await share_expiry_action(upd, ctx)
+    text = second.callback_query.edits[-1]["text"]
+    assert "by a Retry" in text and "hourly check" not in text
+    assert plex.remove_share.await_count == 1
 
 
 # --- the removal mark carries its reason; the job honours the Admin's mark ---

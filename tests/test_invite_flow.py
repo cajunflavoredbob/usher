@@ -967,3 +967,42 @@ async def test_remove_shows_a_working_state_and_keep_is_refused_meanwhile():
     assert keep.callback_query.edits == []
     assert ctx.bot_data["plex"].remove_share.await_count == 1
     assert "Invite cancelled" in go.callback_query.edits[-1]["text"]
+
+
+async def test_a_remove_and_a_keep_on_another_card_are_answered_meanwhile():
+    ctx = _shares_ctx()
+    go = make_update(callback_data="uninv:71:p", user_id=ADMIN_ID, message_id=101)
+    seen = {}
+
+    async def during(token, share_id):
+        if share_id != 71:
+            return None
+        other = make_update(callback_data="uninv:72:a", user_id=ADMIN_ID,
+                            message_id=102)
+        await uninvite_go(other, ctx)
+        seen["other"] = other.callback_query.edits
+        keep = make_update(callback_data=UNINV_KEEP, user_id=ADMIN_ID,
+                           message_id=103)
+        await uninvite_cancel(keep, ctx)
+        seen["keep"] = keep.callback_query.edits
+    ctx.bot_data["plex"].remove_share.side_effect = during
+    await uninvite_go(go, ctx)
+    assert "Access removed" in seen["other"][-1]["text"]
+    assert seen["keep"][0]["text"] == "Cancelled, nothing changed."
+    assert ctx.bot_data["plex"].remove_share.await_count == 2
+    assert "uninv_submitting" not in ctx.user_data
+
+
+async def test_a_second_remove_on_the_same_card_is_still_ignored():
+    ctx = _shares_ctx()
+    go = make_update(callback_data="uninv:71:p", user_id=ADMIN_ID)
+    seen = {}
+
+    async def during(token, share_id):
+        again = make_update(callback_data="uninv:71:p", user_id=ADMIN_ID)
+        await uninvite_go(again, ctx)
+        seen["again"] = again.callback_query.edits
+    ctx.bot_data["plex"].remove_share.side_effect = during
+    await uninvite_go(go, ctx)
+    assert seen["again"] == []
+    assert ctx.bot_data["plex"].remove_share.await_count == 1

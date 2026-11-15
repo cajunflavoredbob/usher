@@ -50,11 +50,14 @@ EXTEND_DAYS = 30
 # and says why per reason. Whoever sets a mark clears it; nobody clears one
 # another set. Not persisted: a restart starts with no removal in flight.
 REMOVING_KEY = "share_expiry_removing"
-BY_DATE = "date"    # the job (or its Retry): the expiry date passed
+BY_DATE = "date"    # the hourly check: the expiry date passed
 BY_ADMIN = "admin"  # the Admin chose Remove now (or its Retry)
+BY_RETRY = "retry"  # the Retry of the hourly check's failed removal
 _REMOVING_NOTE = {
     BY_DATE: "This Share is being removed now because its date passed.",
     BY_ADMIN: "This Share is being removed now because you chose Remove.",
+    BY_RETRY: ("This Share is being removed now because you chose Retry "
+               "after its date passed."),
 }
 # Any button on a DM whose Expiry row is gone: the Share was removed (by the
 # job or by the Admin elsewhere), or the Admin cleared the expiry; the bot
@@ -431,9 +434,13 @@ async def _remove_from_button(q, ctx, store: UserStore, row: ShareExpiry,
             await edit_or_send(
                 q, f"⏳ <b>{who}</b> is being removed by the hourly check "
                    "right now.", parse_mode="HTML")
+        elif mark == BY_RETRY:
+            await edit_or_send(
+                q, f"⏳ <b>{who}</b> is being removed by a Retry right now.",
+                parse_mode="HTML")
         return
     # Check and mark with no await between, so two taps cannot both pass.
-    removing[row.share_id] = BY_DATE if only_if_due else BY_ADMIN
+    removing[row.share_id] = BY_RETRY if only_if_due else BY_ADMIN
     try:
         # Without its keyboard, so a second tap has nothing to press.
         await edit_or_send(q, f"⏳ Removing <b>{who}</b>...",

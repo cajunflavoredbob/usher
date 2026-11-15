@@ -1249,16 +1249,21 @@ async def uninvite_go(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     # Double-tap guard: the second tap lands before the first edit strips
     # the keyboard; without this it would 404 and overwrite the success
     # message with a failure.
-    if ctx.user_data.get("uninv_submitting"):
+    # Kept per Share (share id -> the card's message id), not per person: a
+    # Remove or Keep on another Share's card is not blocked by this one.
+    running = ctx.user_data.setdefault("uninv_submitting", {})
+    if share_id in running:
         return
-    ctx.user_data["uninv_submitting"] = True
+    running[share_id] = getattr(q.message, "message_id", None)
     try:
         # A working state, without the keyboard: Keep and a second Remove
         # have nothing to press while Plex is called.
         await edit_or_send(q, "⏳ Removing...")
         await _uninvite_go_inner(update, ctx, share_id, was_pending)
     finally:
-        ctx.user_data.pop("uninv_submitting", None)
+        running.pop(share_id, None)
+        if not running:
+            ctx.user_data.pop("uninv_submitting", None)
 
 
 async def _uninvite_go_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
@@ -1299,8 +1304,11 @@ async def uninvite_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     if update.effective_user.id != ctx.bot_data.get("admin_id"):
         await q.answer("Admin only.", show_alert=True)
         return
-    if ctx.user_data.get("uninv_submitting"):
-        # A Remove is running: it completes, so do not say nothing changed.
+    message_id = getattr(q.message, "message_id", None)
+    if message_id is not None and message_id in (
+            ctx.user_data.get("uninv_submitting") or {}).values():
+        # A Remove is running on this card: it completes, so do not say
+        # nothing changed.
         await q.answer("Removing now. It can't be cancelled.", show_alert=True)
         return
     await q.answer("Cancelled")
