@@ -161,7 +161,9 @@ async def broadcast_text(update: Update,
 
 async def broadcast_cancel(update: Update,
                            ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    """Cancel on the preview, or /cancel at any step: nothing is sent."""
+    """Cancel on the preview, or /cancel at any step: nothing more is sent
+    from here. A Cancel tap once this preview's Send was taken is refused
+    ("Already sending.") and the job carries on."""
     q = update.callback_query
     if q is not None:
         if await refuse_outside_admin_dm(update, ctx):

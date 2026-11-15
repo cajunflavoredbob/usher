@@ -474,7 +474,9 @@ async def token_for(
 
 # Notification switches the Admin can turn off. A Follow or Subscription is
 # still stored when its switch is off, but nothing is sent, so every place that
-# promises a ping or DM says so with these two sentences.
+# promises a ping or DM says so with these two sentences. The one exception is
+# the bell button's label (bot/media_card.py), too narrow for a sentence: it
+# says "DMs off on this server".
 FOLLOW_PINGS_OFF = "New-episode pings are off on this server."
 SUBSCRIPTION_DMS_OFF = "Subscription DMs are off on this server."
 
@@ -514,21 +516,24 @@ def _prune_btn_history(app, history: dict) -> None:
     app.bot_data["_btn_msgs_pruned_at"] = now
     for uid in list(history):
         fresh = []
-        newest = None
+        newest = newest_sent = None
         for e in history[uid]:
             try:
                 sent = datetime.fromisoformat(e["sent_at"])
             except (KeyError, TypeError, ValueError):
                 continue  # unparseable entry: drop it
-            newest = e
+            newest, newest_sent = e, sent
             if (now - sent).total_seconds() <= BTN_TTL_SECONDS:
                 fresh.append(e)
         if fresh:
             history[uid] = fresh
-        elif newest is not None:
-            # Keep the newest stale entry: an empty history means "no record
-            # yet" and the gate allows it, which would turn an expired menu
-            # back into a live one. With it kept the gate answers "expired".
+        elif (newest is not None
+              and (now - newest_sent).total_seconds() <= 2 * BTN_TTL_SECONDS):
+            # Keep the newest stale entry for one more TTL: an empty history
+            # means "no record yet" and the gate allows it, which would turn
+            # an expired menu back into a live one. With it kept the gate
+            # answers "expired". After that it goes, so the map does not hold
+            # one entry per account forever.
             history[uid] = [newest]
         else:
             history.pop(uid, None)

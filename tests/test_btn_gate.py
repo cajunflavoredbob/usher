@@ -188,6 +188,22 @@ async def test_stale_menu_stays_refused_after_the_hourly_prune(prefix):
     assert "expired" in upd.callback_query.answers[0].lower()
 
 
+async def test_prune_drops_a_stale_entry_after_one_more_ttl():
+    app = _make_app()
+    record_btn(app, 42, _make_message(1001))
+    record_btn(app, 43, _make_message(2001))
+    older = (datetime.now(timezone.utc)
+             - timedelta(seconds=2 * BTN_TTL_SECONDS + 60)).isoformat()
+    app.bot_data["btn_msgs"][42][0]["sent_at"] = older
+    expired = (datetime.now(timezone.utc)
+               - timedelta(seconds=BTN_TTL_SECONDS + 60)).isoformat()
+    app.bot_data["btn_msgs"][43][0]["sent_at"] = expired
+    app.bot_data["_btn_msgs_pruned_at"] = datetime.now(timezone.utc) - timedelta(hours=2)
+    record_btn(app, 7, _make_message(9))
+    assert 42 not in app.bot_data["btn_msgs"]
+    assert [e["message_id"] for e in app.bot_data["btn_msgs"][43]] == [2001]
+
+
 async def test_prune_still_drops_unparseable_only_history():
     app = _make_app()
     record_btn(app, 42, _make_message(1001))
