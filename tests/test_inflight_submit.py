@@ -1,5 +1,5 @@
-"""A submit that is still waiting on Seerr must not wipe, or block, a newer
-/request or /issue the user started meanwhile. Driven through a real PTB
+"""A submit that is still waiting on Seerr or Plex must not wipe, or block, a
+newer /request, /issue or invite the user started meanwhile. Driven through a real PTB
 Application with the real conversations, reset_stale_flows and global_btn_gate
 wired as in bot/app.py; only the Telegram network calls and the Seerr/Plex
 clients are faked. Reuses the rig of test_issue_resume_superseded."""
@@ -13,11 +13,13 @@ import pytest
 from telegram import Update, User
 from telegram.ext import Application, TypeHandler
 
-from bot.callback_prefixes import RQ_GO, RQ_MEDIA, TICKET_AUTOFIX_CONFIRM
+from bot.callback_prefixes import (ACCESS_APPROVE, RQ_GO, RQ_MEDIA,
+                                   TICKET_AUTOFIX_CONFIRM)
 from bot.request_flow import _request_conversation
 from bot.shared import (CONFIRM_AUTOFIX, global_btn_gate, guard_flow_steps,
                         record_btn, reset_stale_flows)
 from bot.ticket_flow import _new_ticket_conversation
+from plex import PlexLibrarySection, PlexShare
 from seerr import CreatedIssue, CreatedRequest, MediaResult, REQUEST_STATUS_APPROVED
 from tests._handler_harness import make_ctx, make_link
 from tests.test_issue_resume_superseded import CHAT_ID, USER_ID, _Harness
@@ -290,3 +292,224 @@ async def test_two_submits_each_attach_their_own_autofix_card(h, monkeypatch):
     release.set()
     await a
     assert sorted(_attached(store)) == [41, 42]
+
+
+# --- /invite: a slow send and a newer invite ----------------------------------
+# The Admin is the rig's user here. Invite A waits on Plex while a newer
+# invite (an Access ask Approve, which skips the confirm, or a typed /invite)
+# starts; A must act only on its own draft.
+
+STRANGER = 77
+
+
+@pytest.fixture
+async def inv(monkeypatch, fresh_store):
+    from bot.invite_flow import _invite_conversation
+    app = Application.builder().token("1:x").build()
+    app.bot._bot_user = User(id=1, first_name="Usher", is_bot=True,
+                             username="UsherBot")
+    app._initialized = True
+    harness = _Harness(app, monkeypatch)
+    ctx = make_ctx(admin_id=USER_ID, link=make_link(telegram_id=USER_ID))
+    app.bot_data.update(ctx.bot_data)
+    app.bot_data["store"] = fresh_store
+    await fresh_store.link_with_plex(
+        telegram_id=USER_ID, seerr_id=1, seerr_display="Admin",
+        plex_token="admin-tok", plex_uuid="u", plex_username="admin")
+    plex = AsyncMock()
+    plex.get_owned_server.return_value = ("machine-1", "server1")
+    plex.get_library_sections.return_value = [
+        PlexLibrarySection(id=101, title="Movies", type="movie")]
+    plex.list_shares.return_value = [
+        PlexShare(id=70, email="friend@example.com", username="",
+                  accepted=False, all_libraries=True),
+        PlexShare(id=71, email="new@example.com", username="",
+                  accepted=False, all_libraries=True)]
+    app.bot_data["plex"] = plex
+    invite_conv = _invite_conversation()
+    app.bot_data["conversations"] = {"invite": invite_conv}
+    app.bot_data["flow_convs"] = [invite_conv]
+    guard_flow_steps(invite_conv)
+    app.add_handler(TypeHandler(Update, reset_stale_flows), group=-2)
+    app.add_handler(TypeHandler(Update, global_btn_gate), group=-1)
+    app.add_handler(invite_conv)
+    harness.store = fresh_store
+    harness.plex = plex
+    yield harness
+
+
+async def _open_ask(inv) -> int:
+    ask_id, _ = await inv.store.create_access_ask(
+        STRANGER, "Newbie", "newbie", "new@example.com")
+    return ask_id
+
+
+async def _invite_a_at_confirm(inv, days: int = 0) -> int:
+    """Typed /invite for friend@example.com, at its confirm card on message
+    5000. Returns the version its Send button carries."""
+    await inv.say("/invite friend@example.com")
+    v = inv.user_data["inv_version"]
+    record_btn(inv.app, USER_ID, SimpleNamespace(message_id=5000, chat_id=CHAT_ID))
+    await inv.tap(f"invd:{v}", 5000)
+    if days:
+        await inv.tap(f"invex:{v}:{days}", 5000)
+    return v
+
+
+async def _approve(inv, ask_id: int) -> int:
+    """The Admin taps Approve on the ask DM (message 5001). Returns the new
+    invite's version."""
+    record_btn(inv.app, USER_ID, SimpleNamespace(message_id=5001, chat_id=CHAT_ID))
+    await inv.tap(f"{ACCESS_APPROVE}:{ask_id}", 5001)
+    assert inv.user_data["inv_email"] == "new@example.com"
+    return inv.user_data["inv_version"]
+
+
+async def _until_sent(calls) -> None:
+    """Wait until the slow send reaches Plex (the store runs in a thread, so
+    a few loop turns are not enough)."""
+    for _ in range(200):
+        if calls:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("the send never reached Plex")
+
+
+def _approved_dms(inv) -> list:
+    return [t for t in inv.sent if t and "approved your ask" in t]
+
+
+async def _ask_status(inv, ask_id: int) -> str:
+    return (await inv.store.get_access_ask(ask_id)).status
+
+
+async def test_a_slow_invite_send_leaves_a_newer_approve_alone(inv):
+    release = asyncio.Event()
+    call, calls = _slow_first_call(release, None)
+    inv.plex.invite_to_server = lambda *a: call(args=a)
+    ask_id = await _open_ask(inv)
+    v_a = await _invite_a_at_confirm(inv)
+    a = asyncio.ensure_future(inv.tap(f"invgo:{v_a}", 5000))
+    await _until_sent(calls)
+    assert len(calls) == 1  # A is waiting on Plex
+    v_b = await _approve(inv, ask_id)
+    release.set()
+    await a
+    # A's success names A, marks nothing approved and leaves B's draft.
+    assert any(t and "Invite sent to <b>friend@example.com</b>" in t
+               for t in inv.sent)
+    assert await _ask_status(inv, ask_id) == "open"
+    assert _approved_dms(inv) == []
+    assert inv.user_data["inv_access_ask"] == ask_id
+    assert inv.user_data["inv_email"] == "new@example.com"
+    # B then runs to the end and approves its own ask.
+    await inv.tap(f"invd:{v_b}", 5001)
+    await inv.tap(f"invgo:{v_b}", 5001)
+    assert [c["args"][2] for c in calls] == ["friend@example.com",
+                                             "new@example.com"]
+    assert await _ask_status(inv, ask_id) == "approved"
+    assert len(_approved_dms(inv)) == 1
+    assert "inv_submitting" not in inv.user_data
+
+
+async def test_a_newer_invites_expiry_is_not_applied_to_the_slow_one(inv):
+    release = asyncio.Event()
+    call, calls = _slow_first_call(release, None)
+    inv.plex.invite_to_server = lambda *a: call(args=a)
+    ask_id = await _open_ask(inv)
+    v_a = await _invite_a_at_confirm(inv)  # A: Never
+    a = asyncio.ensure_future(inv.tap(f"invgo:{v_a}", 5000))
+    await _until_sent(calls)
+    v_b = await _approve(inv, ask_id)
+    await inv.tap(f"invd:{v_b}", 5001)
+    await inv.tap(f"invex:{v_b}:30", 5001)  # B: 30 days
+    release.set()
+    await a
+    assert await inv.store.list_share_expiries() == []
+    assert inv.user_data["inv_expiry_days"] == 30
+    await inv.tap(f"invgo:{v_b}", 5001)
+    assert [e.share_id for e in await inv.store.list_share_expiries()] == [71]
+
+
+async def test_a_slow_invite_keeps_its_own_expiry_after_a_typed_invite(inv):
+    release = asyncio.Event()
+    call, calls = _slow_first_call(release, None)
+    inv.plex.invite_to_server = lambda *a: call(args=a)
+    v_a = await _invite_a_at_confirm(inv, days=30)
+    a = asyncio.ensure_future(inv.tap(f"invgo:{v_a}", 5000))
+    await _until_sent(calls)
+    await inv.say("/invite")  # B: at its email prompt
+    release.set()
+    await a
+    assert [e.share_id for e in await inv.store.list_share_expiries()] == [70]
+    # B's prompt still takes the email.
+    await inv.say("new@example.com")
+    assert inv.user_data["inv_email"] == "new@example.com"
+
+
+async def test_a_double_tap_on_the_same_invite_still_sends_once(inv):
+    release = asyncio.Event()
+    call, calls = _slow_first_call(release, None)
+    inv.plex.invite_to_server = lambda *a: call(args=a)
+    v_a = await _invite_a_at_confirm(inv)
+    a = asyncio.ensure_future(inv.tap(f"invgo:{v_a}", 5000))
+    await _until_sent(calls)
+    await inv.tap(f"invgo:{v_a}", 5000)
+    release.set()
+    await a
+    assert len(calls) == 1
+    assert "inv_submitting" not in inv.user_data
+    assert "inv_email" not in inv.user_data  # its own finish still clears
+
+
+async def test_a_newer_invite_can_be_sent_while_the_older_send_waits(inv):
+    release, release_b = asyncio.Event(), asyncio.Event()
+    call, calls = _slow_first_call(release, None, release_b)
+    inv.plex.invite_to_server = lambda *a: call(args=a)
+    v_a = await _invite_a_at_confirm(inv)
+    a = asyncio.ensure_future(inv.tap(f"invgo:{v_a}", 5000))
+    await _until_sent(calls)
+    await inv.say("/invite new@example.com")
+    v_b = inv.user_data["inv_version"]
+    record_btn(inv.app, USER_ID, SimpleNamespace(message_id=5001, chat_id=CHAT_ID))
+    await inv.tap(f"invd:{v_b}", 5001)
+    b = asyncio.ensure_future(inv.tap(f"invgo:{v_b}", 5001))
+    for _ in range(200):
+        if len(calls) == 2:
+            break
+        await asyncio.sleep(0.01)
+    assert [c["args"][2] for c in calls] == ["friend@example.com",
+                                             "new@example.com"]
+    release.set()  # A finishes first and must leave B's marker alone
+    await a
+    await inv.tap(f"invgo:{v_b}", 5001)  # B's double tap is still blocked
+    assert len(calls) == 2
+    release_b.set()
+    await b
+    assert "inv_submitting" not in inv.user_data
+
+
+async def test_a_slow_typed_invite_ends_without_a_newer_hub_invites_back(
+        inv, monkeypatch):
+    from telegram.ext import ExtBot
+    from bot.callback_prefixes import ADMIN_INVITE
+    markups = {}
+
+    async def edit(self_, text=None, *a, message_id=None, reply_markup=None,
+                   **kw):
+        inv.sent.append(text)
+        markups[text] = reply_markup
+        return SimpleNamespace(message_id=message_id, chat_id=CHAT_ID)
+    monkeypatch.setattr(ExtBot, "edit_message_text", edit)
+    release = asyncio.Event()
+    call, calls = _slow_first_call(release, None)
+    inv.plex.invite_to_server = lambda *a: call(args=a)
+    v_a = await _invite_a_at_confirm(inv)
+    a = asyncio.ensure_future(inv.tap(f"invgo:{v_a}", 5000))
+    await _until_sent(calls)
+    record_btn(inv.app, USER_ID, SimpleNamespace(message_id=5001, chat_id=CHAT_ID))
+    await inv.tap(ADMIN_INVITE, 5001)  # B: the Admin Hub's Invite
+    release.set()
+    await a
+    done = next(t for t in markups if t and t.startswith("📨 Invite sent"))
+    assert markups[done] is None  # a typed /invite ends with no buttons

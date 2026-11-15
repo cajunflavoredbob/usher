@@ -73,6 +73,8 @@ from bot.shared import (
     INV_LIBS,
     day_count,
     edit_or_send,
+    flow_step_gen,
+    flow_step_is_stale,
     force_end_flow_conversations,
     record_btn,
     send_typing,
@@ -500,25 +502,43 @@ async def invite_send(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await q.answer(_STALE_INVITE_TOAST,
                        show_alert=True)
         return INV_CONFIRM
+    # Everything the send needs, read before its first await: a newer invite
+    # started while this one waits on Plex (an Access ask Approve, a typed
+    # /invite) rewrites these keys, and its ask, expiry and draft are not ours.
+    draft = {
+        "email": ctx.user_data.get("inv_email"),
+        "machine": ctx.user_data.get("inv_machine"),
+        "selected": set(ctx.user_data.get("inv_selected") or ()),
+        "hub": _admin_origin(ctx),
+        "ask_id": ctx.user_data.get("inv_access_ask"),
+        "days": ctx.user_data.get("inv_expiry_days") or 0,
+    }
+    # The marker holds the flow generation the send started under, so it
+    # blocks only this invite's double tap: a newer invite runs under a later
+    # generation and is not blocked.
+    gen = flow_step_gen(ctx)
     await q.answer()
-    if ctx.user_data.get("inv_submitting"):
+    if ctx.user_data.get("inv_submitting") == gen:
         return ConversationHandler.END
-    ctx.user_data["inv_submitting"] = True
+    ctx.user_data["inv_submitting"] = gen
     try:
-        return await _invite_send_inner(update, ctx)
+        return await _invite_send_inner(update, ctx, **draft)
     finally:
-        ctx.user_data.pop("inv_submitting", None)
+        # Only our own marker: a newer invite's send may have replaced it.
+        if ctx.user_data.get("inv_submitting") == gen:
+            ctx.user_data.pop("inv_submitting", None)
 
 
-async def _invite_send_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    email = ctx.user_data.get("inv_email")
-    machine = ctx.user_data.get("inv_machine")
-    selected = ctx.user_data.get("inv_selected") or set()
-    hub = _admin_origin(ctx)
+async def _invite_send_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *,
+                             email: Optional[str], machine: Optional[str],
+                             selected: set, hub: Optional[str],
+                             ask_id: Optional[int], days: int) -> int:
+    """The send itself, acting only on the draft invite_send read before its
+    first await."""
     if not (email and machine and selected):
         await end_flow(update, ctx, "Lost the invite draft.", hub, ADMIN_INVITE,
                        typed_text="Lost the invite draft. /invite to start over.")
-        _clear(ctx)
+        _clear_finished(ctx)
         return ConversationHandler.END
     store: UserStore = ctx.bot_data["store"]
     link = await store.get(update.effective_user.id)
@@ -526,7 +546,7 @@ async def _invite_send_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
         await end_flow(update, ctx, "Your /link is no longer usable; /link first.",
                        hub, typed_text=("Your /link is no longer usable. /link "
                                     "then /invite again."))
-        _clear(ctx)
+        _clear_finished(ctx)
         return ConversationHandler.END
     q = update.callback_query
     try:
@@ -553,15 +573,13 @@ async def _invite_send_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
             retry = ADMIN_INVITE
             text = f"Couldn't send the invite. {user_friendly_message(exc)}"
         await end_flow(update, ctx, text, hub, retry)
-        _clear(ctx)
+        _clear_finished(ctx)
         return ConversationHandler.END
 
-    ask_id = ctx.user_data.get("inv_access_ask")
     if ask_id is not None:
         await approve_access_ask(ctx, ask_id)
     lib_word = "library" if len(selected) == 1 else "libraries"
     note = ""
-    days = ctx.user_data.get("inv_expiry_days") or 0
     if days:
         note = await _store_new_expiry(ctx, link.plex_token, machine, email,
                                        days)
@@ -571,7 +589,7 @@ async def _invite_send_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
                    "They'll get an email from Plex; once they accept and sign in, "
                    "Seerr picks them up and /link works for them." + note,
                    hub, parse_mode="HTML")
-    _clear(ctx)
+    _clear_finished(ctx)
     return ConversationHandler.END
 
 
@@ -610,6 +628,14 @@ def _is_already_sharing(exc: Exception) -> bool:
 def _clear(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     for key in _INV_KEYS:
         ctx.user_data.pop(key, None)
+
+
+def _clear_finished(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """The end of a send: clear the draft unless a newer invite started while
+    it ran (the user's flows were force-ended). That invite owns these keys
+    now, and wiping them would lose its email, ask and expiry."""
+    if not flow_step_is_stale(ctx):
+        _clear(ctx)
 
 
 async def invite_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
