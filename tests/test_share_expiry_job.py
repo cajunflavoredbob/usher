@@ -501,8 +501,8 @@ OUT_OF_DATE = ("This reminder is out of date: the Share was removed or its "
 
 async def test_every_button_on_a_reminder_with_no_row_says_it_is_out_of_date(
         fresh_store):
-    """After the job removed the Share (or the expiry was cleared), every
-    button answers one neutral text and changes nothing."""
+    """With no Expiry row for the Share, every button answers one neutral
+    text and removes nothing."""
     app, plex = await _setup(fresh_store, [_share(1)])
     for data in (f"{SHARE_EXTEND}:1", f"{SHARE_EXTEND}:1:20310101000000",
                  f"{SHARE_LET_END}:1", f"{SHARE_REMOVE_NOW}:1",

@@ -683,6 +683,10 @@ class UserStore:
         plex_uuid: str,
         plex_username: str,
     ) -> None:
+        """Store a Link, or replace one on a re-link. An empty plex_uuid or
+        plex_username (plex.tv could not be asked) keeps the stored one, so
+        a failed lookup does not erase the username a Share removal
+        unlinks by."""
         enc = self.crypto.encrypt(plex_token)
 
         def _do():
@@ -696,8 +700,10 @@ class UserStore:
                         seerr_id = excluded.seerr_id,
                         seerr_display = excluded.seerr_display,
                         plex_token_enc = excluded.plex_token_enc,
-                        plex_uuid = excluded.plex_uuid,
-                        plex_username = excluded.plex_username,
+                        plex_uuid = COALESCE(NULLIF(excluded.plex_uuid, ''),
+                                             plex_uuid),
+                        plex_username = COALESCE(
+                            NULLIF(excluded.plex_username, ''), plex_username),
                         linked_at = datetime('now')
                     """,
                     (telegram_id, seerr_id, seerr_display, enc, plex_uuid, plex_username),

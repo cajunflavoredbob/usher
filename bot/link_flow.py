@@ -320,7 +320,8 @@ async def _finalize_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
 
     if plex_user is None:
         # The Seerr display name is not a Plex username; storing it would let
-        # a Share removal by username unlink the wrong person. Store none.
+        # a Share removal by username unlink the wrong person. Store none
+        # (link_with_plex then keeps a re-link's stored username and uuid).
         logger.warning("Linking %s without a Plex username: plex.tv user "
                        "lookup failed", tg_id)
     await store.link_with_plex(

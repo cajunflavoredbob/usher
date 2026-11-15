@@ -44,8 +44,9 @@ EXTEND_DAYS = 30
 # while its row is here, so a slow removal cannot undo a fresh Extend. Not
 # persisted: a restart starts with no removal in flight.
 REMOVING_KEY = "share_expiry_removing"
-# Any button on a DM whose Expiry row is gone: the job removed the Share, or
-# the Admin cleared the expiry; the bot cannot tell which.
+# Any button on a DM whose Expiry row is gone: the Share was removed (by the
+# job or by the Admin elsewhere), or the Admin cleared the expiry; the bot
+# cannot tell which.
 OUT_OF_DATE = ("This reminder is out of date: the Share was removed or its "
                "expiry was cleared. Open the Share view to check.")
 

@@ -213,3 +213,52 @@ async def test_restart_during_weak_poll_says_restarting_not_timed_out(monkeypatc
     assert any("Usher is restarting. Run /link again in a minute." in t for t in texts)
     assert not any("timed out" in t for t in texts)
     assert "link_retry_ok" not in ctx.user_data
+
+
+# --- a re-link whose plex.tv lookup fails (ticket 44) ------------------------
+
+async def _finalize_with(store, get_user):
+    from unittest.mock import AsyncMock
+
+    from bot.link_flow import _finalize_link
+    ctx = make_ctx(admin_id=999)
+    ctx.bot_data["store"] = store
+    ctx.bot_data["seerr"].login_with_plex = AsyncMock(
+        return_value=(7, "Seerr Name"))
+    ctx.bot_data["plex"].get_user = get_user
+    await _finalize_link(make_update(user_id=42), ctx, "new-tok")
+
+
+async def test_a_relink_with_a_failed_plex_lookup_keeps_the_plex_username(
+        fresh_store):
+    from unittest.mock import AsyncMock
+    await fresh_store.link_with_plex(
+        telegram_id=42, seerr_id=7, seerr_display="Seerr Name",
+        plex_token="old-tok", plex_uuid="uuid-1", plex_username="friend")
+    await _finalize_with(fresh_store,
+                         AsyncMock(side_effect=RuntimeError("plex.tv down")))
+    link = await fresh_store.get(42)
+    assert link.plex_token == "new-tok"
+    assert (link.plex_username, link.plex_uuid) == ("friend", "uuid-1")
+
+
+async def test_a_first_link_with_a_failed_plex_lookup_stores_no_username(
+        fresh_store):
+    from unittest.mock import AsyncMock
+    await _finalize_with(fresh_store, AsyncMock(return_value=None))
+    link = await fresh_store.get(42)
+    assert link.plex_token == "new-tok"
+    assert (link.plex_username, link.plex_uuid) == ("", "")
+
+
+async def test_a_relink_with_a_good_plex_lookup_replaces_the_plex_username(
+        fresh_store):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    await fresh_store.link_with_plex(
+        telegram_id=42, seerr_id=7, seerr_display="Seerr Name",
+        plex_token="old-tok", plex_uuid="uuid-1", plex_username="friend")
+    await _finalize_with(fresh_store, AsyncMock(
+        return_value=SimpleNamespace(uuid="uuid-2", username="renamed")))
+    link = await fresh_store.get(42)
+    assert (link.plex_username, link.plex_uuid) == ("renamed", "uuid-2")
