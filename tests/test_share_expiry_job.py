@@ -934,12 +934,18 @@ async def test_a_still_pending_invite_keeps_its_empty_username(fresh_store):
 
 
 async def test_a_stored_username_is_not_replaced_by_the_listing(fresh_store):
-    app, plex = await _setup(fresh_store, [_share(1, username="mallory")])
+    app, plex = await _setup(fresh_store, [_share(1, username="mallory"),
+                                           _share(2, username="bob")])
     await fresh_store.set_share_expiry(1, "a@example.com", "alice",
                                        _at(timedelta(days=20)))
+    # A second row with no username makes the tick read the listing, which
+    # names Share 1 as "mallory": the stored "alice" must stay.
+    await fresh_store.set_share_expiry(2, "b@example.com", "",
+                                       _at(timedelta(days=20)))
     await run_share_expiries(app, NOW)
+    plex.list_shares.assert_awaited()
+    assert (await fresh_store.get_share_expiry(2)).username == "bob"
     assert (await fresh_store.get_share_expiry(1)).username == "alice"
-    plex.list_shares.assert_not_awaited()  # nothing to learn: no listing
 
 
 async def test_a_failed_listing_still_sends_the_reminders(fresh_store):
@@ -1009,3 +1015,66 @@ async def test_a_job_alert_retry_refuses_extend_while_it_removes(
         "This Share is being removed now because its date passed.")
     assert await fresh_store.get_share_expiry(1) is None
     assert not ctx.bot_data.get(share_expiry_job.REMOVING_KEY)
+
+
+# --- the removal mark carries its reason; the job honours the Admin's mark ---
+
+
+async def test_extend_during_a_remove_now_says_it_was_the_admins_removal(
+        fresh_store):
+    app, plex = await _setup(fresh_store, [_share(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       _at(timedelta(days=2)))
+    ctx, upd = _tap(app, f"{SHARE_REMOVE_YES}:1")
+    ext_upd = make_update(callback_data=f"{SHARE_EXTEND}:1", user_id=ADMIN_ID)
+
+    async def extend_mid_removal(token, share_id):
+        await share_expiry_action(ext_upd, ctx)
+    plex.remove_share.side_effect = extend_mid_removal
+    await share_expiry_action(upd, ctx)
+    text = ext_upd.callback_query.edits[-1]["text"]
+    assert "because you chose Remove" in text
+    assert "date passed" not in text
+    assert not ctx.bot_data.get(share_expiry_job.REMOVING_KEY)
+
+
+async def test_the_remove_dm_shows_a_working_state_during_the_plex_call(
+        fresh_store):
+    app, plex = await _setup(fresh_store, [_share(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       _at(timedelta(days=2)))
+    ctx, upd = _tap(app, f"{SHARE_REMOVE_YES}:1")
+    seen = []
+
+    async def during(token, share_id):
+        seen.append([e["text"] for e in upd.callback_query.edits])
+    plex.remove_share.side_effect = during
+    await share_expiry_action(upd, ctx)
+    assert seen and "Removing" in seen[0][-1]
+    assert "Removed" in upd.callback_query.edits[-1]["text"]
+
+
+async def test_a_second_remove_tap_during_the_removal_is_ignored(fresh_store):
+    app, plex = await _setup(fresh_store, [_share(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       _at(timedelta(days=2)))
+    ctx, upd = _tap(app, f"{SHARE_REMOVE_YES}:1")
+    _ctx2, upd2 = _tap(app, f"{SHARE_REMOVE_YES}:1")
+
+    async def second_tap(token, share_id):
+        await share_expiry_action(upd2, ctx)
+    plex.remove_share.side_effect = second_tap
+    await share_expiry_action(upd, ctx)
+    assert plex.remove_share.await_count == 1
+    assert upd2.callback_query.edits == []
+
+
+async def test_the_job_leaves_a_mark_the_admins_removal_set(fresh_store):
+    app, plex = await _setup(fresh_store, [_share(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2020-01-01 00:00:00")
+    app.bot_data[share_expiry_job.REMOVING_KEY] = {1: share_expiry_job.BY_ADMIN}
+    await run_share_expiries(app, NOW)
+    # The job finished its pass, but the mark the button set is still there.
+    assert app.bot_data[share_expiry_job.REMOVING_KEY] == {
+        1: share_expiry_job.BY_ADMIN}

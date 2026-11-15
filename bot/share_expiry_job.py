@@ -44,10 +44,17 @@ SHARE_EXPIRY_FIRST_DELAY_S = 90
 REMIND_BEFORE = timedelta(days=3)
 ALERT_EVERY = timedelta(days=1)
 EXTEND_DAYS = 30
-# bot_data: the share ids the job is removing right now. Extend refuses
-# while its row is here, so a slow removal cannot undo a fresh Extend. Not
-# persisted: a restart starts with no removal in flight.
+# bot_data: {share id: why} for the Shares being removed right now. Extend
+# refuses while its row is here, so a slow removal cannot undo a fresh Extend,
+# and says why per reason. Whoever sets a mark clears it; nobody clears one
+# another set. Not persisted: a restart starts with no removal in flight.
 REMOVING_KEY = "share_expiry_removing"
+BY_DATE = "date"    # the job (or its Retry): the expiry date passed
+BY_ADMIN = "admin"  # the Admin chose Remove now (or its Retry)
+_REMOVING_NOTE = {
+    BY_DATE: "This Share is being removed now because its date passed.",
+    BY_ADMIN: "This Share is being removed now because you chose Remove.",
+}
 # Any button on a DM whose Expiry row is gone: the Share was removed (by the
 # job or by the Admin elsewhere), or the Admin cleared the expiry; the bot
 # cannot tell which.
@@ -225,9 +232,13 @@ async def run_share_expiries(app, now: Optional[datetime] = None) -> None:
                                  user_friendly_message(listing_error),
                                  admin_id, now)
         return
-    removing: set[int] = app.bot_data.setdefault(REMOVING_KEY, set())
+    removing: dict[int, str] = app.bot_data.setdefault(REMOVING_KEY, {})
     for row in due:
-        removing.add(row.share_id)
+        # A removal the Admin's button already started keeps its own mark
+        # (and its reason); the job only clears a mark it set.
+        marked = row.share_id not in removing
+        if marked:
+            removing[row.share_id] = BY_DATE
         try:
             if await _remove_due(app, store, plex, token, row, shares,
                                  admin_id, now):
@@ -235,7 +246,8 @@ async def run_share_expiries(app, now: Optional[datetime] = None) -> None:
                 # gone row's holder linked.
                 shares = [s for s in shares if s.id != row.share_id]
         finally:
-            removing.discard(row.share_id)
+            if marked:
+                removing.pop(row.share_id, None)
 
 
 async def _remove_due(app, store: UserStore, plex, token: str,
@@ -313,7 +325,8 @@ async def share_expiry_action(update: Update,
           and share_id in ctx.bot_data.get(REMOVING_KEY, ())):
         _text, markup = _reminder_card(row)
         await edit_or_send(
-            q, "This Share is being removed now because its date passed.",
+            q, _REMOVING_NOTE.get(ctx.bot_data[REMOVING_KEY][share_id],
+                                  _REMOVING_NOTE[BY_DATE]),
             reply_markup=markup)
     elif action == SHARE_EXTEND:
         base = max(_parse(row.expires_at), datetime.now(timezone.utc))
@@ -402,8 +415,10 @@ async def _remove_from_button(q, ctx, store: UserStore, row: ShareExpiry,
     """Remove the Share; a failure keeps `retry_markup`'s Retry on the DM.
     `only_if_due` (the job's Retry) re-reads the row right before the
     removal and leaves a Share whose date moved or was cleared, as the job
-    does. The Share is marked as being removed meanwhile, so Extend on it is
-    refused rather than racing the removal."""
+    does. The Share is marked as being removed meanwhile (with why), so Extend
+    on it is refused rather than racing the removal, and a second Remove tap
+    while it runs is ignored. The DM shows a working state during the Plex
+    call."""
     link = await store.get(ctx.bot_data["admin_id"])
     if link is None or not link.plex_token:
         await edit_or_send(q, "Your /link is no longer usable; /link first.",
@@ -414,11 +429,16 @@ async def _remove_from_button(q, ctx, store: UserStore, row: ShareExpiry,
         return (fresh is not None
                 and _parse(fresh.expires_at) <= datetime.now(timezone.utc))
 
-    removing: set[int] = ctx.bot_data.setdefault(REMOVING_KEY, set())
-    # Only clear a marker this tap set: the job may be removing it too.
-    marked = row.share_id not in removing
-    removing.add(row.share_id)
+    removing: dict[int, str] = ctx.bot_data.setdefault(REMOVING_KEY, {})
+    if row.share_id in removing:
+        # A double tap, or the job is removing it: that removal reports.
+        return
+    # Check and mark with no await between, so two taps cannot both pass.
+    removing[row.share_id] = BY_DATE if only_if_due else BY_ADMIN
     try:
+        # Without its keyboard, so a second tap has nothing to press.
+        await edit_or_send(q, f"⏳ Removing <b>{who}</b>...",
+                           parse_mode="HTML")
         gone = await remove_share_and_forget(
             store, ctx.bot_data["plex"], link.plex_token, row.share_id,
             still_due=still_due if only_if_due else None)
@@ -432,8 +452,7 @@ async def _remove_from_button(q, ctx, store: UserStore, row: ShareExpiry,
             reply_markup=retry_markup(row.share_id), parse_mode="HTML")
         return
     finally:
-        if marked:
-            removing.discard(row.share_id)
+        removing.pop(row.share_id, None)
     if gone is None:
         # The date moved or the row went since the failure alert.
         fresh = await store.get_share_expiry(row.share_id)
