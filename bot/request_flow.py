@@ -115,6 +115,8 @@ from bot.shared import (
     RQ_OWNER_KEY,
     claim_draft,
     edit_or_send,
+    begin_submit,
+    end_submit,
     flow_step_gen,
     flow_step_is_stale,
     flows_ended_here_since,
@@ -1261,29 +1263,32 @@ async def request_submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         # the ACTIVE flow's draft.
         await q.answer(_STALE_MENU_TOAST, show_alert=True)
         return RQ_CONFIRM
-    await q.answer()
-    # The marker holds the flow generation the submit started under, so it
-    # blocks only this flow's double tap: a /request started while this one
-    # is still submitting runs under a later generation and is not blocked.
+    # The marker holds the identity of this request's draft (owner chat plus
+    # a per-draft id), not the user's flow generation, which a command in
+    # another chat bumps between two taps: it blocks only this flow's double
+    # tap, and a /request started while this one is still submitting has a
+    # draft of its own and is not blocked. It is set before the first await,
+    # so a Cancel tapped while this answers finds the submit running.
     gen = flow_step_gen(ctx)
-    if ctx.user_data.get("rq_submitting") == gen:
-        return ConversationHandler.END
     # Read before any await: the person this confirm named.
     confirm = ctx.user_data.get(_CONFIRM_KEY)
     if not isinstance(confirm, dict) or confirm.get("version") != version:
         confirm = None
-    ctx.user_data["rq_submitting"] = gen
-    # Remembered (not just parsed) so a relink-resume re-submits at the tier
-    # the user actually chose.
-    is4k = prefix == RQ_GO_4K
-    ctx.user_data["rq_is4k"] = is4k
+    marker = begin_submit(ctx, "rq_submitting", RQ_OWNER_KEY)
+    if marker is None:
+        await q.answer()
+        return ConversationHandler.END
     try:
+        await q.answer()
+        # Remembered (not just parsed) so a relink-resume re-submits at the
+        # tier the user actually chose.
+        is4k = prefix == RQ_GO_4K
+        ctx.user_data["rq_is4k"] = is4k
         return await _submit_request(update, ctx, is4k=is4k, confirm=confirm,
                                      gen=gen)
     finally:
         # Only our own marker: a newer flow's submit may have replaced it.
-        if ctx.user_data.get("rq_submitting") == gen:
-            ctx.user_data.pop("rq_submitting", None)
+        end_submit(ctx, "rq_submitting", marker)
 
 
 async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
@@ -1769,19 +1774,24 @@ async def request_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if version is not None and version != _current_version(ctx):
             await q.answer(_STALE_MENU_TOAST, show_alert=True)
             return None
+    replaced = _replaced(update, ctx)
+    if not replaced and submit_in_flight(ctx, "rq_submitting", RQ_OWNER_KEY):
+        # A Cancel while the Request is being filed: it completes, so do not
+        # say it was cancelled.
+        text = "Already sending. The request can't be cancelled now."
+        if q is not None:
+            await q.answer(text, show_alert=True)
+        else:
+            await update.effective_message.reply_text(text)
+        # END, not None: None would make PTB arm a fresh timeout that the
+        # submit's own END never removes, and it would fire after the send.
+        return ConversationHandler.END
+    if q:
         await q.answer("Cancelled")
-    if _replaced(update, ctx):
+    if replaced:
         # The draft is another chat's request now: end only this chat's flow.
         await end_flow(update, ctx, "Cancelled.", None,
                        typed_text="Cancelled. /request to start over.")
-        return ConversationHandler.END
-    if q is None and submit_in_flight(ctx, "rq_submitting"):
-        # A typed /cancel while the Request is being filed: it completes, so
-        # do not say it was cancelled.
-        await update.effective_message.reply_text(
-            "Already sending. The request can't be cancelled now.")
-        # END, not None: None would make PTB arm a fresh timeout that the
-        # submit's own END never removes, and it would fire after the send.
         return ConversationHandler.END
     await end_flow(update, ctx, "Cancelled.", hub_origin(ctx),
                    typed_text="Cancelled. /request to start over.")

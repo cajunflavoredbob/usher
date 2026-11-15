@@ -238,6 +238,7 @@ def _autofix_runs(h, monkeypatch, row_ids):
                                  poll_info={"movie_id": 555})
     monkeypatch.setattr(ticket_flow, "run_arr_action", fix)
     h.app.bot_data["settings_store"].settings.daily_autofix_unlimited = True
+    h.app.bot_data["autofix_allow_all"] = True
     store = h.app.bot_data["store"]
     store.add_pending_autofix = AsyncMock(side_effect=list(row_ids))
     store.set_autofix_message = AsyncMock()

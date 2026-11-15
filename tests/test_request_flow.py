@@ -347,7 +347,7 @@ async def test_submit_nothing_to_request_message():
 
 async def test_submit_double_tap_guard():
     ctx = _confirm_ctx()
-    ctx.user_data["rq_submitting"] = 0  # the flow generation it started under
+    ctx.user_data["rq_submitting"] = ((None, None), 0)  # (draft identity, flow generation)
     upd = make_update(callback_data="rqgo:1", user_id=USER_ID)
     state = await request_submit(upd, ctx)
     assert state == ConversationHandler.END
@@ -1179,3 +1179,9 @@ async def test_issue_dead_end_button_with_its_marker_still_starts_the_jump():
     upd = make_update(callback_data="rqfi:movie:550:i", user_id=USER_ID)
     assert await request_from_ticket(upd, ctx) == RQ_CONFIRM
     assert ctx.user_data["rq_media"]["tmdb_id"] == 550
+
+
+def test_an_error_also_clears_the_request_for_someone_marker_and_the_draft_ids():
+    from bot.app import _CONVERSATION_USER_DATA_KEYS
+    assert {"rq_for_picked", "issue_chat_draft", "rq_chat_draft",
+            "inv_chat_draft"} <= set(_CONVERSATION_USER_DATA_KEYS)

@@ -150,7 +150,7 @@ from bot.new_content import (NEW_CONTENT_FIRST_DELAY_S, NEW_CONTENT_INTERVAL_S,
                              poll_new_content)
 from bot.subscriptions import (cmd_subscriptions, subscription_add,
                                subscription_del, subscriptions_hub)
-from bot.request_flow import (_RQ_KEYS, _request_conversation,
+from bot.request_flow import (_PICKED_KEY, _RQ_KEYS, _request_conversation,
                               remaining_seasons_ask, remaining_seasons_send,
                               request_info_dismiss)
 from bot.requests_cmd import cmd_requests, requests_hub_mine, rq_list_cancel
@@ -1069,10 +1069,10 @@ _CONVERSATION_USER_DATA_KEYS = (
     "link_active_loop", "link_retry_ok", "hub_origin",
     "media", "search_results", "seasons", "season",
     "episode", "issue_type", "description",
-    "submitting_ticket", "issue_chat",
+    "submitting_ticket", "issue_chat", "issue_chat_draft",
     "research_parent",
     "awaiting_comment_for", "awaiting_comment_chat",
-) + _RQ_KEYS + (
+) + _RQ_KEYS + (_PICKED_KEY,) + (
     # rq_jump_media is ticket_flow's stash for the Request-it-instead jump
     # (request_flow._RQ_KEYS rightly omits it). rq_search_version is
     # deliberately in NEITHER list: the version counter must survive every

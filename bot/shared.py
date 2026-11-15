@@ -589,11 +589,11 @@ def record_card_owner(app, owner_id, message) -> None:
 RELINK_RESUME_EXECUTORS: dict[str, Callable] = {}
 
 
-# One canonical decrypt-failed message (it was pasted six times
-# with wording drift across tickets.py / resolve_flow.py / ticket_flow.py).
 # The one wording for "not linked" where the user is asked to /link before a
 # list, stats or button works (the others name what they would act on).
 NOT_LINKED_MSG = "DM me /link first so I know which Plex account is yours."
+# One canonical decrypt-failed message (it was pasted six times
+# with wording drift across tickets.py / resolve_flow.py / ticket_flow.py).
 DECRYPT_FAILED_MSG = (
     "Your Plex link can't be decrypted (the encryption key may have "
     "rotated). Run /unlink then /link to reconnect."
@@ -1006,6 +1006,11 @@ async def reset_stale_flows(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
     ended = force_end_flow_conversations(ctx, update)
     if not ended:
         return
+    chat = update.effective_chat
+    if chat is not None and getattr(chat, "type", ChatType.PRIVATE) != ChatType.PRIVATE:
+        # The notice names what the user was doing; a group would show it to
+        # everyone there. The flow still ended.
+        return
     # Tell the user their flow ended, so the next text they type isn't met
     # with silence. Name the flow only when exactly one flow ended and it maps
     # to a command; skip the notice when the new command is that flow's own
@@ -1035,7 +1040,7 @@ async def reset_stale_flows(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
 ISSUE_KEYS: Final = ("media", "search_results", "seasons", "season", "episode",
                      "issue_type", "description", "research_parent",
                      "submitting_ticket", "rq_jump_media", "hub_origin",
-                     "issue_chat")
+                     "issue_chat", "issue_chat_draft")
 # The ones force-ending the /issue conversation leaves alone: a jump that
 # ends it hands the Hub origin to the next flow, and submitting_ticket belongs
 # to the in-flight submit (it pops its own marker itself).
@@ -1049,7 +1054,7 @@ _ISSUE_KEYS_KEPT_ON_FORCE_END: Final = ("hub_origin", "submitting_ticket")
 RQ_KEYS: Final = ("rq_media", "rq_search_results",
                   "rq_results", "rq_screen", "rq_perms", "rq_is4k",
                   "rq_seasons", "rq_selected", "rq_submitting", "rq_for",
-                  "rq_confirm_for", "rq_chat")
+                  "rq_confirm_for", "rq_chat", "rq_chat_draft")
 # The one a force-end leaves alone: it belongs to the in-flight submit, which
 # pops it itself.
 _RQ_KEYS_KEPT_ON_FORCE_END: Final = ("rq_submitting",)
@@ -1072,9 +1077,51 @@ def owns_draft(ctx, update, owner_key: str) -> bool:
     return owner is None or chat_id is None or owner == chat_id
 
 
+_DRAFT_SEQ_KEY: Final = "draft_seq"
+
+
 def claim_draft(ctx, update, owner_key: str) -> None:
-    """Record this update's chat as the owner of a new flow's draft."""
+    """Record this update's chat as the owner of a new flow's draft, and give
+    the draft an id of its own (a per-user counter no reset clears, so an id
+    is never reused)."""
     ctx.user_data[owner_key] = _chat_id(update)
+    seq = (ctx.user_data.get(_DRAFT_SEQ_KEY) or 0) + 1
+    ctx.user_data[_DRAFT_SEQ_KEY] = seq
+    ctx.user_data[owner_key + "_draft"] = seq
+
+
+def draft_identity(ctx, owner_key: str) -> tuple:
+    """Who a per-user draft is: (owner chat, per-draft id). A submit's
+    double-tap marker is keyed on it, not on the user's flow generation,
+    which a command in ANOTHER chat bumps between two taps of one confirm."""
+    return (ctx.user_data.get(owner_key), ctx.user_data.get(owner_key + "_draft"))
+
+
+def submit_marker_matches(ctx, marker_key: str, owner_key: str) -> bool:
+    """True when a submit already holds the marker for the draft that is the
+    user's draft now (a second tap of the same confirm). A newer draft, here
+    or in another chat, has another identity and is not blocked."""
+    marker = ctx.user_data.get(marker_key)
+    return (isinstance(marker, tuple)
+            and marker[0] == draft_identity(ctx, owner_key))
+
+
+def begin_submit(ctx, marker_key: str, owner_key: str) -> Optional[tuple]:
+    """Claim the in-flight marker for the user's current draft, with no await
+    between the check and the set. Returns the marker to hand to end_submit,
+    or None when this draft's submit already runs."""
+    if submit_marker_matches(ctx, marker_key, owner_key):
+        return None
+    marker = (draft_identity(ctx, owner_key), flow_step_gen(ctx))
+    ctx.user_data[marker_key] = marker
+    return marker
+
+
+def end_submit(ctx, marker_key: str, marker: tuple) -> None:
+    """Drop the marker, only when it is still ours: a newer draft's submit may
+    have replaced it."""
+    if ctx.user_data.get(marker_key) == marker:
+        ctx.user_data.pop(marker_key, None)
 
 
 async def refuse_replaced_draft(update, text: str) -> int:
@@ -1237,20 +1284,19 @@ def timeout_is_live(ctx, update, name: str) -> bool:
     return key in conv._conversations
 
 
-def submit_in_flight(ctx, marker_key: str) -> bool:
+def submit_in_flight(ctx, marker_key: str, owner_key: str) -> bool:
     """True when this flow's own submit is running: its in-flight marker holds
-    the flow generation the submit started under, and this chat's flows were
-    not force-ended since. An older submit still finishing (the user has
-    since started a newer flow here) does not count. A typed /cancel asks
-    this to say "Already sending" instead of "Cancelled." while the submit
-    goes on to complete."""
-    marker = ctx.user_data.get(marker_key)
-    if marker is None:
+    the identity of the draft that is the user's draft now, and this chat's
+    flows were not force-ended since the submit started. An older submit
+    still finishing (the user has since started a newer flow) does not count.
+    A /cancel asks this to say "Already sending" instead of "Cancelled."
+    while the submit goes on to complete."""
+    if not submit_marker_matches(ctx, marker_key, owner_key):
         return False
     cell = _STEP_GEN.get()
     if cell is None:
-        return marker == _flow_gen(ctx)
-    return not _ended_since(ctx, cell[1], marker)
+        return True
+    return not _ended_since(ctx, cell[1], ctx.user_data[marker_key][1])
 
 
 def guard_flow_steps(conv: ConversationHandler) -> None:

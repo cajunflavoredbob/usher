@@ -72,8 +72,9 @@ from bot.shared import (
     INV_EMAIL,
     INV_LIBS,
     day_count,
+    begin_submit,
     edit_or_send,
-    flow_step_gen,
+    end_submit,
     flow_step_is_stale,
     claim_draft,
     force_end_flow_conversations,
@@ -95,7 +96,7 @@ _STALE_INVITE_TOAST = "That invite menu is stale: /invite to start over."
 # counter surviving every reset (same lesson as rq_search_version).
 _INV_KEYS = ("inv_email", "inv_sections", "inv_selected", "inv_machine",
              "inv_server_name", "inv_submitting", "inv_access_ask",
-             "inv_expiry_days", "inv_chat")
+             "inv_expiry_days", "inv_chat", "inv_chat_draft")
 # The chat that owns the invite draft (bot.shared.owns_draft). The flow is
 # Admin and DM only, so this is the DM; a step checks it like /issue and
 # /request do.
@@ -533,20 +534,22 @@ async def invite_send(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         "ask_id": ctx.user_data.get("inv_access_ask"),
         "days": ctx.user_data.get("inv_expiry_days") or 0,
     }
-    # The marker holds the flow generation the send started under, so it
-    # blocks only this invite's double tap: a newer invite runs under a later
-    # generation and is not blocked.
-    gen = flow_step_gen(ctx)
-    await q.answer()
-    if ctx.user_data.get("inv_submitting") == gen:
+    # The marker holds the identity of this invite's draft (owner chat plus a
+    # per-draft id), not the user's flow generation, which a command in
+    # another chat bumps between two taps: it blocks only this invite's double
+    # tap, and a newer invite has a draft of its own and is not blocked. It is
+    # set before the first await, so a Cancel tapped while this answers finds
+    # the send running.
+    marker = begin_submit(ctx, "inv_submitting", _OWNER_KEY)
+    if marker is None:
+        await q.answer()
         return ConversationHandler.END
-    ctx.user_data["inv_submitting"] = gen
     try:
+        await q.answer()
         return await _invite_send_inner(update, ctx, **draft)
     finally:
         # Only our own marker: a newer invite's send may have replaced it.
-        if ctx.user_data.get("inv_submitting") == gen:
-            ctx.user_data.pop("inv_submitting", None)
+        end_submit(ctx, "inv_submitting", marker)
 
 
 async def _invite_send_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *,
@@ -669,15 +672,19 @@ async def invite_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             # Cancel on a superseded card must not end the ACTIVE invite.
             await q.answer(_STALE_INVITE_TOAST, show_alert=True)
             return None
-        await q.answer("Cancelled")
-    elif submit_in_flight(ctx, "inv_submitting"):
-        # A typed /cancel while the invite is being sent: the send completes,
-        # so do not say it was cancelled.
-        await update.effective_message.reply_text(
-            "Already sending. The invite can't be cancelled now.")
+    if submit_in_flight(ctx, "inv_submitting", _OWNER_KEY):
+        # A Cancel while the invite is being sent: the send completes, so do
+        # not say it was cancelled.
+        text = "Already sending. The invite can't be cancelled now."
+        if q is not None:
+            await q.answer(text, show_alert=True)
+        else:
+            await update.effective_message.reply_text(text)
         # END, not None: None would make PTB arm a fresh timeout that the
         # submit's own END never removes, and it would fire after the send.
         return ConversationHandler.END
+    if q:
+        await q.answer("Cancelled")
     await end_flow(update, ctx, "Cancelled.", _admin_origin(ctx),
                    typed_text="Cancelled. /invite to start over.")
     # A running send's marker is its own: it pops it when it finishes.
@@ -1246,6 +1253,9 @@ async def uninvite_go(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     ctx.user_data["uninv_submitting"] = True
     try:
+        # A working state, without the keyboard: Keep and a second Remove
+        # have nothing to press while Plex is called.
+        await edit_or_send(q, "⏳ Removing...")
         await _uninvite_go_inner(update, ctx, share_id, was_pending)
     finally:
         ctx.user_data.pop("uninv_submitting", None)
@@ -1288,6 +1298,10 @@ async def uninvite_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     q = update.callback_query
     if update.effective_user.id != ctx.bot_data.get("admin_id"):
         await q.answer("Admin only.", show_alert=True)
+        return
+    if ctx.user_data.get("uninv_submitting"):
+        # A Remove is running: it completes, so do not say nothing changed.
+        await q.answer("Removing now. It can't be cancelled.", show_alert=True)
         return
     await q.answer("Cancelled")
     await end_flow(update, ctx, "Cancelled, nothing changed.", ADMIN_HUB)

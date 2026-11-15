@@ -71,7 +71,8 @@ from bot.shared import (
     require_seerr,
     edit_or_send,
     end_action,
-    flow_step_gen,
+    begin_submit,
+    end_submit,
     submit_in_flight,
     flow_step_is_stale,
     force_end_flow_conversations,
@@ -932,8 +933,9 @@ async def ticket_offer_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
         return None
     choice = args[0] if args else ""
     if choice == "no":
-        await q.edit_message_text("Got it. Submitting your report without auto-fix.")
-        return await _submit_ticket(update, ctx, autofix=False)
+        return await _submit_ticket(
+            update, ctx, autofix=False,
+            before_edit="Got it. Submitting your report without auto-fix.")
     rows = [[
         InlineKeyboardButton("⚠️ Yes, delete & re-search", callback_data=f"{TICKET_AUTOFIX_CONFIRM}:{version}:yes"),
         InlineKeyboardButton("No, report to Admin", callback_data=f"{TICKET_AUTOFIX_CONFIRM}:{version}:no"),
@@ -963,10 +965,12 @@ async def ticket_confirm_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
         return None
     choice = args[0] if args else ""
     if choice == "no":
-        await q.edit_message_text("Skipping auto-fix. Submitting your report.")
-        return await _submit_ticket(update, ctx, autofix=False)
-    await q.edit_message_text("Submitting your report and triggering auto-fix...")
-    return await _submit_ticket(update, ctx, autofix=True)
+        return await _submit_ticket(
+            update, ctx, autofix=False,
+            before_edit="Skipping auto-fix. Submitting your report.")
+    return await _submit_ticket(
+        update, ctx, autofix=True,
+        before_edit="Submitting your report and triggering auto-fix...")
 
 
 _FIX_NOTE_RAN = (
@@ -983,26 +987,32 @@ async def _submit_ticket(
     ctx: ContextTypes.DEFAULT_TYPE,
     *,
     autofix: bool,
+    before_edit: Optional[str] = None,
 ) -> int:
     """Double-tap guard around the real submit: with
     concurrent_updates(True), a second confirm tap runs in parallel and
     would file a duplicate Seerr Ticket. user_data is shared across the
-    user's updates and there is no await between check and set."""
+    user's updates and there is no await between check and set. before_edit
+    is the text the confirm message is edited to once the submit is claimed."""
     if _replaced(update, ctx):
         return await refuse_replaced_draft(update, REPLACED_TEXT)
-    # The marker holds the flow generation the submit started under, so it
-    # blocks only this report's double tap: a /issue started while this one
-    # is still submitting runs under a later generation and is not blocked.
-    gen = flow_step_gen(ctx)
-    if ctx.user_data.get("submitting_ticket") == gen:
+    # The marker holds the identity of this report's draft (owner chat plus
+    # a per-draft id), not the user's flow generation, which a command in
+    # another chat bumps between two taps: it blocks only this report's
+    # double tap, and a /issue started while this one is still submitting has
+    # a draft of its own and is not blocked.
+    marker = begin_submit(ctx, "submitting_ticket", ISSUE_OWNER_KEY)
+    if marker is None:
         return ConversationHandler.END
-    ctx.user_data["submitting_ticket"] = gen
     try:
+        if before_edit is not None:
+            # Edited only now the marker is set: a Cancel button tapped while
+            # this edit is in flight must find the submit already running.
+            await update.callback_query.edit_message_text(before_edit)
         return await _submit_ticket_inner(update, ctx, autofix=autofix)
     finally:
         # Only our own marker: a newer report's submit may have replaced it.
-        if ctx.user_data.get("submitting_ticket") == gen:
-            ctx.user_data.pop("submitting_ticket", None)
+        end_submit(ctx, "submitting_ticket", marker)
 
 
 async def _submit_ticket_inner(
@@ -1271,19 +1281,24 @@ async def ticket_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Optio
             await q.answer()
             await _refuse_stale(update, ctx)
             return None
+    replaced = _replaced(update, ctx)
+    if not replaced and submit_in_flight(ctx, "submitting_ticket", ISSUE_OWNER_KEY):
+        # A Cancel while the report is being filed: it completes, so do not
+        # say it was cancelled.
+        text = "Already sending. The report can't be cancelled now."
+        if q is not None:
+            await q.answer(text, show_alert=True)
+        else:
+            await update.effective_message.reply_text(text)
+        # END, not None: None would make PTB arm a fresh timeout that the
+        # submit's own END never removes, and it would fire after the send.
+        return ConversationHandler.END
+    if q:
         await q.answer("Cancelled")
-    if _replaced(update, ctx):
+    if replaced:
         # The draft is another chat's report now: end only this chat's flow.
         await end_flow(update, ctx, "Cancelled.", None,
                        typed_text="Cancelled. /issue to start over.")
-        return ConversationHandler.END
-    if q is None and submit_in_flight(ctx, "submitting_ticket"):
-        # A typed /cancel while the report is being filed: it completes, so
-        # do not say it was cancelled.
-        await update.effective_message.reply_text(
-            "Already sending. The report can't be cancelled now.")
-        # END, not None: None would make PTB arm a fresh timeout that the
-        # submit's own END never removes, and it would fire after the send.
         return ConversationHandler.END
     await end_flow(update, ctx, "Cancelled.", _tickets_origin(ctx),
                    typed_text="Cancelled. /issue to start over.")
