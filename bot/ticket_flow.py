@@ -993,6 +993,19 @@ _FIX_NOTE_NO_SEARCH = ("Auto-fix requested by reporter: it ran, but no fresh "
                        "download was started")
 
 
+def _draft_snapshot(ctx) -> dict:
+    """Every draft value a submit files, read at once. A newer /issue (here
+    or in another chat) rewrites these keys while the submit awaits."""
+    return {
+        "media": dict(ctx.user_data.get("media") or {}),
+        "issue_type": ctx.user_data.get("issue_type"),
+        "description": ctx.user_data.get("description", ""),
+        "season": ctx.user_data.get("season"),
+        "episode": ctx.user_data.get("episode"),
+        "hub": _tickets_origin(ctx),
+    }
+
+
 async def _submit_ticket(
     update: Update,
     ctx: ContextTypes.DEFAULT_TYPE,
@@ -1025,6 +1038,8 @@ async def _submit_ticket(
         if answer_tap:
             await update.callback_query.answer()
         return ConversationHandler.END
+    # Read before the first await: see _draft_snapshot.
+    snap = _draft_snapshot(ctx)
     try:
         if answer_tap:
             await update.callback_query.answer()
@@ -1033,7 +1048,7 @@ async def _submit_ticket(
             # this edit is in flight must find the submit already running.
             await update.callback_query.edit_message_text(before_edit)
         return await _submit_ticket_inner(update, ctx, autofix=autofix,
-                                          draft=marker[0])
+                                          draft=marker[0], snap=snap)
     finally:
         # Only our own marker: a newer report's submit may have replaced it.
         end_submit(ctx, "submitting_ticket", marker)
@@ -1045,24 +1060,28 @@ async def _submit_ticket_inner(
     *,
     autofix: bool,
     draft: Optional[tuple] = None,
+    snap: Optional[dict] = None,
 ) -> int:
     """`draft` is the identity (draft_identity) of the report being filed,
-    taken when the submit was claimed; the current one when not given."""
+    taken when the submit was claimed, and `snap` its _draft_snapshot taken
+    then; the current ones when not given."""
     if draft is None:
         draft = draft_identity(ctx, ISSUE_OWNER_KEY)
+    if snap is None:
+        snap = _draft_snapshot(ctx)
     await send_typing(update, ctx)  # Seerr create + optional Arr calls are slow
     store: UserStore = ctx.bot_data["store"]
     seerr: SeerrClient = ctx.bot_data["seerr"]
     radarr: Optional[RadarrClient] = ctx.bot_data.get("radarr")
     sonarr: Optional[SonarrClient] = ctx.bot_data.get("sonarr")
 
-    media = ctx.user_data.get("media", {})
-    issue_type = ctx.user_data.get("issue_type")
-    description = ctx.user_data.get("description", "")
-    season = ctx.user_data.get("season")
-    episode = ctx.user_data.get("episode")
+    media = snap["media"]
+    issue_type = snap["issue_type"]
+    description = snap["description"]
+    season = snap["season"]
+    episode = snap["episode"]
 
-    hub = _tickets_origin(ctx)
+    hub = snap["hub"]
     link = await store.get(update.effective_user.id)
     if not (link and link.plex_token and issue_type and media):
         await end_flow(

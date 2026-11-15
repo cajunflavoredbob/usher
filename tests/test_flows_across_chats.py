@@ -1318,10 +1318,28 @@ async def test_a_replaced_refusal_without_a_hub_origin_has_no_buttons():
 # --- a /cancel in a replaced chat whose own submit still files ---------------
 
 async def _hold_dm_submit(rig, monkeypatch=None, at: str = "create_issue"):
-    """The DM report's description is sent and its submit waits inside
-    `at` (Seerr's create_issue, or the typing indicator that is the submit's
-    first await) until the returned gate is set. Returns (gate, task)."""
+    """The DM report is sent and its submit waits inside `at` until the
+    returned gate is set: Seerr's create_issue, or the submit's first await,
+    which is the typing indicator for a typed description (issue type 4) and
+    the tap's answer for the Auto-fix offer's Report to Admin (issue type 1).
+    Returns (gate, task)."""
     gate, entered = asyncio.Event(), asyncio.Event()
+    await rig.issue_to_description(DM_ID, "movie x", 1 if at == "answer" else 4)
+    if at == "answer":
+        await rig.say(DM_ID, "the picture is green")
+        real_answer = ExtBot.answer_callback_query
+
+        async def answer(self_, *a, **kw):
+            if not entered.is_set():
+                entered.set()
+                await gate.wait()
+            return await real_answer(self_, *a, **kw)
+        monkeypatch.setattr(ExtBot, "answer_callback_query", answer)
+        version = rig.user_data["search_version"]
+        task = asyncio.create_task(rig.tap(
+            DM_ID, f"{TICKET_AUTOFIX_OFFER}:{version}:no", rig.last_menu(DM_ID)))
+        await asyncio.wait_for(entered.wait(), 5)
+        return gate, task
     if at == "create_issue":
         async def create_issue(**kw):
             entered.set()
@@ -1332,10 +1350,10 @@ async def _hold_dm_submit(rig, monkeypatch=None, at: str = "create_issue"):
         from bot import ticket_flow as tf
 
         async def send_typing(update, ctx):
-            entered.set()
-            await gate.wait()
+            if update.effective_chat.id == DM_ID and not entered.is_set():
+                entered.set()
+                await gate.wait()
         monkeypatch.setattr(tf, "send_typing", send_typing)
-    await rig.issue_to_description(DM_ID, "movie x", 4)
     task = asyncio.create_task(rig.say(DM_ID, "the picture is green"))
     await asyncio.wait_for(entered.wait(), 5)
     return gate, task
@@ -1365,6 +1383,31 @@ async def test_a_cancel_in_a_replaced_chat_says_its_report_is_still_sending(rig,
     assert any(t.startswith("✅ Reported as ticket #5") for t in rig.texts(DM_ID))
     assert rig.user_data["issue_chat"] == GROUP_ID  # the newer draft is untouched
     assert "submitting_ticket" not in rig.user_data
+
+
+@pytest.mark.parametrize("group", ["started", "at_description"])
+@pytest.mark.parametrize("at", ["send_typing", "answer"])
+async def test_a_report_being_filed_files_its_own_draft_after_a_group_issue(
+        rig, monkeypatch, group, at):
+    """The DM's report is held at its submit's first await while a group
+    /issue starts (and maybe picks another title). The DM report is still
+    filed, with its own title, type and words, and the group's draft stays."""
+    gate, task = await _hold_dm_submit(rig, monkeypatch, at=at)
+    if group == "started":
+        await rig.say(GROUP_ID, "/issue")
+    else:
+        await rig.issue_to_description(GROUP_ID, "alien", 2)
+    gate.set()
+    await task
+    rig.seerr.create_issue.assert_awaited_once()
+    kw = rig.seerr.create_issue.call_args.kwargs
+    assert (kw["seerr_media_id"], kw["issue_type"], kw["message"]) == (
+        10, 1 if at == "answer" else 4, "the picture is green")
+    assert any(t.startswith("✅ Reported as ticket #5") for t in rig.texts(DM_ID))
+    assert rig.user_data["issue_chat"] == GROUP_ID
+    if group == "at_description":
+        assert rig.user_data["media"]["title"] == "Alien"
+        assert rig.user_data["issue_type"] == 2
 
 
 async def test_a_cancel_in_a_replaced_chat_says_its_request_is_still_sending():
