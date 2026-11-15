@@ -23,6 +23,20 @@ def _clear_restart_pending():
     procutil.reset_restart_pending()
 
 
+@pytest.fixture(autouse=True)
+def _clear_global_login_throttle():
+    """webui's global failed-login counter is process-wide: failures one test
+    records must not lock the next test's logins out."""
+    import sys
+    mod = sys.modules.get("webui")
+    if mod is not None:
+        mod._global_throttle._failures.clear()
+    yield
+    mod = sys.modules.get("webui")
+    if mod is not None:
+        mod._global_throttle._failures.clear()
+
+
 @pytest.fixture
 def tmp_settings_path(tmp_path: Path) -> Path:
     return tmp_path / "settings.json"

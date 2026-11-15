@@ -44,6 +44,7 @@ from aiohttp import web
 from auth_util import (
     CSRF_FORM_FIELD,
     MAX_USERNAME_CHARS,
+    THROTTLE_GLOBAL_MAX_FAILURES,
     THROTTLE_IP_MAX_FAILURES,
     _SETUP_TOKEN_UNREADABLE,
     LoginThrottle,
@@ -102,6 +103,10 @@ _ip_throttle = LoginThrottle(max_failures=THROTTLE_IP_MAX_FAILURES)
 # logins skip the two address-keyed throttles above, so strangers sharing the
 # peer address cannot lock a browser that has signed in before out.
 _device_throttle = LoginThrottle()
+# Failed logins from every address together (no known-device cookie only), so
+# a client owning many IPv6 /64s cannot guess freely. Under one fixed key.
+_GLOBAL_KEY = "all"
+_global_throttle = LoginThrottle(max_failures=THROTTLE_GLOBAL_MAX_FAILURES)
 
 # Verified against instead of the real hash when the username doesn't match,
 # so wrong-username and wrong-password attempts cost the same PBKDF2 work
@@ -1369,7 +1374,14 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
             audit("login_throttled_device", ip=ip, seconds_left=int(dev_locked))
             return _locked_response(dev_locked)
     else:
-        # Per-IP aggregate gate FIRST, before any password hashing: a
+        # Global gate first: past the cap every login without a known-device
+        # cookie waits, whatever its address.
+        glob_locked = _global_throttle.is_locked(_GLOBAL_KEY)
+        if glob_locked is not None:
+            audit("login_throttled_global", ip=ip,
+                  seconds_left=int(glob_locked))
+            return _locked_response(glob_locked)
+        # Per-IP aggregate gate next, before any password hashing: a
         # username-rotating flood would otherwise dodge the per-(ip,username)
         # lockout and drive unbounded PBKDF2 work on the event loop. Every
         # username goes through it, so there is no username oracle.
@@ -1410,6 +1422,7 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
             if throttle_key is not None:
                 _throttle.record_failure(throttle_key)
             _ip_throttle.record_failure(tip)
+            _global_throttle.record_failure(_GLOBAL_KEY)
         audit("login_fail", user=username or "-", ip=ip)
         body = _page("Login", _flash(error="Invalid credentials.") +
                      '<p><a href="/admin/login">Try again</a></p>')

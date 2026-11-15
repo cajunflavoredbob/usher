@@ -21,6 +21,8 @@ async def client(tmp_path, monkeypatch):
     monkeypatch.delenv("USHER_WEBHOOK_SECRET", raising=False)
     monkeypatch.setattr(webui, "_throttle", LoginThrottle())
     monkeypatch.setattr(webui, "_ip_throttle", LoginThrottle(max_failures=1000))
+    monkeypatch.setattr(webui, "_global_throttle",
+                        LoginThrottle(max_failures=1000))
     settings_path = tmp_path / "settings.json"
     store = webui.SettingsStore(settings_path)
     store.settings.admin.username = "admin"

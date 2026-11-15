@@ -89,6 +89,30 @@ def test_throttle_key_count_is_capped(monkeypatch):
     assert "ip-9" in t._failures  # newest key always lands
 
 
+def test_eviction_keeps_a_locked_bucket_over_an_unlocked_one(monkeypatch):
+    import auth_util
+    monkeypatch.setattr(auth_util, "THROTTLE_MAX_KEYS", 3)
+    t = LoginThrottle(max_failures=2)
+    t.record_failure("locked")
+    t.record_failure("locked")
+    t.record_failure("open-1")
+    t.record_failure("open-2")
+    for i in range(5):  # filler keys must not push the locked bucket out
+        t.record_failure(f"filler-{i}")
+    assert t.is_locked("locked") is not None
+
+
+def test_when_every_bucket_is_locked_the_soonest_to_unlock_goes(monkeypatch):
+    import auth_util
+    monkeypatch.setattr(auth_util, "THROTTLE_MAX_KEYS", 2)
+    t = LoginThrottle(max_failures=1)
+    t.record_failure("older")
+    t.record_failure("newer")
+    t._failures["older"][0] -= 10  # first failure is older, unlocks sooner
+    t.record_failure("third")
+    assert set(t._failures) == {"newer", "third"}
+
+
 # --- CSRF validation ---
 
 

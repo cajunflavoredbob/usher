@@ -34,6 +34,12 @@ THROTTLE_WINDOW_S = 300
 # Higher than the per-(ip,username) cap so a single fat-fingering admin
 # isn't blocked by it in normal use.
 THROTTLE_IP_MAX_FAILURES = 20
+# Global cap on failed logins from every address together, for logins without
+# a valid known-device cookie. Address keys are cheap for an attacker who owns
+# an IPv6 /48 or more (each /64 is a fresh bucket), so the per-address limits
+# alone do not bound guessing; this one does. A browser that signed in before
+# carries the cookie and is exempt (it has its own per-device lockout).
+THROTTLE_GLOBAL_MAX_FAILURES = 100
 # Hard cap on tracked keys: a botnet spraying unique source
 # addresses must not grow the map toward OOM. Far above any legitimate
 # concurrent-attacker count for a single-admin LAN app.
@@ -94,7 +100,10 @@ class LoginThrottle:
                 self._failures.pop(k, None)
                 return
         if self._failures:
-            self._failures.pop(next(iter(self._failures)))
+            # Every bucket is locked: drop the one that unlocks soonest (the
+            # oldest first failure), which hands the least to an attacker.
+            self._failures.pop(min(self._failures,
+                                   key=lambda k: self._failures[k][0]))
 
 
 def safe_compare(a: str, b: str) -> bool:

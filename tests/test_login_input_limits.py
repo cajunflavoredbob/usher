@@ -490,3 +490,80 @@ async def test_password_change_with_a_file_part_is_a_400_not_500(client):
             {webui.SESSION_COOKIE: session0, "usher_csrf": bound})
         assert resp.status == 400
     assert client.settings_store.settings.admin.password_version == 0
+
+
+def test_the_global_failure_cap_is_one_hundred():
+    assert auth_util.THROTTLE_GLOBAL_MAX_FAILURES == 100
+    assert webui._global_throttle._max_failures == 100
+
+
+async def _spray_global(client, monkeypatch, limit=5):
+    """One failure from each of `limit` different /64s: no per-address
+    lockout trips, only the global one."""
+    monkeypatch.setattr(webui, "_global_throttle",
+                        LoginThrottle(max_failures=limit))
+    for i in range(limit):
+        resp = await _post_login_from(
+            client, f"2001:db8:{i + 1:x}::1", "u" * 500, "x")
+        assert resp.status == 401
+
+
+async def test_failures_spread_over_many_64s_hit_the_global_cap(
+        proxied_client, monkeypatch):
+    await _spray_global(proxied_client, monkeypatch)
+    for addr in ("2001:db8:ff::1", "198.51.100.9"):
+        resp = await _post_login_from(
+            proxied_client, addr, "admin", "right-password")
+        assert resp.status == 429
+        assert "Retry-After" in resp.headers
+
+
+async def test_global_cap_leaves_a_known_device_alone(
+        proxied_client, monkeypatch):
+    await _spray_global(proxied_client, monkeypatch)
+    device = webui._make_device_cookie(SECRET, "admin", 0, "dev-1")
+    csrf = webui.generate_csrf_token(SECRET)
+    resp = await proxied_client.post(
+        "/admin/login",
+        data={"username": "admin", "password": "right-password",
+              "csrf_token": csrf},
+        cookies={"usher_csrf": csrf, "usher_device": device},
+        headers={"X-Forwarded-For": "2001:db8:ee::1"}, allow_redirects=False)
+    assert resp.status == 302
+
+
+async def test_known_device_failures_do_not_count_globally(
+        proxied_client, monkeypatch):
+    monkeypatch.setattr(webui, "_global_throttle", LoginThrottle(max_failures=2))
+    device = webui._make_device_cookie(SECRET, "admin", 0, "dev-1")
+    csrf = webui.generate_csrf_token(SECRET)
+    for _ in range(3):
+        resp = await proxied_client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "wrong",
+                  "csrf_token": csrf},
+            cookies={"usher_csrf": csrf, "usher_device": device},
+            headers={"X-Forwarded-For": "2001:db8:ee::1"},
+            allow_redirects=False)
+        assert resp.status == 401
+    assert webui._global_throttle._failures == {}
+
+
+async def test_the_global_cap_ages_out(proxied_client, monkeypatch):
+    await _spray_global(proxied_client, monkeypatch)
+    (bucket,) = webui._global_throttle._failures.values()
+    for i in range(len(bucket)):
+        bucket[i] -= auth_util.THROTTLE_WINDOW_S + 1
+    resp = await _post_login_from(
+        proxied_client, "2001:db8:ff::1", "admin", "right-password")
+    assert resp.status == 302
+
+
+async def test_a_blocked_attempt_is_not_counted_again(
+        proxied_client, monkeypatch):
+    await _spray_global(proxied_client, monkeypatch)
+    for _ in range(3):
+        await _post_login_from(
+            proxied_client, "2001:db8:ff::1", "u" * 500, "x")
+    (bucket,) = webui._global_throttle._failures.values()
+    assert len(bucket) == 5
