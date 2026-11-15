@@ -250,3 +250,17 @@ async def test_fix_refusal_records_its_message_so_the_gated_back_works():
         await global_btn_gate(tap, ctx)
     except ApplicationHandlerStop:
         pytest.fail("the gate refused the Back on the Fix refusal")
+
+
+async def test_fix_menu_names_no_arr_when_the_preview_itself_crashes(monkeypatch):
+    from bot import tickets
+    ctx = _admin_ctx()
+
+    async def boom(*a, **k):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(tickets, "resolve_fix_context", boom)
+    upd = make_update(callback_data="tkf:5", user_id=ADMIN)
+    await tk_fix(upd, ctx)
+    text = upd.callback_query.edits[-1]["text"]
+    assert "Couldn't check which file this is." in text and "how?" in text
+    assert "Sonarr" not in text and "Radarr" not in text

@@ -188,7 +188,7 @@ def _live(rig, name: str, chat_id: int) -> bool:
 
 
 async def test_a_group_issue_takes_over_the_draft_so_the_dm_files_and_fixes_nothing(rig):
-    """The pass-6 case: the DM report waits for its description while a group
+    """The DM report waits for its description while a group
     /issue picks Alien. The DM text must not file against Alien, and its
     Auto-fix taps must not delete Alien's file."""
     await rig.issue_to_description(DM_ID, "movie x", 1)
@@ -1422,3 +1422,20 @@ async def test_an_invite_confirm_holds_its_marker_before_it_answers(monkeypatch)
     _answer_sees_marker(upd, ctx, "inv_submitting", seen)
     await invite_flow.invite_send(upd, ctx)
     assert seen == [True]
+
+
+def test_each_flows_owner_and_draft_id_keys_are_cleared_with_its_draft():
+    from bot.invite_flow import _INV_KEYS
+    from bot.shared import (_DRAFT_SUFFIX, ISSUE_KEYS, ISSUE_OWNER_KEY, RQ_KEYS,
+                            RQ_OWNER_KEY)
+    for owner, keys in ((ISSUE_OWNER_KEY, ISSUE_KEYS), (RQ_OWNER_KEY, RQ_KEYS),
+                        ("inv_chat", _INV_KEYS)):
+        assert owner in keys and owner + _DRAFT_SUFFIX in keys
+
+
+def test_the_reply_marker_list_is_the_one_every_clear_uses():
+    from bot.shared import REPLY_CHAT_KEY, REPLY_MARKER_KEYS
+    assert "tk_reply_from_list" in REPLY_MARKER_KEYS
+    assert REPLY_CHAT_KEY in REPLY_MARKER_KEYS
+    assert set(REPLY_MARKER_KEYS) <= set(app_mod._CONVERSATION_USER_DATA_KEYS)
+    assert (REPLY_CHAT_KEY, REPLY_MARKER_KEYS) in app_mod._ERROR_KEY_OWNERS

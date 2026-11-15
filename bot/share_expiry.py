@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from const import DB_TIME as _DB_TIME
+from const import db_time, parse_db_time
 
 # The Expiry choices, in days. 0 stands for Never (or Clear on a Share view).
 EXPIRY_DAYS = (7, 30, 90)
@@ -15,11 +15,10 @@ EXPIRY_DAYS = (7, 30, 90)
 def expires_at_text(days: int, now: Optional[datetime] = None) -> str:
     """The UTC text stored for an Expiry `days` days from `now`."""
     now = now or datetime.now(timezone.utc)
-    return (now + timedelta(days=days)).astimezone(
-        timezone.utc).strftime(_DB_TIME)
+    return db_time(now + timedelta(days=days))
 
 
 def expiry_date_text(expires_at: str) -> str:
     """"Dec 14, 2026" for a stored Expiry (its UTC date)."""
-    when = datetime.strptime(expires_at, _DB_TIME)
+    when = parse_db_time(expires_at)
     return f"{when:%b} {when.day}, {when.year}"

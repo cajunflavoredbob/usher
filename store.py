@@ -240,6 +240,16 @@ class PendingAutofix:
         return ids
 
 
+# One user's Fix uses in the last 24 hours (a refunded one does not count):
+# the daily-limit read and log_autofix's in-transaction check share it.
+_AUTOFIX_24H_COUNT_SQL = """
+    SELECT COUNT(*) FROM autofix_events
+    WHERE telegram_id = ?
+      AND occurred_at >= datetime('now', '-24 hours')
+      AND refunded = 0
+"""
+
+
 class UserStore:
     def __init__(self, db_path: str | Path, crypto: Optional[TokenCrypto] = None):
         self.path = Path(db_path)
@@ -1529,14 +1539,7 @@ class UserStore:
         def _do() -> int:
             with self._conn() as c:
                 row = c.execute(
-                    """
-                    SELECT COUNT(*) FROM autofix_events
-                    WHERE telegram_id = ?
-                      AND occurred_at >= datetime('now', '-24 hours')
-                      AND refunded = 0
-                    """,
-                    (telegram_id,),
-                ).fetchone()
+                    _AUTOFIX_24H_COUNT_SQL, (telegram_id,)).fetchone()
             return row[0] if row else 0
 
         return await self._run(_do)
@@ -1563,14 +1566,7 @@ class UserStore:
                 if limit is not None:
                     c.execute("BEGIN IMMEDIATE")
                     row = c.execute(
-                        """
-                        SELECT COUNT(*) FROM autofix_events
-                        WHERE telegram_id = ?
-                          AND occurred_at >= datetime('now', '-24 hours')
-                          AND refunded = 0
-                        """,
-                        (telegram_id,),
-                    ).fetchone()
+                        _AUTOFIX_24H_COUNT_SQL, (telegram_id,)).fetchone()
                     if row and row[0] >= limit:
                         return None
                 return c.execute(

@@ -21,6 +21,7 @@ from seerr import PlexTokenInvalidError, SeerrClient
 from bot.ask_admin import ask_admin_button
 from bot.callback_prefixes import RESOLVE
 from bot.shared import (
+    REPLACED_PROMPT_TEXT,
     DECRYPT_FAILED_MSG,
     AWAIT_COMMENT,
     RELINK_RESUME_EXECUTORS,
@@ -41,9 +42,6 @@ logger = logging.getLogger("usher")
 # overwrites awaiting_comment_for; only that chat's text, /cancel or timeout
 # may use or clear it.
 _COMMENT_CHAT_KEY = "awaiting_comment_chat"
-# Text typed in the older chat once a newer prompt took the marker over.
-REPLACED_PROMPT_TEXT = ("That reply prompt was replaced by one you opened in "
-                        "another chat.")
 # The chats whose prompt a newer one in another chat took over. Kept apart
 # from the marker, which the newer prompt clears when it ends: the older chat
 # still gets REPLACED_PROMPT_TEXT then. A prompt sent in a chat takes it off.

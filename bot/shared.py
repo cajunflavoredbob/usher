@@ -1108,12 +1108,14 @@ def owns_draft(ctx, update, owner_key: str) -> bool:
     if chat_id is None:
         return True
     claimed = (ctx.user_data.get(owner_key + _CLAIMS_SUFFIX) or {}).get(chat_id)
-    if claimed is not None and claimed != ctx.user_data.get(owner_key + "_draft"):
+    if claimed is not None and claimed != ctx.user_data.get(owner_key + _DRAFT_SUFFIX):
         return False
     return owner is None or owner == chat_id
 
 
 _DRAFT_SEQ_KEY: Final = "draft_seq"
+# A draft's id is kept under <owner key> + this suffix (issue_chat_draft, ...).
+_DRAFT_SUFFIX: Final = "_draft"
 # Per draft kind, the id of the draft each chat's flow last claimed:
 # {chat_id: draft id} under `<owner_key>_claims`. No draft clear empties it, so
 # a chat whose draft a newer flow in another chat took over keeps refusing
@@ -1138,7 +1140,7 @@ def claim_draft(ctx, update, owner_key: str) -> None:
     ctx.user_data[owner_key] = chat_id
     seq = (ctx.user_data.get(_DRAFT_SEQ_KEY) or 0) + 1
     ctx.user_data[_DRAFT_SEQ_KEY] = seq
-    ctx.user_data[owner_key + "_draft"] = seq
+    ctx.user_data[owner_key + _DRAFT_SUFFIX] = seq
     ctx.user_data.setdefault(owner_key + _CLAIMS_SUFFIX, {})[chat_id] = seq
 
 
@@ -1146,7 +1148,7 @@ def draft_identity(ctx, owner_key: str) -> tuple:
     """Who a per-user draft is: (owner chat, per-draft id). A submit's
     double-tap marker is keyed on it, not on the user's flow generation,
     which a command in ANOTHER chat bumps between two taps of one confirm."""
-    return (ctx.user_data.get(owner_key), ctx.user_data.get(owner_key + "_draft"))
+    return (ctx.user_data.get(owner_key), ctx.user_data.get(owner_key + _DRAFT_SUFFIX))
 
 
 def submit_marker_matches(ctx, marker_key: str, owner_key: str) -> bool:
@@ -1212,7 +1214,15 @@ async def refuse_replaced_draft(update, text: str, ctx=None) -> int:
 # The owner chat of each per-user draft (see owns_draft).
 ISSUE_OWNER_KEY: Final = "issue_chat"
 RQ_OWNER_KEY: Final = "rq_chat"
-_REPLY_CHAT_KEY: Final = "tk_reply_chat"
+REPLY_CHAT_KEY: Final = "tk_reply_chat"
+# Every user_data marker of a running Reply or Close with comment prompt; the
+# one list that force-end, the prompt's own clear and an error all use.
+REPLY_MARKER_KEYS: Final = ("tk_reply_id", "tk_close_after", "tk_reply_from_list",
+                            REPLY_CHAT_KEY)
+# Text typed in the older chat once a newer reply or comment prompt in another
+# chat took the markers over (tickets.py and resolve_flow.py).
+REPLACED_PROMPT_TEXT: Final = ("That reply prompt was replaced by one you "
+                               "opened in another chat.")
 
 
 def force_end_flow_conversations(ctx: ContextTypes.DEFAULT_TYPE,
@@ -1275,9 +1285,9 @@ def force_end_flow_conversations(ctx: ContextTypes.DEFAULT_TYPE,
             job = conv.timeout_jobs.pop(key, None)
             if job is not None:
                 job.schedule_removal()
-    reply_chat = ctx.user_data.get(_REPLY_CHAT_KEY)
+    reply_chat = ctx.user_data.get(REPLY_CHAT_KEY)
     if reply_chat is None or chat_id is None or reply_chat == chat_id:
-        for marker in ("tk_reply_id", "tk_close_after", _REPLY_CHAT_KEY):
+        for marker in REPLY_MARKER_KEYS:
             ctx.user_data.pop(marker, None)
     chat = getattr(update, "effective_chat", None)
     if chat is None or getattr(chat, "type", None) == ChatType.PRIVATE:
@@ -1326,9 +1336,10 @@ def flow_step_is_stale(ctx) -> bool:
 
 def flow_step_gen(ctx) -> int:
     """The flow generation the running step started under (the user's current
-    one outside a guarded step). A submit stamps its in-flight marker with it,
-    so a newer flow, which starts under a later generation, is not blocked by
-    an older flow's submit that is still running."""
+    one outside a guarded step). A submit stamps its in-flight marker with it
+    (begin_submit) so submit_in_flight can tell whether this chat's flows were
+    force-ended since the submit started; the marker's identity for the double
+    tap is the draft's (draft_identity), not this generation."""
     cell = _STEP_GEN.get()
     return cell[0] if cell is not None else _flow_gen(ctx)
 

@@ -183,13 +183,13 @@ def _clear_issue_state(ctx, *, keep_resume: bool = False) -> None:
 
 
 async def _ticket_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    if not timeout_is_live(ctx, update, "issue"):
-        return ConversationHandler.END
     """Conversation_timeout handler. Clears every user_data key the new-Ticket
     flow can populate so an abandoned conversation doesn't leak state for
     the life of the process (a stale research_parent otherwise resurfaces
     as a wrong search suggestion in the next /issue). A report that a newer
     /issue in another chat replaced ends quietly and leaves that draft."""
+    if not timeout_is_live(ctx, update, "issue"):
+        return ConversationHandler.END
     if _replaced(update, ctx):
         return ConversationHandler.END
     hub = _tickets_origin(ctx)

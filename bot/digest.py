@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -25,7 +25,7 @@ from telegram.ext import ContextTypes
 from bot.callback_prefixes import DIGEST_INFO, NOTICE_TOGGLE
 from bot.hub import back_button
 from bot.media_card import send_detail_card
-from const import DB_TIME as _DB_TIME
+from const import db_time
 from bot.shared import (
     FOLLOW_PINGS_OFF, NOT_LINKED_MSG, edit_or_send, follow_pings_off,
     record_btn, watch_now_button)
@@ -43,8 +43,7 @@ def _day_window(now: datetime) -> tuple[str, str]:
     """The previous local calendar day as UTC database times [start, end)."""
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     start = today - timedelta(days=1)
-    return (start.astimezone(timezone.utc).strftime(_DB_TIME),
-            today.astimezone(timezone.utc).strftime(_DB_TIME))
+    return db_time(start), db_time(today)
 
 
 def _group(rows: list[tuple]) -> tuple[list[tuple], list[tuple]]:

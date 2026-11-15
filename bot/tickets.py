@@ -62,6 +62,9 @@ from bot.hub import (back_button, came_from_hub, end_markup,
                      keyboard_callbacks, send_hub, try_again_button)
 from bot.tickets_hub import TICKETS_HUB, list_back_button
 from bot.shared import (
+    REPLACED_PROMPT_TEXT,
+    REPLY_CHAT_KEY,
+    REPLY_MARKER_KEYS,
     truncate_message,
     DECRYPT_FAILED_MSG,
     NOT_LINKED_MSG,
@@ -982,7 +985,7 @@ async def tk_reply_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         _take_reply_prompt(ctx, update.effective_chat.id)
         ctx.user_data["tk_reply_id"] = ticket_id
         ctx.user_data["tk_close_after"] = False
-        ctx.user_data[_REPLY_CHAT_KEY] = update.effective_chat.id
+        ctx.user_data[REPLY_CHAT_KEY] = update.effective_chat.id
         ctx.user_data["tk_reply_from_list"] = _opened_from_list(q.message)
         # Strip the inline buttons but keep the original ticket-announcement text,
         # then prompt for the reply text in a separate message.
@@ -1031,7 +1034,7 @@ async def tk_close_with_comment_start(update: Update, ctx: ContextTypes.DEFAULT_
         _take_reply_prompt(ctx, update.effective_chat.id)
         ctx.user_data["tk_reply_id"] = ticket_id
         ctx.user_data["tk_close_after"] = True
-        ctx.user_data[_REPLY_CHAT_KEY] = update.effective_chat.id
+        ctx.user_data[REPLY_CHAT_KEY] = update.effective_chat.id
         ctx.user_data["tk_reply_from_list"] = _opened_from_list(q.message)
         # Strip the inline buttons but keep the original ticket-announcement text,
         # then prompt for the closing comment in a separate message.
@@ -1047,14 +1050,10 @@ async def tk_close_with_comment_start(update: Update, ctx: ContextTypes.DEFAULT_
         end_action(ctx, start_key)
 
 
-# The chat a Reply or Close with comment was started in. user_data is per
-# user while the conversation is per chat, so a newer start in another chat
-# overwrites the markers; only that chat's text, /cancel or timeout may use
-# or clear them.
-_REPLY_CHAT_KEY: Final = "tk_reply_chat"
-# Text typed in the older chat once a newer start took the markers over.
-REPLACED_PROMPT_TEXT: Final = ("That reply prompt was replaced by one you "
-                               "opened in another chat.")
+# REPLY_CHAT_KEY (bot.shared) holds the chat a Reply or Close with comment was
+# started in. user_data is per user while the conversation is per chat, so a
+# newer start in another chat overwrites the markers; only that chat's text,
+# /cancel or timeout may use or clear them.
 # The chats whose prompt a newer start in another chat took over. Kept apart
 # from the markers, which the newer prompt clears when it ends: the older chat
 # still gets REPLACED_PROMPT_TEXT then. A start in a chat takes it off.
@@ -1065,7 +1064,7 @@ def _take_reply_prompt(ctx, chat_id: int) -> None:
     """A Reply or Close with comment starts in `chat_id`: a prompt still
     open in another chat is replaced, and this chat's is no longer."""
     replaced = ctx.user_data.setdefault(_REPLACED_CHATS_KEY, set())
-    previous = ctx.user_data.get(_REPLY_CHAT_KEY)
+    previous = ctx.user_data.get(REPLY_CHAT_KEY)
     if previous is not None and previous != chat_id:
         replaced.add(previous)
     replaced.discard(chat_id)
@@ -1075,7 +1074,7 @@ def _owns_reply_state(ctx, update) -> bool:
     """True when the reply markers were set in this update's chat (or the
     update names no chat, as a bare timeout may)."""
     chat = getattr(update, "effective_chat", None)
-    return chat is None or ctx.user_data.get(_REPLY_CHAT_KEY) == chat.id
+    return chat is None or ctx.user_data.get(REPLY_CHAT_KEY) == chat.id
 
 
 def _clear_reply_state(ctx, update) -> None:
@@ -1083,8 +1082,7 @@ def _clear_reply_state(ctx, update) -> None:
     them now."""
     if not _owns_reply_state(ctx, update):
         return
-    for key in ("tk_reply_id", "tk_close_after", "tk_reply_from_list",
-                _REPLY_CHAT_KEY):
+    for key in REPLY_MARKER_KEYS:
         ctx.user_data.pop(key, None)
 
 
@@ -1103,7 +1101,7 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         # anything. Say so rather than drop it.
         replaced = ctx.user_data.get(_REPLACED_CHATS_KEY) or set()
         if (update.effective_chat.id in replaced
-                or ctx.user_data.get(_REPLY_CHAT_KEY) is not None):
+                or ctx.user_data.get(REPLY_CHAT_KEY) is not None):
             await update.effective_message.reply_text(REPLACED_PROMPT_TEXT)
         return ConversationHandler.END
     ticket_id = ctx.user_data.get("tk_reply_id")

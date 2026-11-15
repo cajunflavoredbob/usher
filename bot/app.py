@@ -161,6 +161,8 @@ from bot.ask_admin import ask_admin
 from bot.shared import (
     ISSUE_KEYS,
     ISSUE_OWNER_KEY,
+    REPLY_CHAT_KEY,
+    REPLY_MARKER_KEYS,
     RQ_OWNER_KEY,
     edit_or_send,
     in_group_chat,
@@ -1076,8 +1078,7 @@ async def _post_shutdown(app: Application) -> None:
 # must leave the marker, so the rest of that flow refuses instead of going on
 # as the Admin's own Request (request_flow._PICKED_KEY; only the private-chat
 # entry points pop it).
-_CONVERSATION_USER_DATA_KEYS = (
-    "tk_reply_id", "tk_close_after", "tk_reply_chat",
+_CONVERSATION_USER_DATA_KEYS = REPLY_MARKER_KEYS + (
     "link_active_loop", "link_retry_ok", "hub_origin",
     "media", "search_results", "seasons", "season",
     "episode", "issue_type", "description",
@@ -1101,7 +1102,7 @@ _CONVERSATION_USER_DATA_KEYS = (
 # back button.
 _DRAFT_OWNER_KEYS = (ISSUE_OWNER_KEY, RQ_OWNER_KEY, "inv_chat")
 _ERROR_KEY_OWNERS = (
-    ("tk_reply_chat", ("tk_reply_id", "tk_close_after", "tk_reply_chat")),
+    (REPLY_CHAT_KEY, REPLY_MARKER_KEYS),
     ("awaiting_comment_chat", ("awaiting_comment_for", "awaiting_comment_chat")),
     (ISSUE_OWNER_KEY, tuple(k for k in ISSUE_KEYS if k != "hub_origin")),
     (RQ_OWNER_KEY, _RQ_KEYS),

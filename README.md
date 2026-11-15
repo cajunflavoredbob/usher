@@ -218,6 +218,11 @@ Because users sign in with Plex, Usher authenticates to Seerr **as the user** (v
 - `settings.py`, `const.py`: settings model/persistence and named constants.
 - `http_util.py`, `fix_result.py`: API error contracts and retry, auto-fix result types.
 - `auth_util.py`, `backup_crypto.py`: admin auth/CSRF/throttle, passphrase-wrapped backups.
+- `fsutil.py`, `procutil.py`: crash-safe small-file writes, and the clean-exit/restart-pending helpers shared by the bot and the panel.
+- `fix_kinds.py`: the stored names of a Fix's kind and outcome.
+- `former_name.py`: the pre-rename names that old settings, environment variables and backups still load under until 1.0.0.
+- `_version.py`: the one place the version string lives.
+- `scripts/render_assets.cjs`: renders the PNGs in `assets/` from their SVG sources.
 - `Dockerfile`, `docker-compose.yml`, `.env.example`, `unraid-template.xml`
 - `icon.png` / `icon.svg`: the app icon. `assets/`: the bot's profile photo and welcome picture, each with its SVG source.
 - `.github/workflows/`: tests gate releases; images publish to GHCR and Docker Hub on tag.
