@@ -326,3 +326,9 @@ async def test_a_users_confirm_shows_their_own_quota_despite_a_leftover_pick():
     await _show_confirm(upd, ctx)
     assert [c.args[0] for c in ctx.bot_data["seerr"].get_quota.call_args_list] == [7]
     assert "Quota: 2 of 5 requests left" in upd.callback_query.edits[-1]["text"]
+
+
+def test_both_texts_for_a_lost_pick_say_the_request_was_ended():
+    from bot.request_flow import _TARGET_CLEARED_TEXT, _TARGET_CLEARED_TYPED
+    for text in (_TARGET_CLEARED_TEXT, _TARGET_CLEARED_TYPED):
+        assert CLEARED in text and "cleared" not in text

@@ -156,5 +156,5 @@ async def test_a_right_current_password_clears_the_count(env):
     good = dict(bad, current=REAL_PW)
     assert (await client.post("/admin/password", data=good,
                               cookies=_cookies())).status == 200
-    assert webui._password_change_throttle.is_locked(
-        _SESSION.rsplit(".", 1)[-1]) is None
+    # The four wrong answers no longer count: not even a bucket is left.
+    assert _SESSION.rsplit(".", 1)[-1] not in webui._password_change_throttle._failures
