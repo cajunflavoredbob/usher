@@ -411,8 +411,8 @@ def _revoked_then_filed(rig) -> None:
     (GROUP_ID, "alien", 20), (DM_ID, "movie x", 10)])
 async def test_a_report_cut_off_by_a_revoked_sign_in_is_filed_once_after_a_dm_link(
         rig, monkeypatch, chat_id, title, media_id):
-    """The pass-8 case is the group report: the resume runs in the DM, where
-    the group's draft is not the DM's own, and it must still be filed."""
+    """For a group report the resume runs in the DM, where the group's draft
+    is not the DM's own, and the report must still be filed."""
     _revoked_then_filed(rig)
     await rig.issue_to_description(chat_id, title, 4)
     await rig.say(chat_id, "no sound at all")
