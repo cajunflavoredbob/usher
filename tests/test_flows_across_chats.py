@@ -10,6 +10,7 @@ only its own chat's flows; each draft records the chat that owns it, and a
 flow in another chat refuses to act on a draft a newer flow took over."""
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,7 +24,8 @@ import bot.app as app_mod
 from bot.callback_prefixes import (ISSUE_TYPE, REQUESTS_MINE, RESOLVE, RQ_GO,
                                    RQ_MEDIA, TICKET_AUTOFIX_CONFIRM,
                                    TICKET_AUTOFIX_OFFER, TICKET_MEDIA,
-                                   TK_CLOSE_WITH_COMMENT, TK_REPLY)
+                                   TICKETS_REPORT, TK_CLOSE_WITH_COMMENT,
+                                   TK_REPLY)
 from seerr import CreatedIssue, MediaResult
 from tests._handler_harness import make_ctx, make_link
 
@@ -1315,18 +1317,54 @@ async def test_a_replaced_refusal_without_a_hub_origin_has_no_buttons():
 
 # --- a /cancel in a replaced chat whose own submit still files ---------------
 
-async def test_a_cancel_in_a_replaced_chat_says_its_report_is_still_sending():
-    from bot.ticket_flow import ticket_cancel
-    from tests._handler_harness import make_update
-    # The DM (claim 5) is submitting; a group /issue (claim 6) took the draft.
-    ctx = make_ctx(admin_id=USER_ID, user_data={
-        "issue_chat": GROUP_ID, "issue_chat_draft": 6,
-        "issue_chat_claims": {DM_ID: 5, GROUP_ID: 6},
-        "submitting_ticket": ((DM_ID, 5), 0)})
-    upd = make_update(text="/cancel", user_id=USER_ID, chat_id=DM_ID)
-    await ticket_cancel(upd, ctx)
-    assert upd.effective_message.reply_calls[-1]["text"].startswith("Already sending")
-    assert ctx.user_data["issue_chat"] == GROUP_ID  # the newer draft is untouched
+async def _hold_dm_submit(rig, monkeypatch=None, at: str = "create_issue"):
+    """The DM report's description is sent and its submit waits inside
+    `at` (Seerr's create_issue, or the typing indicator that is the submit's
+    first await) until the returned gate is set. Returns (gate, task)."""
+    gate, entered = asyncio.Event(), asyncio.Event()
+    if at == "create_issue":
+        async def create_issue(**kw):
+            entered.set()
+            await gate.wait()
+            return CreatedIssue(id=5, url="https://seerr.example/5")
+        rig.seerr.create_issue = AsyncMock(side_effect=create_issue)
+    else:
+        from bot import ticket_flow as tf
+
+        async def send_typing(update, ctx):
+            entered.set()
+            await gate.wait()
+        monkeypatch.setattr(tf, "send_typing", send_typing)
+    await rig.issue_to_description(DM_ID, "movie x", 4)
+    task = asyncio.create_task(rig.say(DM_ID, "the picture is green"))
+    await asyncio.wait_for(entered.wait(), 5)
+    return gate, task
+
+
+async def _new_report_in_group(rig, how: str) -> None:
+    if how == "typed":
+        await rig.say(GROUP_ID, "/issue")
+    else:
+        rig.recorded(GROUP_ID, 620)
+        await rig.tap(GROUP_ID, TICKETS_REPORT, 620)
+    assert rig.user_data["issue_chat"] == GROUP_ID
+
+
+@pytest.mark.parametrize("how", ["typed", "hub"])
+async def test_a_cancel_in_a_replaced_chat_says_its_report_is_still_sending(rig, how):
+    """The DM's report is being filed when a group /issue (or the Tickets
+    Hub's Report a problem there) starts a new report. A /cancel in the DM
+    must not say "Cancelled." while that report still lands."""
+    gate, task = await _hold_dm_submit(rig)
+    await _new_report_in_group(rig, how)
+    await rig.say(DM_ID, "/cancel")
+    assert rig.texts(DM_ID)[-1].startswith("Already sending")
+    gate.set()
+    await task
+    rig.seerr.create_issue.assert_awaited_once()
+    assert any(t.startswith("✅ Reported as ticket #5") for t in rig.texts(DM_ID))
+    assert rig.user_data["issue_chat"] == GROUP_ID  # the newer draft is untouched
+    assert "submitting_ticket" not in rig.user_data
 
 
 async def test_a_cancel_in_a_replaced_chat_says_its_request_is_still_sending():

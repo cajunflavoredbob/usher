@@ -159,9 +159,14 @@ def _replaced(update, ctx) -> bool:
     return not owns_draft(ctx, update, ISSUE_OWNER_KEY)
 
 
-def _clear_issue_state(ctx, *, keep_resume: bool = False) -> None:
+def _clear_issue_state(ctx, *, keep_resume: bool = False,
+                       keep_submit: bool = False) -> None:
+    # keep_submit leaves a running submit's marker, which is its own: it pops
+    # it when it finishes. A new report or a cancel passes it, so a /cancel
+    # in the chat whose report is still being filed says so.
     for key in ISSUE_KEYS:
-        ctx.user_data.pop(key, None)
+        if not (keep_submit and key == "submitting_ticket"):
+            ctx.user_data.pop(key, None)
     # A resume marker for this flow's own submit is stale once the flow ends;
     # markers other flows left (a Request, a Ticket reply) stay. A NEW report
     # keeps it (keep_resume), flagged superseded: when the re-link finishes,
@@ -279,7 +284,7 @@ def _new_ticket_conversation() -> ConversationHandler:
 
 async def ticket_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     # A typed /issue is never a Hub flow, even if a Hub left its mark behind.
-    _clear_issue_state(ctx, keep_resume=True)
+    _clear_issue_state(ctx, keep_resume=True, keep_submit=True)
     claim_draft(ctx, update, ISSUE_OWNER_KEY)
     set_hub_origin(ctx, None)
     # A restart makes every button of the earlier report stale, even before
@@ -318,7 +323,7 @@ async def ticket_hub_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     q = update.callback_query
     await q.answer()
     force_end_flow_conversations(ctx, update)
-    _clear_issue_state(ctx, keep_resume=True)
+    _clear_issue_state(ctx, keep_resume=True, keep_submit=True)
     claim_draft(ctx, update, ISSUE_OWNER_KEY)
     set_hub_origin(ctx, TICKETS_HUB)
     _bump_version(ctx)
@@ -1343,11 +1348,7 @@ async def ticket_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Optio
         return ConversationHandler.END
     await end_flow(update, ctx, "Cancelled.", _tickets_origin(ctx),
                    typed_text="Cancelled. /issue to start over.")
-    # A running submit's marker is its own: it pops it when it finishes.
-    submitting = ctx.user_data.get("submitting_ticket")
-    _clear_issue_state(ctx)
-    if submitting is not None:
-        ctx.user_data["submitting_ticket"] = submitting
+    _clear_issue_state(ctx, keep_submit=True)
     return ConversationHandler.END
 
 
