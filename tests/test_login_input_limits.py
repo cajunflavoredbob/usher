@@ -165,7 +165,7 @@ async def test_setup_rejects_long_username(tmp_path, monkeypatch):
     assert not store.settings.admin.is_set()
 
 
-# --- ticket 37: IPv6 /64 throttle key, password-change race ----------------
+# --- IPv6 /64 throttle key, password-change race -----------------------------
 
 def _post_login_from(client, forwarded_for, username, password):
     csrf = webui.generate_csrf_token(SECRET)
@@ -271,25 +271,34 @@ async def test_login_in_flight_during_password_change_gets_a_dead_session(
     assert probe.headers["Location"].endswith("/admin/login")
 
 
-async def test_login_refuses_when_the_hash_changed_during_verify(
+async def test_password_change_parked_on_login_lock_yields_to_a_restore(
         client, monkeypatch):
-    import threading
-    real = webui.verify_password
-    store = client.settings_store
-
-    def swap_then_verify(password, stored):
-        ok = real(password, stored)
-        store.settings.admin.password_hash = webui.hash_password("other-pw-123")
-        store.settings.admin.password_version += 1
-        return ok
-
-    monkeypatch.setattr(webui, "verify_password", swap_then_verify)
-    resp = await _post_login(client, "admin", "right-password")
-    assert resp.status == 401
-    assert webui.SESSION_COOKIE not in resp.cookies
-    # not the client's failure: nothing counted
-    assert webui._throttle._failures == {}
-    assert webui._ip_throttle._failures == {}
+    import asyncio
+    import procutil
+    started, release = _hold_first_verify(monkeypatch)
+    login = asyncio.ensure_future(
+        _post_login(client, "admin", "right-password"))
+    await _until(started)
+    session0 = webui._make_session_cookie(SECRET, "admin", 0)
+    bound = webui.generate_csrf_token(SECRET, session0.rsplit(".", 1)[-1])
+    old_hash = client.settings_store.settings.admin.password_hash
+    change = asyncio.ensure_future(client.post(
+        "/admin/password",
+        data={"csrf_token": bound, "current": "right-password",
+              "new": "brand-new-password-1", "confirm": "brand-new-password-1"},
+        cookies={webui.SESSION_COOKIE: session0, "usher_csrf": bound},
+        allow_redirects=False))
+    await asyncio.sleep(0.5)  # let the change park on the lock
+    procutil.mark_restart_pending()  # a restore lands meanwhile
+    try:
+        release.set()
+        await asyncio.gather(login, change)
+    finally:
+        procutil.reset_restart_pending()
+    assert change.result().status == 503
+    admin = client.settings_store.settings.admin
+    assert admin.password_hash == old_hash
+    assert admin.password_version == 0
 
 
 async def test_per_username_throttle_key_is_shared_across_one_64(
@@ -333,7 +342,7 @@ async def test_login_cookie_carries_the_version_read_with_the_verified_hash(
     assert probe.status == 302  # stamped with the old version, now stale
 
 
-# --- ticket 37 items 3-6 ----------------------------------------------------
+# --- unauthenticated form body, field and file limits -----------------------
 
 async def _multipart_post(client, path, parts, cookies):
     """parts: (name, value, filename or None); a filename makes it a file part."""
@@ -425,6 +434,32 @@ async def test_setup_rejects_unencodable_password(tmp_path, monkeypatch):
              "setup_token": token}, csrf)
         assert resp.status == 400
         assert "cannot be stored" in await resp.text()
+    assert not store.settings.admin.is_set()
+
+
+async def test_setup_says_an_unencodable_username_cannot_be_stored(
+        tmp_path, monkeypatch):
+    monkeypatch.delenv("USHER_WEBHOOK_SECRET", raising=False)
+    settings_path = tmp_path / "settings.json"
+    store = webui.SettingsStore(settings_path)
+    app = web.Application()
+    webui.attach_webui(
+        app, settings_store=store, session_secret=SECRET, data_dir=tmp_path,
+        settings_path=settings_path, db_path=tmp_path / "mappings.sqlite",
+        http_port=8765,
+    )
+    token = auth_util.load_or_create_setup_token(tmp_path)
+    csrf = webui.generate_csrf_token(SECRET)
+    async with TestClient(TestServer(app)) as c:
+        resp = await _utf7_post(
+            c, "/admin/setup",
+            {"username": "+2AA-owner", "password": "p" * 20,
+             "confirm": "p" * 20, "csrf_token": csrf,
+             "setup_token": token}, csrf)
+        text = await resp.text()
+    assert resp.status == 400
+    assert "Username has characters that cannot be stored." in text
+    assert "characters or fewer" not in text
     assert not store.settings.admin.is_set()
 
 

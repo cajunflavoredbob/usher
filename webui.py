@@ -119,7 +119,9 @@ _TIMING_EQUALIZER_HASH = hash_password("timing-equalizer-not-a-real-password")
 #   login attempts. Without it a burst of parallel POSTs all pass the lockout
 #   check before the first hash finishes, so every guess is evaluated. The
 #   body is read before taking it, so a client that stalls its body cannot
-#   hold up anyone else's login.
+#   hold up anyone else's login. A password change takes it too for its
+#   write, so the hash a login verified cannot change before its cookie is
+#   issued.
 # - "restore_lock" allows one restore at a time: a double-submitted Restore
 #   would otherwise copy the restored files over the pre-restore snapshot.
 
@@ -1235,8 +1237,10 @@ async def setup_post(request: web.Request) -> web.Response:
     errors: list[str] = []
     if not username:
         errors.append("Username required.")
-    elif len(username) > MAX_USERNAME_CHARS or not is_utf8_encodable(username):
+    elif len(username) > MAX_USERNAME_CHARS:
         errors.append(f"Username must be {MAX_USERNAME_CHARS} characters or fewer.")
+    elif not is_utf8_encodable(username):
+        errors.append("Username has characters that cannot be stored.")
     if not is_utf8_encodable(password):
         errors.append("Password has characters that cannot be stored.")
     elif len(password) < ADMIN_PASSWORD_MIN_CHARS or password != confirm:
@@ -1407,14 +1411,6 @@ async def _login_attempt(request: web.Request, form) -> web.Response:
     stored = stored_hash if username_ok else _TIMING_EQUALIZER_HASH
     password_ok = (False if bad_input else
                    await asyncio.to_thread(verify_password, password, stored))
-    if username_ok and password_ok and admin.password_hash != stored_hash:
-        # The password changed while this attempt was verifying: the cookies
-        # would carry the new version for a password that is already dead.
-        # Refuse without counting it against the client.
-        audit("login_fail_password_changed", user=username, ip=ip)
-        body = _page("Login", _flash(error="Invalid credentials.") +
-                     '<p><a href="/admin/login">Try again</a></p>')
-        return web.Response(text=body, content_type="text/html", status=401)
     if not (username_ok and password_ok):
         if device_id is not None:
             _device_throttle.record_failure(device_id)
@@ -1866,6 +1862,11 @@ async def change_password(request: web.Request) -> web.Response:
     # hash read to its cookie), so no login can verify the old password and
     # then stamp the new version.
     async with request.app["login_lock"]:
+        # A restore can land while this waits on a login in flight; saving
+        # now would write the old settings back over it.
+        if restart_pending():
+            return web.Response(
+                text="Usher is restarting; try again in a moment.", status=503)
         admin.password_hash = new_hash
         # Sign out every other session: a stolen cookie must die when the
         # admin rotates the password in response to it. The current session
