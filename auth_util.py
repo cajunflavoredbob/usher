@@ -335,8 +335,20 @@ def request_is_secure(request) -> bool:
     networks = _trusted_networks(request)
     if not (networks and request.remote and _in_networks(request.remote, networks)):
         return False
-    xfp = request.headers.get("X-Forwarded-Proto", "")
-    return xfp.lower() == "https"
+    # The last value is the one the trusted proxy in front of us set (it
+    # appends its own line or entry after anything the client sent).
+    values = _header_values(request, "X-Forwarded-Proto")
+    return bool(values) and values[-1].lower() == "https"
+
+
+def _header_values(request, name: str) -> list[str]:
+    """Every comma-separated value of header `name`, across all its lines in
+    order: a proxy may append its own line instead of extending the
+    client's, and reading only the first line would take the client's."""
+    headers = request.headers
+    getall = getattr(headers, "getall", None)
+    lines = getall(name, []) if getall is not None else [headers.get(name, "")]
+    return [v.strip() for line in lines for v in line.split(",") if v.strip()]
 
 
 _warned_untrusted_forwarded = False
@@ -390,8 +402,7 @@ def client_ip(request) -> str:
     if not (networks and peer != "-" and _in_networks(peer, networks)):
         _warn_untrusted_forwarded(request, peer)
         return peer
-    xff = request.headers.get("X-Forwarded-For", "")
-    hops = [h.strip() for h in xff.split(",") if h.strip()]
+    hops = _header_values(request, "X-Forwarded-For")
     for hop in reversed(hops):
         if not _in_networks(hop, networks):
             # Behind a trusted proxy the hop text is still client-supplied;

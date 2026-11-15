@@ -278,3 +278,32 @@ def test_throttle_address_leaves_ipv4_and_junk_alone_and_unmaps_ipv4():
     assert throttle_address("198.51.100.7") == "198.51.100.7"
     assert throttle_address("::ffff:198.51.100.7") == "198.51.100.7"
     assert throttle_address("-") == "-"
+
+
+# --- forwarded headers sent as more than one line ---
+
+
+def _two_lines(name: str, first: str, second: str):
+    from multidict import CIMultiDict
+    return CIMultiDict([(name, first), (name, second)])
+
+
+def test_client_ip_reads_every_forwarded_for_line():
+    """The client sends its own X-Forwarded-For line and the trusted proxy
+    appends another: the proxy's line holds the real client, not the first."""
+    req = _fake_request(cookies={}, remote="198.51.100.2",
+                        headers=_two_lines("X-Forwarded-For", "192.0.2.99",
+                                           "203.0.113.7"),
+                        trusted_proxies="198.51.100.0/24")
+    assert client_ip(req) == "203.0.113.7"
+
+
+def test_request_is_secure_takes_the_trusted_proxys_forwarded_proto_line():
+    trusted = dict(cookies={}, scheme="http", remote="198.51.100.2",
+                   trusted_proxies="198.51.100.2/32")
+    forged = _fake_request(headers=_two_lines("X-Forwarded-Proto", "https",
+                                              "http"), **trusted)
+    assert request_is_secure(forged) is False
+    real = _fake_request(headers=_two_lines("X-Forwarded-Proto", "http",
+                                            "https"), **trusted)
+    assert request_is_secure(real) is True
