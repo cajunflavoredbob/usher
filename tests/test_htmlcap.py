@@ -5,7 +5,9 @@ import re
 
 import pytest
 
-from bot.htmlcap import SAFE_LIMIT, TELEGRAM_LIMIT, cap_html, clip
+from bot.htmlcap import SAFE_LIMIT, cap_html, clip
+
+TELEGRAM_LIMIT = 4096  # Telegram's hard limit; the module keeps only SAFE_LIMIT
 
 
 def _well_formed(text: str) -> None:

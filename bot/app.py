@@ -205,10 +205,6 @@ def register_log_secret(secret: str) -> None:
         _LOG_SECRETS.add(secret)
 
 
-def unregister_log_secret(secret: str) -> None:
-    _LOG_SECRETS.discard(secret)
-
-
 def _redact(text: str) -> str:
     for secret in tuple(_LOG_SECRETS):
         text = text.replace(secret, _REDACTED)

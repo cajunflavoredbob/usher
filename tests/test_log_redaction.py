@@ -27,7 +27,7 @@ def stream():
     app_mod.register_log_secret(TOKEN)
     yield log, buf
     log.removeHandler(handler)
-    app_mod.unregister_log_secret(TOKEN)
+    app_mod._LOG_SECRETS.discard(TOKEN)
 
 
 def test_token_in_message_is_replaced(stream):

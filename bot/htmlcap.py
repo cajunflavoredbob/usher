@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import re
 
-TELEGRAM_LIMIT = 4096
 # Room under the hard limit for closing tags and the "(+N more)" tail.
 SAFE_LIMIT = 4000
 LINE_LIMIT = 300
