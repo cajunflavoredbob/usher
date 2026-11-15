@@ -647,3 +647,199 @@ async def test_a_gone_share_with_no_stored_username_unlinks_nobody(
     await run_share_expiries(app, NOW)
     assert await fresh_store.get_share_expiry(1) is None
     assert await fresh_store.get(HOLDER_ID) is not None
+
+
+# --- unlink only when the username is on no other Share (ticket 43) ----------
+
+async def test_job_keeps_a_holder_whose_username_is_on_another_share(
+        fresh_store):
+    """Re-shared in Plex web: the expired Share is gone, but the listing the
+    job just read holds a new Share for the same username."""
+    app, plex = await _setup(fresh_store, [_share(2, username="Alice")])
+    await _two_shares_holder(fresh_store)
+    await run_share_expiries(app, NOW)
+    assert await fresh_store.get_share_expiry(1) is None
+    assert await fresh_store.get(HOLDER_ID) is not None
+
+
+async def test_remove_now_on_a_gone_share_keeps_a_holder_shared_again(
+        fresh_store):
+    app, _ = await _setup(fresh_store, [_share(2)])
+    await _holder(fresh_store)
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2031-01-01 00:00:00")
+    ctx, upd = _tap(app, f"{SHARE_REMOVE_NOW}:1")
+    await share_expiry_action(upd, ctx)
+    assert upd.callback_query.edits[-1]["text"] == "✅ Already removed."
+    assert await fresh_store.get_share_expiry(1) is None
+    assert await fresh_store.get(HOLDER_ID) is not None
+
+
+def _live_plex(plex, shares):
+    """list_shares answers what is left: a removed Share drops out."""
+    live = list(shares)
+
+    async def listing(*args):
+        return list(live)
+
+    async def remove(token, share_id):
+        live[:] = [s for s in live if s.id != share_id]
+    plex.list_shares.side_effect = listing
+    plex.remove_share.side_effect = remove
+
+
+async def test_two_due_shares_of_one_holder_unlink_them_once_both_go(
+        fresh_store):
+    app, plex = await _setup(fresh_store)
+    _live_plex(plex, [_share(1), _share(2)])
+    await _holder(fresh_store)
+    for sid in (1, 2):
+        await fresh_store.set_share_expiry(sid, "a@example.com", "alice",
+                                           "2020-01-01 00:00:00")
+    await run_share_expiries(app, NOW)
+    assert plex.remove_share.await_count == 2
+    assert await fresh_store.get(HOLDER_ID) is None
+
+
+async def test_a_gone_and_a_removed_share_of_one_holder_unlink_them(
+        fresh_store):
+    """Share 1 is already gone, share 2 is removed in the same tick: the
+    job's listing still names share 2 when it reaches share 1, but share 2
+    is gone once the tick is done, so the holder is unlinked."""
+    app, plex = await _setup(fresh_store)
+    _live_plex(plex, [_share(2)])
+    await _holder(fresh_store)
+    await fresh_store.set_share_expiry(2, "a@example.com", "alice",
+                                       "2020-01-01 00:00:00")
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2020-01-02 00:00:00")
+    await run_share_expiries(app, NOW)
+    assert await fresh_store.get_share_expiry(1) is None
+    assert await fresh_store.get(HOLDER_ID) is None
+
+
+# --- an Extend during a slow removal (ticket 43) -----------------------------
+
+async def test_a_date_moved_during_the_removals_own_listing_is_not_removed(
+        fresh_store):
+    """The job's first listing sees the Share due; the removal's own listing
+    read is slow and the date moves meanwhile: the row is re-read right
+    before the removal, so nothing is removed."""
+    app, plex = await _setup(fresh_store)
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       _at(-timedelta(minutes=1)))
+    calls = []
+
+    async def listing(*args):
+        calls.append(1)
+        if len(calls) == 2:
+            await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                               _at(timedelta(days=30)))
+        return [_share(1)]
+    plex.list_shares.side_effect = listing
+    await run_share_expiries(app, NOW)
+    plex.remove_share.assert_not_awaited()
+    assert (await fresh_store.get_share_expiry(1)).expires_at == \
+        _at(timedelta(days=30))
+    assert _sent_to(app, ADMIN_ID) == []
+
+
+async def test_an_expiry_cleared_during_the_removal_is_not_removed(
+        fresh_store):
+    app, plex = await _setup(fresh_store)
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       _at(-timedelta(minutes=1)))
+    calls = []
+
+    async def listing(*args):
+        calls.append(1)
+        if len(calls) == 2:
+            await fresh_store.clear_share_expiry(1)
+        return [_share(1)]
+    plex.list_shares.side_effect = listing
+    await run_share_expiries(app, NOW)
+    plex.remove_share.assert_not_awaited()
+
+
+async def test_extend_is_refused_while_the_job_removes_that_share(
+        fresh_store):
+    app, plex = await _setup(fresh_store, [_share(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       _at(-timedelta(minutes=1)))
+    ctx, upd = _tap(app, f"{SHARE_EXTEND}:1")
+    app.bot_data = ctx.bot_data
+
+    async def extend_mid_removal(token, share_id):
+        await share_expiry_action(upd, ctx)
+    plex.remove_share.side_effect = extend_mid_removal
+    await run_share_expiries(app, NOW)
+    edit = upd.callback_query.edits[-1]
+    assert edit["text"] == ("Removal is in progress, try again in a "
+                            "minute.")
+    assert f"{SHARE_EXTEND}:1" in "".join(_buttons(edit["reply_markup"]))
+    assert await fresh_store.get_share_expiry(1) is None
+    assert "Removed" in _sent_to(app, ADMIN_ID)[0]["text"]
+
+
+async def test_extend_works_again_after_a_failed_removal_tick(fresh_store):
+    app, plex = await _setup(fresh_store, [_share(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2020-01-01 00:00:00")
+    plex.remove_share.side_effect = TransientAPIError("down", service="Plex")
+    ctx, upd = _tap(app, f"{SHARE_EXTEND}:1")
+    app.bot_data = ctx.bot_data
+    await run_share_expiries(app, NOW)
+    await share_expiry_action(upd, ctx)
+    assert "now ends on" in upd.callback_query.edits[-1]["text"]
+
+
+async def test_extend_of_another_share_is_not_refused_during_a_removal(
+        fresh_store):
+    app, plex = await _setup(fresh_store, [_share(1), _share(2)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       _at(-timedelta(minutes=1)))
+    await fresh_store.set_share_expiry(2, "b@example.com", "bob",
+                                       "2031-01-01 00:00:00")
+    ctx, upd = _tap(app, f"{SHARE_EXTEND}:2")
+    app.bot_data = ctx.bot_data
+
+    async def extend_mid_removal(token, share_id):
+        await share_expiry_action(upd, ctx)
+    plex.remove_share.side_effect = extend_mid_removal
+    await run_share_expiries(app, NOW)
+    assert "now ends on" in upd.callback_query.edits[-1]["text"]
+
+
+async def test_a_gone_share_extended_during_the_listing_is_left_for_later(
+        fresh_store):
+    app, plex = await _setup(fresh_store)
+    await _two_shares_holder(fresh_store)
+
+    async def extend_during_listing(*args):
+        await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                           _at(timedelta(days=30)))
+        return []
+    plex.list_shares.side_effect = extend_during_listing
+    await run_share_expiries(app, NOW)
+    assert await fresh_store.get_share_expiry(1) is not None
+    assert await fresh_store.get(HOLDER_ID) is not None
+
+
+async def test_a_share_removed_this_tick_does_not_keep_a_gone_ones_holder(
+        fresh_store):
+    """Share 2 is removed but its own listing reads fail, so that removal
+    keeps the holder; share 1 is gone. The job's listing still names
+    share 2, which this tick removed, so share 1's holder is unlinked."""
+    app, plex = await _setup(fresh_store)
+    await _holder(fresh_store)
+    await fresh_store.set_share_expiry(2, "a@example.com", "alice",
+                                       "2020-01-01 00:00:00")
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2020-01-02 00:00:00")
+    plex.list_shares.side_effect = [
+        [_share(2)], TransientAPIError("down", service="Plex"),
+        TransientAPIError("down", service="Plex")]
+    await run_share_expiries(app, NOW)
+    plex.remove_share.assert_awaited_once_with("admin-tok", 2)
+    assert await fresh_store.get_share_expiry(1) is None
+    assert await fresh_store.get(HOLDER_ID) is None

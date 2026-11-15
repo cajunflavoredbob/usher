@@ -26,7 +26,7 @@ from __future__ import annotations
 import html
 import logging
 import time
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -928,8 +928,9 @@ async def share_matches(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _tapped_share(update: Update,
                         ctx: ContextTypes.DEFAULT_TYPE) -> Optional[PlexShare]:
-    """Gate, answer and look up the Share a shv:/shrm:<id> tap names. Ends
-    the step itself (and returns None) when refused, failed or gone."""
+    """Gate, answer and look up the Share a shv:/shrm:/shex:<id> tap names.
+    Ends the step itself (and returns None) when refused, failed or gone; a
+    gone Share is forgotten like any other (forget_gone_share)."""
     if await refuse_outside_admin_dm(update, ctx):
         return None
     q = update.callback_query
@@ -944,6 +945,7 @@ async def _tapped_share(update: Update,
     for share in shares:
         if share.id == share_id:
             return share
+    await forget_gone_share(ctx.bot_data["store"], share_id, None, shares)
     await end_flow(update, ctx,
                    "That Share is gone. It may have been removed elsewhere.",
                    ADMIN_HUB)
@@ -1056,58 +1058,105 @@ async def cmd_uninvite(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         labels=_expiry_labels(matches, await store.list_share_expiries())))
 
 
-async def _holder_username(store: UserStore, plex: PlexClient, token: str,
+async def _read_shares(plex: PlexClient, token: str
+                       ) -> Optional[list[PlexShare]]:
+    """The owned server's Shares for a removal, or None when Plex could not
+    list them."""
+    try:
+        machine_id, _ = await plex.get_owned_server(token)
+        return await plex.list_shares(token, machine_id)
+    except Exception:
+        logger.debug("share listing for a removal failed", exc_info=True)
+        return None
+
+
+async def _holder_username(store: UserStore,
+                           shares: Optional[list[PlexShare]],
                            share_id: int) -> str:
     """The Plex username of an accepted Share's holder, read before the Share
     goes: from the Share listing, else the Expiry row's stored username.
     Empty when neither names one (a pending Invite has no username)."""
-    try:
-        machine_id, _ = await plex.get_owned_server(token)
-        for share in await plex.list_shares(token, machine_id):
-            if share.id == share_id:
-                return (share.username or "") if share.accepted else ""
-    except Exception:
-        logger.debug("holder lookup by listing failed", exc_info=True)
+    for share in shares or ():
+        if share.id == share_id:
+            return (share.username or "") if share.accepted else ""
     row = await store.get_share_expiry(share_id)
     return (row.username or "") if row is not None else ""
 
 
-async def remove_share_and_forget(store: UserStore, plex: PlexClient,
-                                  token: str, share_id: int) -> bool:
+async def remove_share_and_forget(
+        store: UserStore, plex: PlexClient, token: str, share_id: int, *,
+        still_due: Optional[Callable[[], Awaitable[bool]]] = None
+) -> Optional[bool]:
     """The one Share removal: revoke the Share (or cancel a pending Invite),
     drop its Expiry row, and unlink the holder (their /link dies with their
     Plex access, so Follow pings, Subscription notices and the Digest stop).
     The holder is the Link whose Plex username matches the Share's, the same
-    match the expiry reminder uses; no match leaves every Link as it is.
-    Returns True when Plex already had no such Share (the row is dropped then
-    too); any other failure is raised with the row kept. Used by /uninvite,
+    match the expiry reminder uses; no match leaves every Link as it is, and
+    so does a Share listing that still names that username on another Share
+    (see _unlink_holder). Returns True when Plex already had no such Share
+    (the row is dropped then too); any other failure is raised with the row
+    kept. `still_due` (the Expiry job's) is awaited right before the removal:
+    False leaves everything as it is and returns None. Used by /uninvite,
     the Share view and the Expiry job."""
-    holder = await _holder_username(store, plex, token, share_id)
+    shares = await _read_shares(plex, token)
+    holder = await _holder_username(store, shares, share_id)
+    if still_due is not None and not await still_due():
+        return None
     try:
         await plex.remove_share(token, share_id)
     except NotFoundAPIError:
-        await forget_gone_share(store, share_id, holder)
+        if shares is None:
+            shares = await _read_shares(plex, token)
+        await forget_gone_share(store, share_id, holder, shares)
         return True
     await store.clear_share_expiry(share_id)
-    await _unlink_holder(store, holder, share_id)
+    if shares is None:
+        shares = await _read_shares(plex, token)
+    await _unlink_holder(store, holder, share_id, shares)
     return False
 
 
 async def forget_gone_share(store: UserStore, share_id: int,
-                            holder: Optional[str] = None) -> None:
+                            holder: Optional[str],
+                            shares: Optional[list[PlexShare]]) -> None:
     """A Share Plex no longer has: drop its Expiry row and unlink the holder,
-    exactly as a removal does. `holder` is the Plex username read before the
-    Share went; None reads the Expiry row's stored username (the row is read
-    before it is dropped). Every "already gone" path calls this."""
+    exactly as a removal does (so not while `shares` names that username on
+    another Share). `holder` is the Plex username read before the Share
+    went; None reads the Expiry row's stored username before the row is
+    dropped. `shares` is the listing read in the same operation, None when
+    it could not be read. Every "already gone" path calls this."""
     if holder is None:
         row = await store.get_share_expiry(share_id)
         holder = (row.username or "") if row is not None else ""
     await store.clear_share_expiry(share_id)
-    await _unlink_holder(store, holder, share_id)
+    await _unlink_holder(store, holder, share_id, shares)
 
 
-async def _unlink_holder(store: UserStore, holder: str, share_id: int) -> None:
+def _shared_elsewhere(shares: list[PlexShare], holder: str,
+                      share_id: int) -> bool:
+    """Whether a Share other than `share_id` carries the `holder` username
+    (case-insensitive, like the unlink itself)."""
+    name = holder.lower()
+    return any(s.id != share_id and (s.username or "").lower() == name
+               for s in shares)
+
+
+async def _unlink_holder(store: UserStore, holder: str, share_id: int,
+                         shares: Optional[list[PlexShare]]) -> None:
+    """Unlink `holder` after Share `share_id` went, unless the listing read
+    in the same operation still names that username on any other Share (a
+    re-share in Plex web, a second Share). With no listing to check, the
+    Link stays: an unlink is only done on proof the access is gone."""
     if not holder:
+        return
+    if shares is None:
+        logger.warning("Kept the Link(s) of share %s's holder: the Share "
+                       "listing could not be read to check for another "
+                       "Share", share_id)
+        return
+    if _shared_elsewhere(shares, holder, share_id):
+        logger.info("Kept the Link(s) of share %s's holder: another Share "
+                    "has the same Plex username", share_id)
         return
     try:
         ids = await store.unlink_plex_username(holder)

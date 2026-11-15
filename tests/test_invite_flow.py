@@ -836,3 +836,112 @@ async def test_removing_a_share_keeps_an_admin_link_with_the_same_username(
     await remove_share_and_forget(fresh_store, _plex_with_share(share),
                                   "tok", 71)
     assert await fresh_store.get(5) is not None
+
+
+# --- unlink only when the username is on no other Share (ticket 43) ----------
+
+def _friend(id=71, username="friend", accepted=True):
+    return PlexShare(id=id, email="friend@example.com", username=username,
+                     accepted=accepted, all_libraries=True)
+
+
+async def test_removing_a_share_keeps_a_holder_with_another_share(
+        fresh_store):
+    from bot.invite_flow import remove_share_and_forget
+    await _linked(fresh_store, 5, "friend")
+    plex = _plex_with_share(_friend())
+    plex.list_shares.return_value = [_friend(), _friend(72, "Friend")]
+    assert await remove_share_and_forget(fresh_store, plex, "tok", 71) is False
+    plex.remove_share.assert_awaited_once_with("tok", 71)
+    assert await fresh_store.get(5) is not None
+
+
+async def test_a_404_removal_keeps_a_holder_with_another_share(fresh_store):
+    from bot.invite_flow import remove_share_and_forget
+    from http_util import NotFoundAPIError
+    await _linked(fresh_store, 5, "friend")
+    await fresh_store.set_share_expiry(71, "friend@example.com", "friend",
+                                       "2031-01-01 00:00:00")
+    plex = _plex_with_share(_friend())
+    plex.list_shares.return_value = [_friend(), _friend(72)]
+    plex.remove_share.side_effect = NotFoundAPIError("gone", status_code=404)
+    assert await remove_share_and_forget(fresh_store, plex, "tok", 71) is True
+    assert await fresh_store.get_share_expiry(71) is None
+    assert await fresh_store.get(5) is not None
+
+
+async def test_a_removal_with_no_readable_listing_keeps_the_link(fresh_store):
+    """No listing proves the access is gone, so nobody is unlinked; the
+    Share itself is still removed and its row dropped."""
+    from bot.invite_flow import remove_share_and_forget
+    await _linked(fresh_store, 5, "friend")
+    await fresh_store.set_share_expiry(71, "friend@example.com", "friend",
+                                       "2031-01-01 00:00:00")
+    plex = _plex_with_share(_friend())
+    plex.list_shares.side_effect = TransientAPIError("down", service="Plex")
+    assert await remove_share_and_forget(fresh_store, plex, "tok", 71) is False
+    plex.remove_share.assert_awaited_once_with("tok", 71)
+    assert await fresh_store.get_share_expiry(71) is None
+    assert await fresh_store.get(5) is not None
+
+
+async def test_a_listing_that_fails_only_before_the_removal_is_read_again(
+        fresh_store):
+    """The holder comes from the Expiry row, and the listing read after the
+    removal shows no other Share for them, so they are unlinked."""
+    from bot.invite_flow import remove_share_and_forget
+    await _linked(fresh_store, 5, "friend")
+    await fresh_store.set_share_expiry(71, "friend@example.com", "friend",
+                                       "2031-01-01 00:00:00")
+    plex = _plex_with_share(_friend())
+    plex.list_shares.side_effect = [
+        TransientAPIError("down", service="Plex"), [_friend(80, "other")]]
+    await remove_share_and_forget(fresh_store, plex, "tok", 71)
+    assert await fresh_store.get(5) is None
+
+
+async def _view_ctx(store, shares):
+    await _linked(store, ADMIN_ID, "admin")
+    ctx = _shares_ctx(shares=shares)
+    ctx.bot_data["store"] = store
+    return ctx
+
+
+async def test_a_share_view_tap_on_a_gone_share_forgets_it(fresh_store):
+    await _linked(fresh_store, 5, "friend")
+    await fresh_store.set_share_expiry(71, "friend@example.com", "friend",
+                                       "2031-01-01 00:00:00")
+    ctx = await _view_ctx(fresh_store, [_friend(80, "other")])
+    upd = make_update(callback_data=f"{SHARE_VIEW}:71", user_id=ADMIN_ID)
+    await share_view(upd, ctx)
+    assert upd.callback_query.edits[0]["text"].startswith(
+        "That Share is gone.")
+    assert await fresh_store.get_share_expiry(71) is None
+    assert await fresh_store.get(5) is None
+
+
+async def test_a_share_view_tap_on_a_gone_share_keeps_a_holder_shared_again(
+        fresh_store):
+    await _linked(fresh_store, 5, "friend")
+    await fresh_store.set_share_expiry(71, "friend@example.com", "friend",
+                                       "2031-01-01 00:00:00")
+    ctx = await _view_ctx(fresh_store, [_friend(72, "FRIEND")])
+    upd = make_update(callback_data=f"{SHARE_REMOVE}:71", user_id=ADMIN_ID)
+    await share_remove(upd, ctx)
+    assert await fresh_store.get_share_expiry(71) is None
+    assert await fresh_store.get(5) is not None
+    ctx.bot_data["plex"].remove_share.assert_not_awaited()
+
+
+async def test_a_404_with_a_listing_failing_first_is_read_again(fresh_store):
+    from bot.invite_flow import remove_share_and_forget
+    from http_util import NotFoundAPIError
+    await _linked(fresh_store, 5, "friend")
+    await fresh_store.set_share_expiry(71, "friend@example.com", "friend",
+                                       "2031-01-01 00:00:00")
+    plex = _plex_with_share(_friend())
+    plex.list_shares.side_effect = [
+        TransientAPIError("down", service="Plex"), [_friend(80, "other")]]
+    plex.remove_share.side_effect = NotFoundAPIError("gone", status_code=404)
+    assert await remove_share_and_forget(fresh_store, plex, "tok", 71) is True
+    assert await fresh_store.get(5) is None

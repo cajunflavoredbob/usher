@@ -4,10 +4,13 @@ An hourly job walks the `share_expiries` rows. Three days before the date it
 DMs the Admin once (Extend 30 days, Let it end, Remove now) and, when the
 Share's username matches a Linked user's stored Plex username, DMs that
 holder once. On or after the date it re-lists the Shares: one already gone
-loses its row quietly; any other is removed through the same call as
-/uninvite, its row dropped and the Admin told. A removal that fails keeps the
-row, records the error, is retried every hour, and tells the Admin at most
-once a day, with Retry."""
+loses its row quietly and its holder is unlinked, unless that listing names
+the same Plex username on another Share; any other is removed through the
+same call as /uninvite (which re-reads the row right before the removal and
+leaves a Share whose date moved or was cleared), its row dropped and the
+Admin told. While the job removes a Share, Extend on it is refused. A
+removal that fails keeps the row, records the error, is retried every hour,
+and tells the Admin at most once a day, with Retry."""
 from __future__ import annotations
 
 import html
@@ -37,6 +40,10 @@ SHARE_EXPIRY_FIRST_DELAY_S = 90
 REMIND_BEFORE = timedelta(days=3)
 ALERT_EVERY = timedelta(days=1)
 EXTEND_DAYS = 30
+# bot_data: the share ids the job is removing right now. Extend refuses
+# while its row is here, so a slow removal cannot undo a fresh Extend. Not
+# persisted: a restart starts with no removal in flight.
+REMOVING_KEY = "share_expiry_removing"
 
 
 def _parse(text: str) -> datetime:
@@ -171,31 +178,56 @@ async def run_share_expiries(app, now: Optional[datetime] = None) -> None:
         return
     try:
         machine_id, _ = await plex.get_owned_server(token)
-        present = {s.id for s in await plex.list_shares(token, machine_id)}
+        shares = list(await plex.list_shares(token, machine_id))
     except Exception as exc:
         logger.exception("share listing failed during expiry")
         for row in due:
             await _alert_failure(app, store, row, user_friendly_message(exc),
                                  admin_id, now)
         return
+    removing: set[int] = app.bot_data.setdefault(REMOVING_KEY, set())
     for row in due:
+        removing.add(row.share_id)
+        try:
+            if await _remove_due(app, store, plex, token, row, shares,
+                                 admin_id, now):
+                # Removed this tick: no longer a Share that keeps a later
+                # gone row's holder linked.
+                shares = [s for s in shares if s.id != row.share_id]
+        finally:
+            removing.discard(row.share_id)
+
+
+async def _remove_due(app, store: UserStore, plex, token: str,
+                      row: ShareExpiry, shares: list, admin_id: int,
+                      now: datetime) -> bool:
+    """Remove one due Share (or forget a gone one); True when this removal
+    left it gone from Plex (removed, or Plex answered it was already gone)."""
+    async def still_due() -> bool:
         # The Admin may have extended or cleared it since the first read.
         fresh = await store.get_share_expiry(row.share_id)
-        if fresh is None or _parse(fresh.expires_at) > now:
-            continue
-        if row.share_id not in present:
-            await forget_gone_share(store, row.share_id, fresh.username)
-            continue
-        try:
-            await remove_share_and_forget(store, plex, token, row.share_id)
-        except Exception as exc:
-            logger.exception("expired share removal failed")
-            await _alert_failure(app, store, row, user_friendly_message(exc),
-                                 admin_id, now)
-            continue
-        await _dm(app, admin_id,
-                  f"⏳ Removed <b>{html.escape(_who(row))}</b>: their expiry "
-                  f"date ({expiry_date_text(row.expires_at)}) passed.")
+        return fresh is not None and _parse(fresh.expires_at) <= now
+
+    if not await still_due():
+        return False
+    if all(s.id != row.share_id for s in shares):
+        await forget_gone_share(store, row.share_id, None, shares)
+        return False
+    try:
+        result = await remove_share_and_forget(store, plex, token,
+                                               row.share_id,
+                                               still_due=still_due)
+    except Exception as exc:
+        logger.exception("expired share removal failed")
+        await _alert_failure(app, store, row, user_friendly_message(exc),
+                             admin_id, now)
+        return False
+    if result is None:
+        return False
+    await _dm(app, admin_id,
+              f"⏳ Removed <b>{html.escape(_who(row))}</b>: their expiry "
+              f"date ({expiry_date_text(row.expires_at)}) passed.")
+    return True
 
 
 async def share_expiry_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -240,6 +272,12 @@ async def share_expiry_action(update: Update,
         await edit_or_send(
             q, f"👍 <b>{who}</b> ends on {expiry_date_text(row.expires_at)} "
                "as planned.", parse_mode="HTML")
+    elif (action == SHARE_EXTEND
+          and share_id in ctx.bot_data.get(REMOVING_KEY, ())):
+        _text, markup = _reminder_card(row)
+        await edit_or_send(
+            q, "Removal is in progress, try again in a minute.",
+            reply_markup=markup)
     elif action == SHARE_EXTEND:
         base = max(_parse(row.expires_at), datetime.now(timezone.utc))
         new_at = expires_at_text(EXTEND_DAYS, base)
@@ -307,7 +345,7 @@ async def _confirm_removal(q, ctx, store: UserStore, row: ShareExpiry) -> None:
         return
     share = next((s for s in shares if s.id == sid), None)
     if share is None:
-        await forget_gone_share(store, sid, row.username)
+        await forget_gone_share(store, sid, row.username, shares)
         await edit_or_send(q, "✅ Already removed.")
         return
     text, _flag = removal_prompt(share)
