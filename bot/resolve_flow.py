@@ -44,6 +44,10 @@ _COMMENT_CHAT_KEY = "awaiting_comment_chat"
 # Text typed in the older chat once a newer prompt took the marker over.
 REPLACED_PROMPT_TEXT = ("That reply prompt was replaced by one you opened in "
                         "another chat.")
+# The chats whose prompt a newer one in another chat took over. Kept apart
+# from the marker, which the newer prompt clears when it ends: the older chat
+# still gets REPLACED_PROMPT_TEXT then. A prompt sent in a chat takes it off.
+_REPLACED_CHATS_KEY = "awaiting_comment_replaced"
 
 
 def _owns_comment_prompt(ctx, update) -> bool:
@@ -180,6 +184,11 @@ async def resolve_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
     # Copy differs by audience: telling the admin "admin will see it" reads
     # wrong when they ARE the admin.
+    replaced = ctx.user_data.setdefault(_REPLACED_CHATS_KEY, set())
+    previous = ctx.user_data.get(_COMMENT_CHAT_KEY)
+    if previous is not None and previous != update.effective_chat.id:
+        replaced.add(previous)
+    replaced.discard(update.effective_chat.id)
     ctx.user_data["awaiting_comment_for"] = ticket_id
     ctx.user_data[_COMMENT_CHAT_KEY] = update.effective_chat.id
     if is_admin:
@@ -211,9 +220,12 @@ async def _reply_comment_added(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
 
 async def resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if not _owns_comment_prompt(ctx, update):
-        # A newer prompt in another chat owns the marker: this chat's text
-        # is not a comment on anything. Say so rather than drop it.
-        if ctx.user_data.get(_COMMENT_CHAT_KEY) is not None:
+        # A newer prompt in another chat owns the marker, or did and has
+        # ended: this chat's text is not a comment on anything. Say so
+        # rather than drop it.
+        replaced = ctx.user_data.get(_REPLACED_CHATS_KEY) or set()
+        if (update.effective_chat.id in replaced
+                or ctx.user_data.get(_COMMENT_CHAT_KEY) is not None):
             await update.effective_message.reply_text(REPLACED_PROMPT_TEXT)
         return ConversationHandler.END
     ticket_id = ctx.user_data.get("awaiting_comment_for")

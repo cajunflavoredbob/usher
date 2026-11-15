@@ -966,6 +966,7 @@ async def tk_reply_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
             return ConversationHandler.END
         if flow_step_is_stale(ctx):
             return ConversationHandler.END  # a newer command ended this flow
+        _take_reply_prompt(ctx, update.effective_chat.id)
         ctx.user_data["tk_reply_id"] = ticket_id
         ctx.user_data["tk_close_after"] = False
         ctx.user_data[_REPLY_CHAT_KEY] = update.effective_chat.id
@@ -1014,6 +1015,7 @@ async def tk_close_with_comment_start(update: Update, ctx: ContextTypes.DEFAULT_
             return ConversationHandler.END
         if flow_step_is_stale(ctx):
             return ConversationHandler.END  # a newer command ended this flow
+        _take_reply_prompt(ctx, update.effective_chat.id)
         ctx.user_data["tk_reply_id"] = ticket_id
         ctx.user_data["tk_close_after"] = True
         ctx.user_data[_REPLY_CHAT_KEY] = update.effective_chat.id
@@ -1040,6 +1042,20 @@ _REPLY_CHAT_KEY: Final = "tk_reply_chat"
 # Text typed in the older chat once a newer start took the markers over.
 REPLACED_PROMPT_TEXT: Final = ("That reply prompt was replaced by one you "
                                "opened in another chat.")
+# The chats whose prompt a newer start in another chat took over. Kept apart
+# from the markers, which the newer prompt clears when it ends: the older chat
+# still gets REPLACED_PROMPT_TEXT then. A start in a chat takes it off.
+_REPLACED_CHATS_KEY: Final = "tk_reply_replaced"
+
+
+def _take_reply_prompt(ctx, chat_id: int) -> None:
+    """A Reply or Close with comment starts in `chat_id`: a prompt still
+    open in another chat is replaced, and this chat's is no longer."""
+    replaced = ctx.user_data.setdefault(_REPLACED_CHATS_KEY, set())
+    previous = ctx.user_data.get(_REPLY_CHAT_KEY)
+    if previous is not None and previous != chat_id:
+        replaced.add(previous)
+    replaced.discard(chat_id)
 
 
 def _owns_reply_state(ctx, update) -> bool:
@@ -1070,9 +1086,11 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive the reply text, post it, optionally close."""
     if not _owns_reply_state(ctx, update):
         # A newer Reply or Close with comment in another chat owns the
-        # markers: this chat's text is not a reply to anything. Say so
-        # rather than drop it.
-        if ctx.user_data.get(_REPLY_CHAT_KEY) is not None:
+        # markers, or did and has ended: this chat's text is not a reply to
+        # anything. Say so rather than drop it.
+        replaced = ctx.user_data.get(_REPLACED_CHATS_KEY) or set()
+        if (update.effective_chat.id in replaced
+                or ctx.user_data.get(_REPLY_CHAT_KEY) is not None):
             await update.effective_message.reply_text(REPLACED_PROMPT_TEXT)
         return ConversationHandler.END
     ticket_id = ctx.user_data.get("tk_reply_id")

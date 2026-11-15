@@ -1187,3 +1187,91 @@ async def test_an_error_in_the_reports_own_chat_is_not_called_a_replacement(rig,
     await rig.say(DM_ID, "the picture is green")
     await rig.say(DM_ID, "the picture is green")
     assert not any(t.startswith(ISSUE_REPLACED) for t in rig.texts(DM_ID))
+
+
+# --- a replaced reply prompt stays replaced after the newer one ends ----------
+
+
+async def _end_group_prompt(rig, how: str, words: str) -> None:
+    if how == "posted":
+        await rig.say(GROUP_ID, words)
+        rig.seerr.add_issue_comment.assert_awaited_once()
+    elif how == "cancelled":
+        await rig.say(GROUP_ID, "/cancel")
+    else:
+        await rig.say(GROUP_ID, "/status")
+
+
+@pytest.mark.parametrize("how", ["posted", "cancelled", "ended by a command"])
+async def test_a_replaced_reply_prompt_says_so_after_the_newer_one_ends(rig, how):
+    rig.recorded(DM_ID, 601)
+    await rig.tap(DM_ID, f"{TK_REPLY}:1", 601)
+    rig.recorded(GROUP_ID, 602)
+    await rig.tap(GROUP_ID, f"{TK_REPLY}:2", 602)
+    await _end_group_prompt(rig, how, "group words")
+    posted = rig.seerr.add_issue_comment.await_count
+    await rig.say(DM_ID, "words for ticket one")
+    assert rig.texts(DM_ID)[-1] == PROMPT_REPLACED
+    assert rig.seerr.add_issue_comment.await_count == posted
+    assert not _live(rig, "ticket_reply", DM_ID)
+
+
+@pytest.mark.parametrize("how", ["posted", "cancelled"])
+async def test_a_replaced_comment_prompt_says_so_after_the_newer_one_ends(rig, how):
+    await _comment_asked_in_dm_then_group(rig)
+    await _end_group_prompt(rig, how, "still broken")
+    posted = rig.seerr.add_issue_comment.await_count
+    await rig.say(DM_ID, "still broken in the dm")
+    assert rig.texts(DM_ID)[-1] == PROMPT_REPLACED
+    assert rig.seerr.add_issue_comment.await_count == posted
+    assert not _live(rig, "resolve", DM_ID)
+
+
+async def test_a_reply_prompt_reopened_in_the_replaced_chat_posts(rig):
+    rig.recorded(DM_ID, 601)
+    await rig.tap(DM_ID, f"{TK_REPLY}:1", 601)
+    rig.recorded(GROUP_ID, 602)
+    await rig.tap(GROUP_ID, f"{TK_REPLY}:2", 602)
+    rig.recorded(DM_ID, 603)
+    await rig.tap(DM_ID, f"{TK_REPLY}:3", 603)
+    await rig.say(DM_ID, "words for ticket three")
+    assert rig.seerr.add_issue_comment.call_args.args[:2] == (3, "words for ticket three")
+
+
+async def test_a_comment_prompt_reopened_in_the_replaced_chat_posts(rig):
+    await _comment_asked_in_dm_then_group(rig)
+    rig.recorded(DM_ID, 605)
+    await rig.tap(DM_ID, f"{RESOLVE}:3:no", 605)
+    await rig.say(DM_ID, "still broken in the dm")
+    assert rig.seerr.add_issue_comment.call_args.args[:2] == (3, "still broken in the dm")
+
+
+async def test_an_error_after_a_reply_prompt_was_reopened_is_not_called_a_replacement(
+        rig, monkeypatch):
+    """The reopened chat is no longer a replaced one: when an error then
+    clears its own markers, its next text says nothing about another chat."""
+    from bot import tickets
+    rig.recorded(DM_ID, 601)
+    await rig.tap(DM_ID, f"{TK_REPLY}:1", 601)
+    rig.recorded(GROUP_ID, 602)
+    await rig.tap(GROUP_ID, f"{TK_REPLY}:2", 602)
+    rig.recorded(DM_ID, 603)
+    await rig.tap(DM_ID, f"{TK_REPLY}:3", 603)
+    _fail_once(monkeypatch, tickets, "token_for")
+    await rig.say(DM_ID, "words")
+    assert rig.texts(DM_ID)[-1] == ERROR_TEXT
+    await rig.say(DM_ID, "words again")
+    assert PROMPT_REPLACED not in rig.texts(DM_ID)
+
+
+async def test_an_error_after_a_comment_prompt_was_reopened_is_not_called_a_replacement(
+        rig, monkeypatch):
+    from bot import resolve_flow
+    await _comment_asked_in_dm_then_group(rig)
+    rig.recorded(DM_ID, 605)
+    await rig.tap(DM_ID, f"{RESOLVE}:3:no", 605)
+    _fail_once(monkeypatch, resolve_flow, "token_for")
+    await rig.say(DM_ID, "words")
+    assert rig.texts(DM_ID)[-1] == ERROR_TEXT
+    await rig.say(DM_ID, "words again")
+    assert PROMPT_REPLACED not in rig.texts(DM_ID)
