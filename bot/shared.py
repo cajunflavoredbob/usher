@@ -1050,10 +1050,27 @@ RQ_KEYS: Final = ("rq_media", "rq_search_results",
 _RQ_KEYS_KEPT_ON_FORCE_END: Final = ("rq_submitting",)
 
 
+def _user_conversation_keys(conv: ConversationHandler, update: Update) -> list:
+    """The keys of `conv`'s live conversations that belong to this update's
+    user, in any chat. Every flow conversation is per_chat + per_user, keyed
+    (chat_id, user_id) (PTB's _get_key; tests pin the shape). Any other shape
+    falls back to the update's own key."""
+    key = conv._get_key(update)
+    if (getattr(conv, "per_chat", True) and getattr(conv, "per_user", True)
+            and not getattr(conv, "per_message", False)):
+        user_id = key[1]
+        return [k for k in list(conv._conversations)
+                if isinstance(k, tuple) and len(k) == 2 and k[1] == user_id]
+    return [key] if key in conv._conversations else []
+
+
 def force_end_flow_conversations(ctx: ContextTypes.DEFAULT_TYPE,
                                  update: Update) -> list:
-    """End every registered flow conversation for this update's (chat, user)
-    and drop the free-text flow markers those conversations own. Shared by
+    """End every registered flow conversation of this update's user, in every
+    chat, and drop the free-text flow markers those conversations own. A
+    user has one flow at a time across chats: the drafts and markers live in
+    per-user user_data, so a flow left open in another chat would otherwise
+    act on what the new one picks. Shared by
     reset_stale_flows and by cross-flow jump entry points (e.g. the /issue
     dead-end's "Request it instead" button, whose tap starts the request
     conversation while /issue is still mid-state -- without this the
@@ -1065,7 +1082,8 @@ def force_end_flow_conversations(ctx: ContextTypes.DEFAULT_TYPE,
     link_active_loop, so leaving the marker set would let an in-flight Plex
     PIN poll outlive its conversation and fire _finalize_link mid-flow.
 
-    Returns the conversations that were actually live and got ended."""
+    Returns the conversations that were actually live and got ended, each
+    once however many chats it was live in."""
     before = _flow_gen(ctx)
     ctx.user_data[_FLOW_GEN_KEY] = before + 1
     cell = _STEP_GEN.get()
@@ -1076,11 +1094,15 @@ def force_end_flow_conversations(ctx: ContextTypes.DEFAULT_TYPE,
     ended = []
     for conv in ctx.application.bot_data.get("flow_convs", ()):
         try:
-            key = conv._get_key(update)
+            keys = _user_conversation_keys(conv, update)
         except Exception:
             continue
-        if key in conv._conversations:
+        for key in keys:
             conv._update_state(ConversationHandler.END, key)
+            job = conv.timeout_jobs.pop(key, None)
+            if job is not None:
+                job.schedule_removal()
+        if keys:
             ended.append(conv)
             if getattr(conv, "name", None) == "issue":
                 # The abandoned report's draft must not seed the next one.
@@ -1093,9 +1115,6 @@ def force_end_flow_conversations(ctx: ContextTypes.DEFAULT_TYPE,
                 for draft_key in RQ_KEYS:
                     if draft_key not in _RQ_KEYS_KEPT_ON_FORCE_END:
                         ctx.user_data.pop(draft_key, None)
-            job = conv.timeout_jobs.pop(key, None)
-            if job is not None:
-                job.schedule_removal()
     for marker in ("tk_reply_id", "tk_close_after", "link_active_loop",
                    "link_retry_ok"):
         ctx.user_data.pop(marker, None)

@@ -153,10 +153,12 @@ _TARGET_CLEARED_TYPED = ("The person you picked was cleared. /request, then "
 # Request for someone is DM-only (admin_view), so its pick (rq_for) belongs to
 # the private chat: only an entry point in a private chat pops it, and only a
 # flow in a private chat reads it. _PICKED_KEY marks that the DM flow was
-# started as Request for someone. It is NOT one of RQ_KEYS: ending a /request
-# in another chat clears RQ_KEYS (rq_for among them, user_data is per user)
-# while the DM flow runs on, and the marker is how the DM flow then knows its
-# person is gone. Only the private-chat entry points pop it.
+# started as Request for someone. It is NOT one of RQ_KEYS: should anything
+# clear RQ_KEYS (rq_for among them, user_data is per user) while the DM flow
+# runs on, the marker is how the DM flow then knows its person is gone. A flow
+# started in another chat no longer leaves it running (force-ending ends the
+# user's flows in every chat), so this is a backstop. Only the private-chat
+# entry points pop it.
 _PICKED_KEY = "rq_for_picked"
 
 # Availability annotations for the search list. UNKNOWN/DELETED get none:
@@ -304,7 +306,8 @@ def _in_private_chat(update: Update) -> bool:
 
 def _forget_behalf_pick(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """A new request started in the private chat forgets a Request for
-    someone pick. One started in another chat leaves the DM's pick alone."""
+    someone pick. One started in another chat does not pop it here: starting
+    it force-ends the user's open DM request, which clears the pick."""
     if _in_private_chat(update):
         ctx.user_data.pop("rq_for", None)
         ctx.user_data.pop(_PICKED_KEY, None)
@@ -466,8 +469,8 @@ def _behalf_target(update: Update,
 
 def _behalf_pick_lost(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
     """True when the private chat's flow was started as Request for someone
-    and its person has since been cleared (by a /request flow ending in
-    another chat). Such a flow must not go on as the Admin's own Request."""
+    and its person has since been cleared while it ran on. Such a flow must
+    not go on as the Admin's own Request."""
     return (_in_private_chat(update) and bool(ctx.user_data.get(_PICKED_KEY))
             and ctx.user_data.get("rq_for") is None)
 
@@ -615,7 +618,7 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
             return ConversationHandler.END
     # The jump files for the tapper. Only a tap that goes ahead forgets a
     # Request for someone pick: a refused one leaves the open flow's pick, and
-    # a tap in another chat leaves the DM's.
+    # a tap in another chat leaves the DM's to the force-end below.
     _forget_behalf_pick(update, ctx)
     set_hub_origin(ctx, hub)
     # Another flow may still be parked in a pick state, an open /request
