@@ -243,6 +243,36 @@ async def _until(event):
     raise AssertionError("verify never started")
 
 
+def _signal_lock_waiters(client):
+    """Return an asyncio.Event set the moment a request calls acquire on the
+    login lock, so a test waits for "the change reached the lock" instead of
+    sleeping a guessed time that depends on PBKDF2 speed."""
+    import asyncio
+    reached = asyncio.Event()
+    lock = client.app["login_lock"]
+    real_acquire = lock.acquire
+
+    async def acquire():
+        reached.set()
+        return await real_acquire()
+
+    lock.acquire = acquire
+    return reached
+
+
+async def _until_reached_or_done(reached, task):
+    """Wait for the lock signal, or for the request to finish without ever
+    reaching the lock (the lock was bypassed): the caller's assertions then
+    fail on the outcome instead of this helper hanging."""
+    import asyncio
+    waiter = asyncio.ensure_future(reached.wait())
+    try:
+        await asyncio.wait({waiter, task}, timeout=60,
+                           return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        waiter.cancel()
+
+
 async def test_login_in_flight_during_password_change_gets_a_dead_session(
         client, monkeypatch):
     import asyncio
@@ -250,6 +280,7 @@ async def test_login_in_flight_during_password_change_gets_a_dead_session(
     login = asyncio.ensure_future(
         _post_login(client, "admin", "right-password"))
     await _until(started)
+    reached = _signal_lock_waiters(client)
     session0 = webui._make_session_cookie(SECRET, "admin", 0)
     bound = webui.generate_csrf_token(SECRET, session0.rsplit(".", 1)[-1])
     change = asyncio.ensure_future(client.post(
@@ -258,7 +289,12 @@ async def test_login_in_flight_during_password_change_gets_a_dead_session(
               "new": "brand-new-password-1", "confirm": "brand-new-password-1"},
         cookies={webui.SESSION_COOKIE: session0, "usher_csrf": bound},
         allow_redirects=False))
-    await asyncio.sleep(0.5)  # let the change reach its write
+    # Wait until the change asks for the lock (or ends without asking).
+    await _until_reached_or_done(reached, change)
+    # The change must still be waiting on the login in flight: nothing is
+    # written until the login has finished.
+    assert not change.done()
+    assert client.settings_store.settings.admin.password_version == 0
     release.set()
     login_resp, change_resp = await asyncio.gather(login, change)
     assert change_resp.status == 200
@@ -279,6 +315,7 @@ async def test_password_change_parked_on_login_lock_yields_to_a_restore(
     login = asyncio.ensure_future(
         _post_login(client, "admin", "right-password"))
     await _until(started)
+    reached = _signal_lock_waiters(client)
     session0 = webui._make_session_cookie(SECRET, "admin", 0)
     bound = webui.generate_csrf_token(SECRET, session0.rsplit(".", 1)[-1])
     old_hash = client.settings_store.settings.admin.password_hash
@@ -288,7 +325,8 @@ async def test_password_change_parked_on_login_lock_yields_to_a_restore(
               "new": "brand-new-password-1", "confirm": "brand-new-password-1"},
         cookies={webui.SESSION_COOKIE: session0, "usher_csrf": bound},
         allow_redirects=False))
-    await asyncio.sleep(0.5)  # let the change park on the lock
+    # Wait until the change is parked on the lock (or ended without it).
+    await _until_reached_or_done(reached, change)
     procutil.mark_restart_pending()  # a restore lands meanwhile
     try:
         release.set()

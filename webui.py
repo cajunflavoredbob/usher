@@ -1856,12 +1856,6 @@ async def change_password(request: web.Request) -> web.Response:
         )
     user = _current_user(request) or "-"
     new_hash = await asyncio.to_thread(hash_password, new)
-    # The two hashes take a while; a restore that landed meanwhile has
-    # replaced settings.json, and saving here would write the old settings
-    # back over it.
-    if restart_pending():
-        return web.Response(text="Usher is restarting; try again in a moment.",
-                            status=503)
     # The write waits for any login in flight (it holds login_lock from its
     # hash read to its cookie), so no login can verify the old password and
     # then stamp the new version.
