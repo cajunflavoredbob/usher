@@ -1181,7 +1181,10 @@ async def test_issue_dead_end_button_with_its_marker_still_starts_the_jump():
     assert ctx.user_data["rq_media"]["tmdb_id"] == 550
 
 
-def test_an_error_also_clears_the_request_for_someone_marker_and_the_draft_ids():
+def test_an_error_clears_the_draft_ids_but_keeps_the_request_for_someone_marker():
+    """The marker outlives the pick an error clears, so the rest of that flow
+    refuses (test_flows_across_chats runs it end to end)."""
     from bot.app import _CONVERSATION_USER_DATA_KEYS
-    assert {"rq_for_picked", "issue_chat_draft", "rq_chat_draft",
+    assert {"issue_chat_draft", "rq_chat_draft",
             "inv_chat_draft"} <= set(_CONVERSATION_USER_DATA_KEYS)
+    assert "rq_for_picked" not in _CONVERSATION_USER_DATA_KEYS

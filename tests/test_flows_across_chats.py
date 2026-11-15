@@ -960,3 +960,144 @@ async def test_the_movie_auto_fix_confirm_names_the_title_it_deletes(rig):
     confirm = rig.texts(DM_ID)[-1]
     assert confirm.startswith("Radarr: Movie X (2001)\n\n"), confirm
     assert "delete the current file" in confirm
+
+
+# --- an error clears only what belongs to its own chat ------------------------
+
+
+def _fail_once(monkeypatch, module, name: str) -> None:
+    """The next call of module.name raises, as an unexpected bug would; the
+    calls after it run as before."""
+    real = getattr(module, name)
+    calls = []
+
+    async def flaky(*a, **kw):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("boom")
+        return await real(*a, **kw)
+
+    monkeypatch.setattr(module, name, flaky)
+
+
+ERROR_TEXT = "⚠️ Something went wrong on my end. Please run the command again."
+PICK_CLEARED = "That Request for someone was ended"
+
+
+async def test_a_request_for_someone_cut_off_by_an_error_refuses_its_title(
+        rq_rig, monkeypatch):
+    """The error clears the person picked; the flow must then refuse, not
+    go on as the Admin's own Request."""
+    from bot import request_flow
+    from bot.callback_prefixes import REQUESTS_BEHALF, RQ_BEHALF_PICK
+    rig = rq_rig
+    rig.app.bot_data["store"].list_linked_users = AsyncMock(
+        return_value=[(1000, 20, "Person 0"), (1001, 21, "Person 1")])
+    rig.recorded(DM_ID, 620)
+    await rig.tap(DM_ID, REQUESTS_BEHALF, 620)
+    await rig.tap(DM_ID, f"{RQ_BEHALF_PICK}:21", 620)
+    assert rig.user_data["rq_for"]["seerr_id"] == 21
+    _fail_once(monkeypatch, request_flow, "send_typing")
+    await rig.say(DM_ID, "movie x")
+    assert rig.texts(DM_ID)[-1] == ERROR_TEXT
+    assert "rq_for" not in rig.user_data
+    await rig.say(DM_ID, "movie x")
+    assert rig.texts(DM_ID)[-1].startswith(PICK_CLEARED)
+    rig.seerr.search.assert_not_awaited()
+    assert _requests(rig) == []
+
+
+async def _error_in_the_group(rig, monkeypatch) -> None:
+    """A /status in the group that hits a bug: a command that starts no flow,
+    so only on_error can touch the DM's state."""
+    _fail_once(monkeypatch, app_mod, "refuse_outside_admin_dm")
+    await rig.say(GROUP_ID, "/status")
+    assert rig.texts(GROUP_ID)[-1] == ERROR_TEXT
+
+
+async def test_an_error_in_a_group_leaves_the_dm_report(rig, monkeypatch):
+    await rig.issue_to_description(DM_ID, "movie x", 4)
+    await _error_in_the_group(rig, monkeypatch)
+    await rig.say(DM_ID, "the picture is green")
+    rig.seerr.create_issue.assert_awaited_once()
+    assert rig.seerr.create_issue.call_args.kwargs["seerr_media_id"] == 10
+
+
+async def test_an_error_in_a_group_leaves_the_dm_request(rq_rig, monkeypatch):
+    rig = rq_rig
+    version = await _request_to_confirm(rig, DM_ID, "movie x")
+    confirm = rig.last_menu(DM_ID)
+    await _error_in_the_group(rig, monkeypatch)
+    await rig.tap(DM_ID, f"{RQ_GO}:{version}", confirm)
+    assert _requests(rig) == [100]
+
+
+async def test_an_error_in_a_group_leaves_the_dm_reply_prompt(rig, monkeypatch):
+    rig.recorded(DM_ID, 601)
+    await rig.tap(DM_ID, f"{TK_REPLY}:1", 601)
+    await _error_in_the_group(rig, monkeypatch)
+    await rig.say(DM_ID, "words for ticket one")
+    assert rig.seerr.add_issue_comment.call_args.args[:2] == (1, "words for ticket one")
+
+
+async def test_an_error_in_a_group_leaves_a_dm_link_poll(rig, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from bot import link_flow
+    from bot.callback_prefixes import LINK_CONSENT, LINK_PLATFORM
+    monkeypatch.setattr(link_flow, "PLEX_POLL_INTERVAL_S", 0)
+    started, release = asyncio.Event(), asyncio.Event()
+    plex = rig.app.bot_data["plex"]
+    plex.request_pin = AsyncMock(return_value=SimpleNamespace(
+        id=1, auth_url="https://plex.example/auth", code="abcd"))
+
+    async def poll_pin(pin_id):
+        started.set()
+        await release.wait()
+        return "tok"
+
+    plex.poll_pin = poll_pin
+    plex.get_user = AsyncMock(return_value=SimpleNamespace(uuid="u", username="un"))
+    rig.seerr.login_with_plex = AsyncMock(return_value=(7, "U"))
+    rig.app.bot_data["store"].link_with_plex = AsyncMock()
+    await rig.say(DM_ID, "/link")
+    await rig.tap(DM_ID, f"{LINK_CONSENT}:yes", rig.last_menu(DM_ID))
+    task = asyncio.create_task(
+        rig.tap(DM_ID, f"{LINK_PLATFORM}:desktop", rig.last_menu(DM_ID)))
+    await asyncio.wait_for(started.wait(), 5)
+    await _error_in_the_group(rig, monkeypatch)
+    assert rig.user_data.get("link_active_loop")
+    release.set()
+    await asyncio.wait_for(task, 5)
+    rig.app.bot_data["store"].link_with_plex.assert_awaited_once()
+
+
+async def test_an_error_in_the_reports_own_chat_still_clears_it(rig, monkeypatch):
+    from bot import ticket_flow
+    await rig.issue_to_description(DM_ID, "movie x", 4)
+    _fail_once(monkeypatch, ticket_flow, "send_typing")
+    await rig.say(DM_ID, "the picture is green")
+    assert rig.texts(DM_ID)[-1] == ERROR_TEXT
+    assert "media" not in rig.user_data and "issue_chat" not in rig.user_data
+    rig.seerr.create_issue.assert_not_awaited()
+
+
+def test_every_key_an_error_clears_belongs_to_a_chat():
+    """Each key in the error clean-up list is in exactly one owner group
+    (hub_origin aside, which is cleared when every draft is the error
+    chat's), so none is cleared for every chat by accident."""
+    from bot.app import _CONVERSATION_USER_DATA_KEYS, _ERROR_KEY_OWNERS
+    grouped = [k for _owner, keys in _ERROR_KEY_OWNERS for k in keys]
+    assert len(grouped) == len(set(grouped))
+    assert set(grouped) | {"hub_origin"} == set(_CONVERSATION_USER_DATA_KEYS)
+    assert "rq_for_picked" not in _CONVERSATION_USER_DATA_KEYS
+
+
+async def test_an_error_in_a_group_keeps_the_dm_reports_back_button(rig, monkeypatch):
+    from bot.callback_prefixes import TICKETS_REPORT
+    from bot.tickets_hub import TICKETS_HUB
+    rig.recorded(DM_ID, 621)
+    await rig.tap(DM_ID, TICKETS_REPORT, 621)
+    assert rig.user_data["hub_origin"] == TICKETS_HUB
+    await _error_in_the_group(rig, monkeypatch)
+    assert rig.user_data["hub_origin"] == TICKETS_HUB

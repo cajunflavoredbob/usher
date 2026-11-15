@@ -12,6 +12,7 @@ from pathlib import Path
 from aiohttp import web
 import telegram
 from telegram import InlineKeyboardMarkup, Update
+from telegram.constants import ChatType
 from telegram.error import InvalidToken, NetworkError
 from telegram.ext import (
     Application,
@@ -150,7 +151,7 @@ from bot.new_content import (NEW_CONTENT_FIRST_DELAY_S, NEW_CONTENT_INTERVAL_S,
                              poll_new_content)
 from bot.subscriptions import (cmd_subscriptions, subscription_add,
                                subscription_del, subscriptions_hub)
-from bot.request_flow import (_PICKED_KEY, _RQ_KEYS, _request_conversation,
+from bot.request_flow import (_RQ_KEYS, _request_conversation,
                               remaining_seasons_ask, remaining_seasons_send,
                               request_info_dismiss)
 from bot.requests_cmd import cmd_requests, requests_hub_mine, rq_list_cancel
@@ -158,12 +159,16 @@ from bot.request_admin import rq_admin_action
 from bot.resolve_flow import _resolve_conversation
 from bot.ask_admin import ask_admin
 from bot.shared import (
+    ISSUE_KEYS,
+    ISSUE_OWNER_KEY,
+    RQ_OWNER_KEY,
     edit_or_send,
     in_group_chat,
     force_end_flow_conversations,
     guard_flow_steps,
     format_status,
     global_btn_gate,
+    owns_draft,
     record_btn,
     reset_stale_flows,
     schedule_clean_exit,
@@ -1063,7 +1068,13 @@ async def _post_shutdown(app: Application) -> None:
 
 # user_data keys populated by the ConversationHandlers (link, new Ticket,
 # resolve, ticket-reply, request, invite). Cleared on error so a
-# mid-conversation crash doesn't leak half-state into the next flow.
+# mid-conversation crash doesn't leak half-state into the next flow, but only
+# the ones that belong to the chat the error happened in (_ERROR_KEY_OWNERS):
+# user_data is per user, and a flow the user has open in another chat goes on.
+# rq_for_picked is not here: an error that clears the Request for someone pick
+# must leave the marker, so the rest of that flow refuses instead of going on
+# as the Admin's own Request (request_flow._PICKED_KEY; only the private-chat
+# entry points pop it).
 _CONVERSATION_USER_DATA_KEYS = (
     "tk_reply_id", "tk_close_after", "tk_reply_chat",
     "link_active_loop", "link_retry_ok", "hub_origin",
@@ -1072,7 +1083,7 @@ _CONVERSATION_USER_DATA_KEYS = (
     "submitting_ticket", "issue_chat", "issue_chat_draft",
     "research_parent",
     "awaiting_comment_for", "awaiting_comment_chat",
-) + _RQ_KEYS + (_PICKED_KEY,) + (
+) + _RQ_KEYS + (
     # rq_jump_media is ticket_flow's stash for the Request-it-instead jump
     # (request_flow._RQ_KEYS rightly omits it). rq_search_version is
     # deliberately in NEITHER list: the version counter must survive every
@@ -1080,6 +1091,46 @@ _CONVERSATION_USER_DATA_KEYS = (
     # fresh flow's counter restarting at 1.
     "rq_jump_media",
 ) + _INV_KEYS + _BC_KEYS  # inv_version deliberately excluded (see invite_flow._INV_KEYS)
+
+
+# Who each group of those keys belongs to: the user_data key naming its chat,
+# a draft's owner key (checked with owns_draft), or None for the private
+# chat's (the /link poll and a Broadcast run only there). hub_origin is cleared
+# only when every draft is the error chat's: a flow in another chat keeps its
+# back button.
+_DRAFT_OWNER_KEYS = (ISSUE_OWNER_KEY, RQ_OWNER_KEY, "inv_chat")
+_ERROR_KEY_OWNERS = (
+    ("tk_reply_chat", ("tk_reply_id", "tk_close_after", "tk_reply_chat")),
+    ("awaiting_comment_chat", ("awaiting_comment_for", "awaiting_comment_chat")),
+    (ISSUE_OWNER_KEY, tuple(k for k in ISSUE_KEYS if k != "hub_origin")),
+    (RQ_OWNER_KEY, _RQ_KEYS),
+    ("inv_chat", _INV_KEYS),
+    (None, ("link_active_loop", "link_retry_ok") + _BC_KEYS),
+)
+
+
+def _error_cleanup_keys(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> list:
+    """The conversation keys an error clears: every one when the error names
+    no chat (a job, a non-Update), else those of the error's chat only."""
+    chat = update.effective_chat if isinstance(update, Update) else None
+    if chat is None:
+        return list(_CONVERSATION_USER_DATA_KEYS)
+    keys: list = []
+    every_draft_here = True
+    for owner_key, group in _ERROR_KEY_OWNERS:
+        if owner_key is None:
+            here = chat.type == ChatType.PRIVATE
+        elif owner_key in _DRAFT_OWNER_KEYS:
+            here = owns_draft(ctx, update, owner_key)
+            every_draft_here = every_draft_here and here
+        else:
+            owner = ctx.user_data.get(owner_key)
+            here = owner is None or owner == chat.id
+        if here:
+            keys.extend(group)
+    if every_draft_here:
+        keys.append("hub_origin")
+    return keys
 
 
 async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1092,12 +1143,13 @@ async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             "message is not modified" in str(err).lower():
         return
     logger.exception("Unhandled error: %s", ctx.error)
-    # Clear any half-populated conversation state so the next conversation
-    # entry sees a clean slate. ctx.user_data may be None on errors that
-    # fire outside a per-user context (e.g., job-queue exceptions); guard.
+    # Clear any half-populated conversation state of this chat so its next
+    # conversation entry sees a clean slate. ctx.user_data may be None on
+    # errors that fire outside a per-user context (e.g., job-queue
+    # exceptions); guard.
     try:
         if ctx.user_data is not None:
-            for key in _CONVERSATION_USER_DATA_KEYS:
+            for key in _error_cleanup_keys(update, ctx):
                 ctx.user_data.pop(key, None)
     except Exception as exc:
         logger.debug("on_error user_data cleanup failed (non-fatal)", exc_info=exc)
