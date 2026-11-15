@@ -2229,7 +2229,7 @@ async def _restore_upload_locked(request: web.Request) -> web.Response:
             # path stay in the log.
             body = _page("Restore", """
 <h1>Restore failed partway</h1>
-<p>Usher is restarting. Refresh in a few seconds and check the restored settings.</p>
+<p>Usher is restarting. In a few seconds, <a href="/admin">open the panel</a> and check the restored settings.</p>
 <p class="note">Some files were already replaced. Details are in the Usher log.</p>
 """)
             return web.Response(text=body, content_type="text/html", status=500)
@@ -2253,7 +2253,7 @@ async def _restore_upload_locked(request: web.Request) -> web.Response:
     )
     body = _page("Restore", f"""
 <h1>Restore Complete</h1>
-<p>Container is restarting. Refresh in a few seconds.</p>
+<p>Usher is restarting. In a few seconds, <a href="/admin">open the panel</a>.</p>
 {snapshot_note}
 """)
     return web.Response(text=body, content_type="text/html")
@@ -2523,7 +2523,12 @@ async def newplex_warning_dismiss(request: web.Request) -> web.Response:
         return guard
     store: SettingsStore = request.app["settings_store"]
     store.settings.seerr_new_plex_login_ack = True
-    await store.save_async()
+    if not await store.save_async():
+        # The save was skipped (a restore is restarting Usher): the ack is
+        # not on disk, so do not keep it in memory or say it worked.
+        store.settings.seerr_new_plex_login_ack = False
+        return web.json_response({"ok": False, "reason": SAVE_SKIPPED_MSG},
+                                 status=503)
     audit("newplex_warning_dismissed", user=_current_user(request) or "-",
           ip=client_ip(request))
     return web.json_response({"ok": True})

@@ -127,3 +127,15 @@ async def test_dismiss_requires_csrf(client, monkeypatch):
                              data={"csrf_token": "wrong"}, cookies=_cookies())
     assert resp.status == 403
     assert client.settings_store.settings.seerr_new_plex_login_ack is False
+
+
+async def test_a_dismiss_whose_save_was_skipped_says_so(client, monkeypatch):
+    async def skipped():
+        return False
+    monkeypatch.setattr(client.settings_store, "save_async", skipped)
+    resp = await client.post("/admin/seerr/newplex-warning/dismiss",
+                             data={"csrf_token": CSRF}, cookies=_cookies())
+    body = await resp.json()
+    assert resp.status == 503
+    assert body["ok"] is False and body["reason"]
+    assert client.settings_store.settings.seerr_new_plex_login_ack is False

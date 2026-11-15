@@ -85,6 +85,8 @@ async def test_a_save_after_a_restore_does_not_write_over_it(env):
     form = {"csrf_token": CSRF, "passphrase": "", "backup": buf.getvalue()}
     resp = await client.post("/admin/restore", data=form, cookies=_cookies())
     assert resp.status == 200
+    done = await resp.text()
+    assert "Refresh" not in done and 'href="/admin"' in done
     # A save thread that was queued before the restore runs now, holding the
     # old in-memory settings: it must not rename over the restored file.
     await store.save_async()
@@ -113,6 +115,9 @@ async def test_a_restore_failing_after_settings_was_written_restarts(env, monkey
     assert resp.status == 500
     text = await resp.text()
     assert "partway" in text and "restarting" in text
+    # A POST response: a browser refresh would resubmit the restore, so the
+    # page links to the panel (a GET) instead.
+    assert "Refresh" not in text and 'href="/admin"' in text
     assert exits == [(2.0,)]
     # No settings form to Save over the restored file, no raw exception text,
     # no server path.

@@ -69,6 +69,20 @@ async def _render_requests(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     store: UserStore = ctx.bot_data["store"]
     link = await store.get(user_id)
 
+    if not is_admin and (link is None or not link.plex_token):
+        # The User view needs a usable Plex link. The Admin in a group, with
+        # none, can still cancel (the Admin key does it) and lands here to
+        # re-render: say the outcome and that the list needs /link, instead of
+        # reading a link that is not there. The Admin-wide list stays out of
+        # a group.
+        text = (DECRYPT_FAILED_MSG
+                if link is not None and link.plex_token_decrypt_failed
+                else NOT_LINKED_MSG)
+        if notice:
+            text = f"{html.unescape(notice)}\n\n{text}"
+        await reply_end(ctx, reply_method, text, hub, user_id=user_id)
+        return
+
     try:
         requests, total = await seerr.list_requests(
             take=REQUEST_LIST_TAKE,

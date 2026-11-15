@@ -130,3 +130,51 @@ async def test_no_tk_reply_id_ends_quietly():
     state = await tk_reply_text(upd, ctx)
     assert state == ConversationHandler.END
     ctx.bot_data["seerr"].add_issue_comment.assert_not_called()
+
+
+async def test_a_force_end_during_the_post_says_the_ticket_was_left_open():
+    """The markers were cleared (not taken over) while the comment posted:
+    no newer reply is active, so none is claimed, and a Close with comment
+    says the Ticket stayed open."""
+    upd = make_update(text="closing comment", user_id=999)
+    ctx = make_ctx(admin_id=999, user_data={"tk_reply_id": 42, "tk_reply_chat": 100, "tk_close_after": True})
+
+    async def cleared(*args, **kwargs):
+        for key in ("tk_reply_id", "tk_reply_chat", "tk_close_after"):
+            ctx.user_data.pop(key, None)
+    ctx.bot_data["seerr"].add_issue_comment.side_effect = cleared
+
+    state = await tk_reply_text(upd, ctx)
+    assert state == ConversationHandler.END
+    ctx.bot_data["seerr"].resolve_issue.assert_not_called()
+    text = upd.message.reply_calls[0]["text"]
+    assert "Reply posted on #42" in text
+    assert "left open" in text
+    assert "new reply" not in text and "still active" not in text
+
+
+async def test_a_newer_prompt_during_a_close_with_comment_says_left_open_and_active():
+    upd = make_update(text="closing comment", user_id=999)
+    ctx = make_ctx(admin_id=999, user_data={"tk_reply_id": 42, "tk_reply_chat": 100, "tk_close_after": True})
+
+    async def moved(*args, **kwargs):
+        ctx.user_data["tk_reply_id"] = 99
+    ctx.bot_data["seerr"].add_issue_comment.side_effect = moved
+
+    await tk_reply_text(upd, ctx)
+    text = upd.message.reply_calls[0]["text"]
+    assert "left open" in text and "still active" in text
+
+
+async def test_a_plain_reply_with_markers_cleared_does_not_claim_a_newer_reply():
+    upd = make_update(text="a note", user_id=999)
+    ctx = make_ctx(admin_id=999, user_data={"tk_reply_id": 42, "tk_reply_chat": 100, "tk_close_after": False})
+
+    async def cleared(*args, **kwargs):
+        ctx.user_data.clear()
+    ctx.bot_data["seerr"].add_issue_comment.side_effect = cleared
+
+    state = await tk_reply_text(upd, ctx)
+    assert state == ConversationHandler.END
+    text = upd.message.reply_calls[0]["text"]
+    assert "left open" not in text and "still active" not in text

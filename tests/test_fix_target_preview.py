@@ -78,7 +78,9 @@ async def test_describe_fix_target_is_empty_without_an_episode_or_sonarr():
     sonarr = _sonarr(EPS)
     assert await describe_fix_target(MEDIA, 1, None, sonarr) == ""
     assert await describe_fix_target(MEDIA, 1, 1, None) == ""
-    assert await describe_fix_target({"type": "movie", "tmdb_id": 1}, None, None, sonarr) == ""
+    assert await describe_fix_target(
+        {"type": "movie", "tmdb_id": 1}, None, None, sonarr
+    ) == "Radarr: couldn't check which movie this is."
 
 
 async def test_describe_fix_target_names_a_movie_by_title_and_year():

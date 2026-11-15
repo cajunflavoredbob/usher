@@ -16,6 +16,8 @@ logger = logging.getLogger("usher." + __name__)
 
 _SERVICE = "Radarr"
 
+PREVIEW_UNKNOWN_MOVIE = "Radarr: couldn't check which movie this is."
+
 
 @dataclass
 class RadarrMovie:

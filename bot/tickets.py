@@ -39,6 +39,7 @@ from fix_result import FixResult
 from http_util import user_friendly_message
 from radarr import RadarrClient
 from seerr import ISSUE_STATUS_RESOLVED, PlexTokenInvalidError, SeerrClient
+from radarr import PREVIEW_UNKNOWN_MOVIE
 from sonarr import PREVIEW_UNKNOWN, SonarrClient
 from store import UserStore
 
@@ -523,7 +524,9 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     refusal = ""
     seerr = ctx.bot_data.get("seerr")
     sonarr = ctx.bot_data.get("sonarr")
-    if seerr is not None and sonarr is not None:
+    # Without Sonarr only a movie can be fixed, and its line needs Seerr only.
+    unknown = PREVIEW_UNKNOWN if sonarr is not None else PREVIEW_UNKNOWN_MOVIE
+    if seerr is not None:
         # Edit BEFORE the network calls: the preview reads Seerr and Sonarr,
         # and the Fix choices stay off until the menu is drawn below.
         await q.edit_message_text(f"🔧 Fix #{ticket_id} - checking...")
@@ -534,7 +537,7 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 target = await describe_fix_target(
                     fix_ctx.media, fix_ctx.season, fix_ctx.episode, sonarr)
             elif err is not None and err.startswith(_FETCH_FAILED):
-                target = PREVIEW_UNKNOWN
+                target = unknown
             elif err is not None:
                 # A whole-season or resolved Ticket: show the refusal the
                 # Fix itself would give, with no Fix choices.
@@ -542,7 +545,7 @@ async def tk_fix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception:
             logger.warning("couldn't preview the Fix target for #%d",
                            ticket_id, exc_info=True)
-            target = PREVIEW_UNKNOWN
+            target = unknown
     if refusal:
         await q.edit_message_text(
             f"🔧 Fix #{ticket_id}\n{refusal}",
@@ -1119,15 +1122,23 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     # effect to whatever flow they're now on.
     moved_chat = not _owns_reply_state(ctx, update)
     if moved_chat or ctx.user_data.get("tk_reply_id") != ticket_id:
+        # No marker left at all means a force-end cleared them, not that a
+        # newer prompt took over: do not claim one is active.
+        newer_active = ctx.user_data.get("tk_reply_id") is not None
+        note = ""
+        if close_after:
+            note += " The Ticket was left open."
+        if newer_active:
+            note += " (You've started a new reply since then. That one's still active.)"
         await update.effective_message.reply_text(
-            f"💬 Reply posted on #{ticket_id}. "
-            "(You've started a new reply since then. That one's still active.)"
-        )
-        # Return None, not END: the shared (chat,user) conversation now belongs
-        # to the NEW reply flow; ending it here would kill the flow the user
-        # just started and silently swallow their next message. A new reply
-        # in another chat lives under that chat's key, so this one ends.
-        return ConversationHandler.END if moved_chat else None
+            f"💬 Reply posted on #{ticket_id}.{note}")
+        # Return None, not END, when the shared (chat,user) conversation now
+        # belongs to a NEW reply flow here: ending it would kill the flow the
+        # user just started and silently swallow their next message. A new
+        # reply in another chat lives under that chat's key, and with no new
+        # reply there is nothing to keep, so those end.
+        return (None if newer_active and not moved_chat
+                else ConversationHandler.END)
     if close_after:
         try:
             await seerr.resolve_issue(ticket_id, as_plex_token=None)
@@ -1290,15 +1301,15 @@ async def describe_fix_target(
     sonarr: Optional[SonarrClient],
 ) -> str:
     """The file a Fix is about to delete, shown first so a wrong pick is
-    visible. A movie: "Radarr: <Title> (<Year>)" from the picked title (''
-    when the media carries no title). A TV episode: the Sonarr episode (and
+    visible. A movie: "Radarr: <Title> (<Year>)" from the picked title
+    ("couldn't check which movie this is" when the media carries no title). A TV episode: the Sonarr episode (and
     any other episodes its file holds) the typed number resolves to; '' for
     whole seasons or when Sonarr is missing, "couldn't check" when the TVDb
     id is missing. Never raises."""
     if media.get("type") == "movie":
         title = media.get("title")
         if not title:
-            return ""
+            return PREVIEW_UNKNOWN_MOVIE
         year = media.get("year")
         return f"Radarr: {title} ({year})" if year else f"Radarr: {title}"
     if (media.get("type") != "tv" or sonarr is None or not episode

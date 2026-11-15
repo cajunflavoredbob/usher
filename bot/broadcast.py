@@ -17,6 +17,7 @@ import logging
 from typing import Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ChatType
 from telegram.error import RetryAfter, TelegramError
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes, ConversationHandler, MessageHandler,
@@ -204,10 +205,14 @@ async def broadcast_cancel_late(update: Update,
     """A typed /cancel that no conversation took, from the Admin while a
     broadcast is still sending (the Send tap already ended its conversation).
     Registered after every conversation, so it never sees a /cancel one of
-    them handles. Says the job can't be cancelled; otherwise stays silent."""
+    them handles. Says the job can't be cancelled, in the Admin's DM only (a
+    group would show the broadcast to everyone there); otherwise stays
+    silent."""
     user = update.effective_user
+    chat = update.effective_chat
     if (user is None or user.id != ctx.bot_data.get("admin_id")
-            or not ctx.bot_data.get("broadcasts_running")):
+            or not ctx.bot_data.get("broadcasts_running")
+            or chat is None or chat.type != ChatType.PRIVATE):
         return
     await update.effective_message.reply_text(SENDING_NOTE)
 

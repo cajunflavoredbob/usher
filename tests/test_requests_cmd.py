@@ -494,3 +494,19 @@ async def test_admin_cancel_in_group_still_rechecks_pending_with_the_api_key():
     await rq_list_cancel(upd, ctx)
     seerr.delete_request.assert_not_awaited()
     assert seerr.get_request.call_args.kwargs["as_plex_token"] is None
+
+
+async def test_unlinked_admin_cancelling_in_a_group_gets_the_outcome_and_a_link_hint():
+    ctx = make_ctx(admin_id=ADMIN_ID, link=None)
+    seerr = ctx.bot_data["seerr"]
+    seerr.get_request.side_effect = None
+    seerr.get_request.return_value = _items()[0]  # pending
+    upd = make_update(callback_data="rqlc:12", user_id=ADMIN_ID)
+    upd.effective_chat.type = "supergroup"
+    await rq_list_cancel(upd, ctx)
+    assert seerr.delete_request.await_args.args[0] == 12
+    seerr.list_requests.assert_not_called()  # the User view needs a link
+    text = upd.callback_query.edits[-1]["text"]
+    assert "Request #12 cancelled" in text
+    assert "link" in text.lower()
+    assert "Couldn't fetch" not in text
