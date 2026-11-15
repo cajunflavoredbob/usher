@@ -361,7 +361,8 @@ async def test_picked_users_cancel_closes_the_behalf_card():
             "label": "New Movie", "is4k": 0, "status": "waiting",
             "arr_id": None, "last_progress": None, "bumped": 0, "seasons": None,
             "timeout_at": "2099-01-01 00:00:00"}
-    ctx2 = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=1001))
+    ctx2 = make_ctx(admin_id=ADMIN_ID,
+                    link=make_link(telegram_id=1001, seerr_id=21))
     item = RequestListItem(id=5, status=REQUEST_STATUS_PENDING,
                            media_type="movie", tmdb_id=1,
                            created_at="2026-08-16T10:00:00.000Z",

@@ -160,7 +160,16 @@ def attach_webhook(
             logger.warning("Webhook rejected: invalid JSON")
             return web.Response(status=400, text="bad json")
 
-        nt = (payload.get("notification_type") or "").upper()
+        # Valid JSON that is not an object, or a non-string type, is a bad
+        # request, not a crash.
+        if not isinstance(payload, dict):
+            logger.warning("Webhook rejected: JSON body is not an object")
+            return web.Response(status=400, text="bad json")
+        nt = payload.get("notification_type") or ""
+        if not isinstance(nt, str):
+            logger.warning("Webhook rejected: notification_type is not a string")
+            return web.Response(status=400, text="bad notification_type")
+        nt = nt.upper()
         if nt == "TEST_NOTIFICATION":
             logger.info("Webhook test notification received from Seerr")
             return web.Response(status=200, text="ok")

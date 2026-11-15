@@ -116,10 +116,10 @@ def make_update(*, text: Optional[str] = None, callback_data: Optional[str] = No
 
 def make_link(*, telegram_id: int = 42, plex_token: str = "plex-abc",
                  plex_username: str = "user1plex",
-                 decrypt_failed: bool = False) -> Link:
+                 decrypt_failed: bool = False, seerr_id: int = 7) -> Link:
     return Link(
         telegram_id=telegram_id,
-        seerr_id=7,
+        seerr_id=seerr_id,
         seerr_display="User1",
         plex_token=None if decrypt_failed else plex_token,
         plex_uuid="uuid-abc",

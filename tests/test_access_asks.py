@@ -129,6 +129,12 @@ async def test_send_creates_one_open_ask_and_one_admin_dm(fresh_store):
     assert "Sent to the Admin" in upd.callback_query.edits[-1]["text"]
 
 
+async def test_the_admin_dm_is_not_recorded_in_the_admins_button_history(fresh_store):
+    ctx, upd = await _send_ask(fresh_store)
+    ctx.bot.send_message.assert_awaited_once()
+    assert not ctx.application.bot_data.get("btn_msgs", {}).get(ADMIN_ID)
+
+
 async def test_admin_dm_says_when_the_email_already_has_a_share(fresh_store):
     await _link_admin(fresh_store)
     share = PlexShare(id=5, email="NEW@example.com", username="newbie",

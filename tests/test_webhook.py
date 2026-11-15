@@ -237,6 +237,24 @@ async def test_invalid_json_returns_400(client):
     assert r.status == 400
 
 
+@pytest.mark.parametrize("body", [b"[1, 2]", b'"text"', b"42", b"null",
+                                  b'{"notification_type": 5}',
+                                  b'{"notification_type": ["ISSUE_COMMENT"]}'])
+async def test_non_object_json_or_non_string_type_returns_400(client, body):
+    r = await client.post(
+        "/webhook/seerr", data=body,
+        headers={"Authorization": SECRET, "Content-Type": "application/json"})
+    assert r.status == 400
+    assert client.calls["comment"] == []
+
+
+async def test_object_without_a_type_is_still_accepted(client):
+    r = await client.post(
+        "/webhook/seerr", json={"subject": "x"},
+        headers={"Authorization": SECRET})
+    assert r.status < 500 and r.status != 400
+
+
 # --- healthcheck ---
 
 

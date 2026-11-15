@@ -307,6 +307,18 @@ async def rq_list_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         await _render_requests(update, ctx, q.edit_message_text,
                                user_id=user_id, notice=notice, hub=hub)
         return
+    if (not is_admin and info is not None and link is not None
+            and link.seerr_id is not None and info.requested_by_id is not None
+            and info.requested_by_id != link.seerr_id):
+        # Seerr enforces ownership for a plain user, but an account that can
+        # manage Requests could delete someone else's through this button, so
+        # check here too. (A lookup that failed cannot be checked; Seerr
+        # still decides then.)
+        await _render_requests(
+            update, ctx, q.edit_message_text, user_id=user_id,
+            notice=f"⚠️ Request #{request_id} isn't yours, so it wasn't cancelled.",
+            hub=hub)
+        return
     try:
         await seerr.delete_request(request_id, as_plex_token=token)
     except NotFoundAPIError:
@@ -322,7 +334,8 @@ async def rq_list_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         logger.exception("delete_request failed")
         await _render_requests(
             update, ctx, q.edit_message_text, user_id=user_id,
-            notice=f"⚠️ Couldn't cancel #{request_id}. {user_friendly_message(exc)}",
+            notice=(f"⚠️ Couldn't cancel #{request_id}. "
+                    f"{html.escape(user_friendly_message(exc))}"),
             hub=hub)
         return
     await _close_progress_cards(

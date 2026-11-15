@@ -117,6 +117,47 @@ async def test_cancel_failure_surfaces_reason():
     assert "#12" in text  # list still rendered below the warning
 
 
+async def test_cancel_failure_text_is_html_escaped(monkeypatch):
+    import bot.requests_cmd as rc
+    monkeypatch.setattr(rc, "user_friendly_message", lambda exc: "<b>x & y")
+    ctx = make_ctx(admin_id=ADMIN_ID, link=make_link(telegram_id=USER_ID))
+    ctx.bot_data["seerr"].delete_request.side_effect = RuntimeError("boom")
+    ctx.bot_data["seerr"].list_requests.return_value = ([_items()[0]], 1)
+    upd = make_update(callback_data="rqlc:12", user_id=USER_ID)
+    await rq_list_cancel(upd, ctx)
+    text = upd.callback_query.edits[0]["text"]
+    assert "&lt;b&gt;x &amp; y" in text and "<b>x" not in text
+
+
+async def test_cancel_of_someone_elses_request_is_refused_locally():
+    ctx = make_ctx(admin_id=ADMIN_ID,
+                   link=make_link(telegram_id=USER_ID, seerr_id=7))
+    item = _items()[0]
+    item.requested_by_id = 99  # another Seerr account
+    seerr = ctx.bot_data["seerr"]
+    seerr.get_request.side_effect = None
+    seerr.get_request.return_value = item
+    seerr.list_requests.return_value = ([item], 1)
+    upd = make_update(callback_data="rqlc:12", user_id=USER_ID)
+    await rq_list_cancel(upd, ctx)
+    seerr.delete_request.assert_not_awaited()
+    assert "isn't yours" in upd.callback_query.edits[0]["text"]
+
+
+async def test_cancel_of_own_request_still_deletes():
+    ctx = make_ctx(admin_id=ADMIN_ID,
+                   link=make_link(telegram_id=USER_ID, seerr_id=7))
+    item = _items()[0]
+    item.requested_by_id = 7
+    seerr = ctx.bot_data["seerr"]
+    seerr.get_request.side_effect = None
+    seerr.get_request.return_value = item
+    seerr.list_requests.return_value = ([], 0)
+    upd = make_update(callback_data="rqlc:12", user_id=USER_ID)
+    await rq_list_cancel(upd, ctx)
+    seerr.delete_request.assert_awaited_once()
+
+
 async def test_cancel_not_found_treated_as_success():
     """A 404 on DELETE (already cancelled, or our own retried DELETE) reads
     as success, not a scary failure alert."""

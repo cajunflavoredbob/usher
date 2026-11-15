@@ -248,7 +248,8 @@ async def _send(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             text=ask_text(ask, username=getattr(user, "username", None),
                           share_line=share_line),
             parse_mode="HTML", reply_markup=_admin_kb(ask_id))
-        record_btn(ctx.application, admin_id, sent)
+        # No record_btn: these buttons are exempt from the Admin's 3-slot
+        # history, and recording them would push a real menu out of it.
         await store.set_access_ask_message(
             ask_id, getattr(sent, "message_id", None))
     except Exception as exc:
