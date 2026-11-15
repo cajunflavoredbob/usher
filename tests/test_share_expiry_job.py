@@ -495,13 +495,37 @@ async def test_remove_now_without_a_link_keeps_the_reminder_buttons(
         f"{SHARE_REMOVE_NOW}:1"]
 
 
-async def test_tap_on_an_old_reminder_after_the_job_removed_the_share(
+OUT_OF_DATE = ("This reminder is out of date: the Share was removed or its "
+               "expiry was cleared. Open the Share view to check.")
+
+
+async def test_every_button_on_a_reminder_with_no_row_says_it_is_out_of_date(
         fresh_store):
-    app, plex = await _setup(fresh_store, [])
-    upd = await _gated_tap(app, f"{SHARE_EXTEND}:1")
-    text = upd.callback_query.edits[-1]["text"]
-    assert "Nothing was removed" in text and "no longer has an expiry" in text
-    assert "✅" not in text and "Share view" in text
+    """After the job removed the Share (or the expiry was cleared), every
+    button answers one neutral text and changes nothing."""
+    app, plex = await _setup(fresh_store, [_share(1)])
+    for data in (f"{SHARE_EXTEND}:1", f"{SHARE_EXTEND}:1:20310101000000",
+                 f"{SHARE_LET_END}:1", f"{SHARE_REMOVE_NOW}:1",
+                 f"{SHARE_KEEP}:1", f"{SHARE_REMOVE_YES}:1",
+                 f"{SHARE_RETRY}:1", f"{SHARE_REMOVE_RETRY}:1"):
+        upd = await _gated_tap(app, data)
+        assert upd.callback_query.edits[-1]["text"] == OUT_OF_DATE, data
+    plex.remove_share.assert_not_awaited()
+
+
+async def test_an_extend_whose_row_goes_mid_tap_says_it_is_out_of_date(
+        fresh_store):
+    app, _ = await _setup(fresh_store, [_share(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       "2031-01-01 00:00:00")
+    real = fresh_store.extend_share_expiry
+
+    async def cleared_first(*args):
+        await fresh_store.clear_share_expiry(1)
+        return await real(*args)
+    fresh_store.extend_share_expiry = cleared_first
+    upd = await _gated_tap(app, f"{SHARE_EXTEND}:1:20310101000000")
+    assert upd.callback_query.edits[-1]["text"] == OUT_OF_DATE
 
 
 async def _two_shares_holder(store, plex_username="alice"):

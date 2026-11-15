@@ -44,6 +44,10 @@ EXTEND_DAYS = 30
 # while its row is here, so a slow removal cannot undo a fresh Extend. Not
 # persisted: a restart starts with no removal in flight.
 REMOVING_KEY = "share_expiry_removing"
+# Any button on a DM whose Expiry row is gone: the job removed the Share, or
+# the Admin cleared the expiry; the bot cannot tell which.
+OUT_OF_DATE = ("This reminder is out of date: the Share was removed or its "
+               "expiry was cleared. Open the Share view to check.")
 
 
 def _parse(text: str) -> datetime:
@@ -262,10 +266,7 @@ async def share_expiry_action(update: Update,
     store: UserStore = ctx.bot_data["store"]
     row = await store.get_share_expiry(share_id)
     if row is None:
-        await edit_or_send(
-            q, "Nothing was removed: that Share no longer has an expiry "
-               "date. Open the Share view (the Admin Hub's Shares list or "
-               "/uninvite) to check it.")
+        await edit_or_send(q, OUT_OF_DATE)
         return
     who = html.escape(_who(row))
     if action == SHARE_LET_END:
@@ -288,8 +289,7 @@ async def share_expiry_action(update: Update,
         expected = row.expires_at if token is None else token
         if not await store.extend_share_expiry(share_id, expected, new_at):
             row = await store.get_share_expiry(share_id)
-            text = ("Nothing was extended: that Share no longer has an "
-                    "expiry date." if row is None
+            text = (OUT_OF_DATE if row is None
                     else f"👍 <b>{who}</b> was already extended: now ends "
                          f"on {expiry_date_text(row.expires_at)}.")
             await edit_or_send(q, text, parse_mode="HTML")
