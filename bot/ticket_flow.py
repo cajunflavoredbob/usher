@@ -81,6 +81,7 @@ from bot.shared import (
     claimed_hub,
     draft_identity,
     refuse_replaced_draft,
+    reply_after_write,
     send_typing,
     media_action_key,
     prompt_plex_relink,
@@ -1281,9 +1282,9 @@ async def _submit_ticket_inner(
 
     lines.append("\nUse /tickets to manage it.")
     markup = None if hub is None else end_markup(hub)
-    sent = await update.effective_message.reply_text(
-        "\n".join(lines), reply_markup=markup)
-    if markup is not None:
+    # The Ticket exists now: a failed reply is logged, never "run it again".
+    sent = await reply_after_write(update, "\n".join(lines), reply_markup=markup)
+    if markup is not None and sent is not None:
         record_btn(ctx.application, update.effective_user.id, sent)
     # If a poller row was enqueued this submit, attach the confirmation
     # message so the poll ticks can turn it into a Progress card.

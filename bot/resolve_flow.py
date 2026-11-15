@@ -23,6 +23,7 @@ from bot.callback_prefixes import RESOLVE
 from bot.shared import (
     REPLACED_PROMPT_TEXT,
     DECRYPT_FAILED_MSG,
+    reply_after_write,
     AWAIT_COMMENT,
     RELINK_RESUME_EXECUTORS,
     end_action,
@@ -207,12 +208,13 @@ async def _reply_comment_added(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     """The "Added your comment" confirmation. A non-Admin also gets "Ask the
     Admin to try a different release"; the Admin follows up on their own."""
     followup = "" if is_admin else " Admin will follow up."
-    sent = await update.effective_message.reply_text(
-        f"💬 Added your comment to ticket #{ticket_id}.{followup}",
+    # The comment is posted: a failed reply is logged, never "run it again".
+    sent = await reply_after_write(
+        update, f"💬 Added your comment to ticket #{ticket_id}.{followup}",
         reply_markup=(None if is_admin else
                       InlineKeyboardMarkup([[ask_admin_button(ticket_id)]])),
     )
-    if not is_admin:
+    if not is_admin and sent is not None:
         record_btn(ctx.application, update.effective_user.id, sent)
 
 

@@ -1590,3 +1590,57 @@ def test_the_reply_marker_list_is_the_one_every_clear_uses():
     assert REPLY_CHAT_KEY in REPLY_MARKER_KEYS
     assert set(REPLY_MARKER_KEYS) <= set(app_mod._CONVERSATION_USER_DATA_KEYS)
     assert (REPLY_CHAT_KEY, REPLY_MARKER_KEYS) in app_mod._ERROR_KEY_OWNERS
+
+
+# --- a failed result reply after the write never says "run it again" -------
+
+def _fail_result_sends(monkeypatch, prefix: str, times: int) -> list:
+    """The first `times` sends whose text starts with `prefix` raise a
+    Telegram error. Returns the reply_parameters of each such send."""
+    from telegram.error import BadRequest
+    real = ExtBot.send_message
+    seen: list = []
+
+    async def send_message(self_, chat_id=None, text=None, *a, **kw):
+        if text and text.startswith(prefix):
+            seen.append(kw.get("reply_parameters"))
+            if len(seen) <= times:
+                raise BadRequest("Message to be replied not found")
+        return await real(self_, chat_id, text, *a, **kw)
+    monkeypatch.setattr(ExtBot, "send_message", send_message)
+    return seen
+
+
+@pytest.mark.parametrize("times", [1, 2])
+async def test_a_failed_report_reply_is_retried_unquoted_and_never_asks_to_rerun(
+        rig, monkeypatch, times):
+    await rig.issue_to_description(GROUP_ID, "alien", 4)
+    seen = _fail_result_sends(monkeypatch, "✅ Reported", times)
+    await rig.say(GROUP_ID, "no sound at all")
+    rig.seerr.create_issue.assert_awaited_once()
+    assert ERROR_TEXT not in rig.texts(GROUP_ID)
+    assert len(seen) == 2
+    assert seen[0] is not None and seen[1] is None  # the retry drops the quote
+    assert any(t.startswith("✅ Reported") for t in rig.texts(GROUP_ID)) == (times == 1)
+    assert not _live(rig, "issue", GROUP_ID)
+    assert "media" not in rig.user_data
+
+
+async def test_a_failed_reply_result_never_asks_to_rerun(rig, monkeypatch):
+    rig.recorded(DM_ID, 601)
+    await rig.tap(DM_ID, f"{TK_REPLY}:1", 601)
+    _fail_result_sends(monkeypatch, "💬 Replied", 2)
+    await rig.say(DM_ID, "words for ticket one")
+    assert rig.seerr.add_issue_comment.call_args.args[:2] == (1, "words for ticket one")
+    assert ERROR_TEXT not in rig.texts(DM_ID)
+    assert "tk_reply_id" not in rig.user_data
+
+
+async def test_a_failed_comment_added_reply_never_asks_to_rerun(rig, monkeypatch):
+    rig.recorded(DM_ID, 603)
+    await rig.tap(DM_ID, f"{RESOLVE}:1:no", 603)
+    _fail_result_sends(monkeypatch, "💬 Added your comment", 2)
+    await rig.say(DM_ID, "still broken")
+    assert rig.seerr.add_issue_comment.call_args.args[:2] == (1, "still broken")
+    assert ERROR_TEXT not in rig.texts(DM_ID)
+    assert "awaiting_comment_for" not in rig.user_data

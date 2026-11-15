@@ -66,6 +66,7 @@ from bot.shared import (
     REPLY_CHAT_KEY,
     REPLY_MARKER_KEYS,
     truncate_message,
+    reply_after_write,
     DECRYPT_FAILED_MSG,
     NOT_LINKED_MSG,
     AWAIT_TICKET_REPLY,
@@ -277,9 +278,11 @@ async def _edit_result(q, ctx, text: str,
 
 async def _reply_result(update, ctx, text: str,
                         markup: Optional[InlineKeyboardMarkup]) -> None:
-    """Reply with a result; a keyboard is recorded with the button gate."""
-    sent = await update.effective_message.reply_text(text, reply_markup=markup)
-    if markup is not None:
+    """Reply with a result; a keyboard is recorded with the button gate. A
+    result often follows a comment already posted, so a failed send is
+    logged (reply_after_write), never answered with "run it again"."""
+    sent = await reply_after_write(update, text, reply_markup=markup)
+    if markup is not None and sent is not None:
         record_btn(ctx.application, update.effective_user.id, sent)
 
 
@@ -1159,8 +1162,7 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
             note += " The Ticket was left open."
         if newer_active:
             note += " (You've started a new reply since then. That one's still active.)"
-        await update.effective_message.reply_text(
-            f"💬 Reply posted on #{ticket_id}.{note}")
+        await reply_after_write(update, f"💬 Reply posted on #{ticket_id}.{note}")
         # Return None, not END, when the shared (chat,user) conversation now
         # belongs to a NEW reply flow here: ending it would kill the flow the
         # user just started and silently swallow their next message. A new

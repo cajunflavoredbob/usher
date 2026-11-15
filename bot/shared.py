@@ -401,6 +401,27 @@ async def require_seerr(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
 
 # Telegram edit/send helper
 
+async def reply_after_write(update, text: str, **kwargs):
+    """Reply with the result of a write that already happened (a filed
+    Ticket, a posted comment). A Telegram error here must not reach the error
+    handler, whose "run the command again" invites a duplicate: it is logged
+    and the reply is tried once more without quoting the message (a group
+    can refuse the quote). Returns the sent message, or None when both
+    tries failed."""
+    msg = update.effective_message
+    try:
+        return await msg.reply_text(text, **kwargs)
+    except telegram.error.TelegramError as exc:
+        logger.warning("result reply failed, trying again without the quote",
+                       exc_info=exc)
+    try:
+        return await msg.reply_text(text, do_quote=False, **kwargs)
+    except telegram.error.TelegramError as exc:
+        logger.warning("result reply failed again; the write itself stands",
+                       exc_info=exc)
+        return None
+
+
 async def edit_or_send(q, text: str, **kwargs):
     """Edit the callback's message; if Telegram rejects (e.g., the user edited
     or deleted the source message), send a new message in the same chat so the
