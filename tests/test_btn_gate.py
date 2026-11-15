@@ -22,9 +22,15 @@ def _make_message(message_id: int, chat_id: int = 100):
 
 
 def _make_update(user_id: int, message_id: int, chat_id: int = 100,
-                 data: str | None = None):
-    """Build a stub Update with a callback_query carrying the given message."""
+                 data: str | None = None, age: timedelta = timedelta(minutes=1),
+                 edited_age: timedelta | None = None):
+    """Build a stub Update with a callback_query carrying the given message,
+    sent `age` ago (and last edited `edited_age` ago, if given), as Telegram
+    stamps a callback's message."""
     msg = _make_message(message_id, chat_id)
+    now = datetime.now(timezone.utc)
+    msg.date = now - age
+    msg.edit_date = None if edited_age is None else now - edited_age
     q = SimpleNamespace(
         message=msg,
         from_user=SimpleNamespace(id=user_id),
@@ -109,7 +115,8 @@ def test_record_btn_refreshes_existing_entry():
 
 
 async def test_gate_allows_when_no_history():
-    """Gradual rollout: gate is permissive for users with no recorded history."""
+    """A user with no recorded history (new, or since a restart) may tap a
+    message younger than the TTL."""
     app = _make_app()
     upd = _make_update(user_id=42, message_id=1)
     await global_btn_gate(upd, _Ctx(app))  # no raise
@@ -175,33 +182,95 @@ def _prune_after_expiry(app):
 
 @pytest.mark.parametrize("prefix", ["tkfm", "uninv"])
 async def test_stale_menu_stays_refused_after_the_hourly_prune(prefix):
-    """The prune must not empty a user's history: an empty one means 'no
-    record yet' and the gate allows it, reviving an expired menu."""
+    """The prune empties the history of a user whose buttons all expired;
+    the tapped message's own age still refuses the old menu."""
     app = _make_app()
     record_btn(app, 42, _make_message(1001))
     record_btn(app, 42, _make_message(1002))
     _prune_after_expiry(app)
-    assert [e["message_id"] for e in app.bot_data["btn_msgs"][42]] == [1002]
-    upd = _make_update(42, 1002, data=f"{prefix}:9")
+    assert 42 not in app.bot_data["btn_msgs"]
+    upd = _make_update(42, 1002, data=f"{prefix}:9",
+                       age=timedelta(seconds=BTN_TTL_SECONDS + 60))
     with pytest.raises(ApplicationHandlerStop):
         await global_btn_gate(upd, _Ctx(app))
-    assert "expired" in upd.callback_query.answers[0].lower()
+    assert upd.callback_query.answers == [
+        "This menu has expired. Run the command again."]
 
 
-async def test_prune_drops_a_stale_entry_after_one_more_ttl():
+@pytest.mark.parametrize("prefix", ["tkfm", "uninv"])
+async def test_a_13_hour_old_menu_with_no_history_is_refused(prefix):
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    app = _make_app()
+    upd = _make_update(42, 1002, data=f"{prefix}:9", age=timedelta(hours=13))
+    upd.callback_query.message.reply_markup = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("x", callback_data=f"{prefix}:9")],
+         [InlineKeyboardButton("History", callback_data="tkopen:9")]])
+    with pytest.raises(ApplicationHandlerStop):
+        await global_btn_gate(upd, _Ctx(app))
+    assert upd.callback_query.answers == [
+        "This menu has expired. Run the command again."]
+    assert [[b.callback_data for b in row]
+            for row in upd.callback_query.edits[-1].inline_keyboard] == [["tkopen:9"]]
+
+
+async def test_a_1_hour_old_menu_with_no_history_is_allowed_after_a_restart():
+    app = _make_app()  # a restart empties bot_data
+    upd = _make_update(42, 1002, data="tkfm:9", age=timedelta(hours=1))
+    await global_btn_gate(upd, _Ctx(app))  # no raise
+    assert upd.callback_query.answers == []
+
+
+async def test_an_old_menu_edited_recently_is_allowed_with_no_history():
+    app = _make_app()
+    upd = _make_update(42, 1002, data="tkfm:9", age=timedelta(hours=13),
+                       edited_age=timedelta(hours=1))
+    await global_btn_gate(upd, _Ctx(app))  # no raise
+
+
+async def test_an_old_menu_edited_long_ago_is_refused_with_no_history():
+    app = _make_app()
+    upd = _make_update(42, 1002, data="tkfm:9", age=timedelta(hours=13),
+                       edited_age=timedelta(hours=7))
+    with pytest.raises(ApplicationHandlerStop):
+        await global_btn_gate(upd, _Ctx(app))
+
+
+async def test_a_message_with_no_date_is_refused_with_no_history():
+    app = _make_app()
+    upd = _make_update(42, 1002, data="tkfm:9")
+    upd.callback_query.message.date = None
+    with pytest.raises(ApplicationHandlerStop):
+        await global_btn_gate(upd, _Ctx(app))
+
+
+async def test_a_naive_message_date_is_read_as_utc():
+    app = _make_app()
+    upd = _make_update(42, 1002, data="tkfm:9")
+    msg = upd.callback_query.message
+    msg.date = msg.date.replace(tzinfo=None)
+    await global_btn_gate(upd, _Ctx(app))  # no raise
+
+
+@pytest.mark.parametrize("prefix", ["tkopen", "shext", "rqap"])
+async def test_exempt_buttons_on_an_old_message_pass_with_no_history(prefix):
+    app = _make_app()
+    upd = _make_update(42, 1002, data=f"{prefix}:9", age=timedelta(days=3))
+    await global_btn_gate(upd, _Ctx(app))  # no raise
+
+
+async def test_prune_drops_a_user_once_every_entry_expired():
     app = _make_app()
     record_btn(app, 42, _make_message(1001))
     record_btn(app, 43, _make_message(2001))
-    older = (datetime.now(timezone.utc)
-             - timedelta(seconds=2 * BTN_TTL_SECONDS + 60)).isoformat()
-    app.bot_data["btn_msgs"][42][0]["sent_at"] = older
+    record_btn(app, 43, _make_message(2002))
     expired = (datetime.now(timezone.utc)
                - timedelta(seconds=BTN_TTL_SECONDS + 60)).isoformat()
+    app.bot_data["btn_msgs"][42][0]["sent_at"] = expired
     app.bot_data["btn_msgs"][43][0]["sent_at"] = expired
     app.bot_data["_btn_msgs_pruned_at"] = datetime.now(timezone.utc) - timedelta(hours=2)
     record_btn(app, 7, _make_message(9))
     assert 42 not in app.bot_data["btn_msgs"]
-    assert [e["message_id"] for e in app.bot_data["btn_msgs"][43]] == [2001]
+    assert [e["message_id"] for e in app.bot_data["btn_msgs"][43]] == [2002]
 
 
 async def test_prune_still_drops_unparseable_only_history():

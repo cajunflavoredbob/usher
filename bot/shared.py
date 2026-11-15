@@ -514,27 +514,20 @@ def _prune_btn_history(app, history: dict) -> None:
     if last is not None and (now - last).total_seconds() < _BTN_PRUNE_INTERVAL_S:
         return
     app.bot_data["_btn_msgs_pruned_at"] = now
+    # Dropping a user whose entries all expired is safe: with no history the
+    # gate reads the tapped message's own date (see _message_is_fresh), so an
+    # old menu stays expired.
     for uid in list(history):
         fresh = []
-        newest = newest_sent = None
         for e in history[uid]:
             try:
                 sent = datetime.fromisoformat(e["sent_at"])
             except (KeyError, TypeError, ValueError):
                 continue  # unparseable entry: drop it
-            newest, newest_sent = e, sent
             if (now - sent).total_seconds() <= BTN_TTL_SECONDS:
                 fresh.append(e)
         if fresh:
             history[uid] = fresh
-        elif (newest is not None
-              and (now - newest_sent).total_seconds() <= 2 * BTN_TTL_SECONDS):
-            # Keep the newest stale entry for one more TTL: an empty history
-            # means "no record yet" and the gate allows it, which would turn
-            # an expired menu back into a live one. With it kept the gate
-            # answers "expired". After that it goes, so the map does not hold
-            # one entry per account forever.
-            history[uid] = [newest]
         else:
             history.pop(uid, None)
 
@@ -817,13 +810,28 @@ def _group_tap_is_owner(ctx, message, user_id: int) -> bool:
     return False
 
 
+def _message_is_fresh(message, now: datetime) -> bool:
+    """Whether a callback's message was sent or last edited within
+    BTN_TTL_SECONDS. Telegram stamps a callback's message with its date, and
+    with edit_date once it has been edited; an inaccessible message carries
+    the zero date. A message with neither stamp counts as expired. A naive
+    stamp is read as UTC."""
+    stamps = [d if d.tzinfo is not None else d.replace(tzinfo=timezone.utc)
+              for d in (getattr(message, "date", None),
+                        getattr(message, "edit_date", None))
+              if isinstance(d, datetime)]
+    return bool(stamps) and (now - max(stamps)).total_seconds() <= BTN_TTL_SECONDS
+
+
 async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """TypeHandler at group=-1. Runs before any callback handler. The gate
     snapshots the per-user button history once at entry, then decides, so a
     concurrent webhook that appends a fresh entry mid-await can't shift the
     decision out from under us. A callback is admitted iff its source message
     matches one of the recent BTN_HISTORY_MAX entries AND is younger than
-    BTN_TTL_SECONDS.
+    BTN_TTL_SECONDS. A user with no history at all (new, after a restart, or
+    pruned once every entry expired) is admitted only when the tapped message
+    itself was sent or edited within BTN_TTL_SECONDS.
     """
     q = update.callback_query
     if q is None or q.message is None or q.from_user is None:
@@ -886,12 +894,16 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     # Snapshot via list copy so concurrent record_btn calls don't mutate
     # the iterable we're inspecting.
     entries = list(ctx.application.bot_data.get("btn_msgs", {}).get(user_id, []))
-    if not entries:
-        return  # no record yet (new user, or since a restart) -- allow
-
     msg_id = q.message.message_id
     chat_id = getattr(q.message, "chat_id", None)
     now = datetime.now(timezone.utc)
+    if not entries:
+        # No record (new user, a restart, or pruned after every entry
+        # expired): the tapped message's own age decides.
+        if _message_is_fresh(q.message, now):
+            return
+        await _refuse_tap(q, "This menu has expired. Run the command again.")
+
     for e in entries:
         if e.get("message_id") != msg_id:
             continue
@@ -914,6 +926,12 @@ async def global_btn_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         reason = "This menu has expired. Run the command again."
     else:
         reason = "Use the most recent message - this menu is from an older one."
+    await _refuse_tap(q, reason)
+
+
+async def _refuse_tap(q, reason: str) -> None:
+    """Answer a refused tap with `reason`, strip the message down to its
+    exempt buttons, and stop every later handler."""
     try:
         await q.answer(reason, show_alert=False)
     except telegram.error.TelegramError as exc:

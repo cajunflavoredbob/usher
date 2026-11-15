@@ -3,6 +3,7 @@ person the bot message was sent to, for every standalone callback family.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -58,7 +59,7 @@ def _update(tapper: int, data: str, *, chat_type="supergroup", replied_to=OWNER,
         reply = SimpleNamespace(
             from_user=SimpleNamespace(id=replied_to, is_bot=replied_bot))
     msg = SimpleNamespace(
-        message_id=message_id, chat_id=chat_id,
+        message_id=message_id, chat_id=chat_id, date=datetime.now(timezone.utc),
         chat=SimpleNamespace(type=chat_type), reply_to_message=reply)
     q = SimpleNamespace(message=msg, from_user=SimpleNamespace(id=tapper),
                         data=data, answers=[], edits=[])
