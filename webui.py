@@ -2192,16 +2192,19 @@ async def _restore_upload_locked(request: web.Request) -> web.Response:
             audit("restore_partial", user=_current_user(request) or "-",
                   ip=client_ip(request), backup_dir=str(backup_dir))
             logger.error("Restore failed after writing files; restarting in 2s "
-                         "(snapshot at %s): %s", backup_dir, exc)
+                         "(snapshot at %s, snapshot_ok=%s): %s",
+                         backup_dir, snapshot_ok, exc)
             schedule_clean_exit(2.0)
-            return _restore_error(
-                request,
-                f"Restore failed partway: {exc}. Some files were already "
-                f"replaced, so the app is restarting. Check the restored "
-                f"settings after it is back"
-                + (f"; the earlier files are in {backup_dir}." if snapshot_ok
-                   else "."),
-                status=500)
+            # No settings form here: the in-memory settings are the pre-restore
+            # ones, and a Save from this page would write them over the
+            # restored file once the restart lands. The reason and the snapshot
+            # path stay in the log.
+            body = _page("Restore", """
+<h1>Restore failed partway</h1>
+<p>Usher is restarting. Refresh in a few seconds and check the restored settings.</p>
+<p class="note">Some files were already replaced. Details are in the Usher log.</p>
+""")
+            return web.Response(text=body, content_type="text/html", status=500)
         return _restore_error(request, f"Restore failed: {exc}", status=500)
     finally:
         # Release only if THIS handler acquired it: lock.locked() is true when

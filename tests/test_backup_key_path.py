@@ -114,6 +114,11 @@ async def test_a_restore_failing_after_settings_was_written_restarts(env, monkey
     text = await resp.text()
     assert "partway" in text and "restarting" in text
     assert exits == [(2.0,)]
+    # No settings form to Save over the restored file, no raw exception text,
+    # no server path.
+    assert "<form" not in text
+    assert "disk full" not in text
+    assert str(data_dir) not in text and "pre-restore-" not in text
 
 
 async def test_a_restore_failing_before_any_write_does_not_restart_or_freeze(env, monkeypatch):
