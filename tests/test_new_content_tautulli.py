@@ -400,6 +400,41 @@ async def test_more_than_250_items_are_all_recorded_over_polls(fresh_store):
     assert len(await _rows(fresh_store)) == 300
 
 
+async def test_more_than_250_items_in_one_second_do_not_stall_the_mark(
+        fresh_store):
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    same = [_movie(1000 + i, 1700000100, [f"tmdb://{5000 + i}"], f"M{i}")
+            for i in range(260)]
+    later = _movie(9000, 1700000200, ["tmdb://9000"], "Later")
+    tau = _tautulli([])
+    tau.get_recently_added = _paged([later] + same)  # newest first
+    ctx = _ctx(fresh_store, tautulli=tau)
+    await poll_new_content(ctx)
+    assert len(await _rows(fresh_store)) == 260
+    assert await fresh_store.get_poller_mark("tautulli_added") == "1700000100"
+    await poll_new_content(ctx)
+    assert len(await _rows(fresh_store)) == 261
+    assert await fresh_store.get_poller_mark("tautulli_added") == "1700000200"
+
+
+async def test_a_full_250_second_with_more_after_it_still_moves_on(
+        fresh_store):
+    # Exactly the cap in the oldest second plus later rows: the neighbouring
+    # case that must not take the whole-second path wrongly.
+    await fresh_store.set_poller_mark("tautulli_added", MARK)
+    same = [_movie(1000 + i, 1700000100, [f"tmdb://{5000 + i}"], f"M{i}")
+            for i in range(250)]
+    later = [_movie(9000 + i, 1700000200 + i, [f"tmdb://{9000 + i}"],
+                    f"L{i}") for i in range(3)]
+    tau = _tautulli([])
+    tau.get_recently_added = _paged(list(reversed(later)) + same)
+    ctx = _ctx(fresh_store, tautulli=tau)
+    await poll_new_content(ctx)
+    assert len(await _rows(fresh_store)) == 250
+    await poll_new_content(ctx)
+    assert len(await _rows(fresh_store)) == 253
+
+
 async def test_an_unmatched_item_is_recorded_once_plex_has_a_guid(
         fresh_store, monkeypatch):
     import time

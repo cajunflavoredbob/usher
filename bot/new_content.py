@@ -365,7 +365,22 @@ async def _poll_tautulli(store, tautulli, radarr=None, sonarr=None) -> None:
         since = int(raw)
     items = sorted(await _read_fresh(tautulli, since), key=_added_at)
     truncated = len(items) > TAUTULLI_MAX_ITEMS
-    items = items[:TAUTULLI_MAX_ITEMS]
+    if truncated:
+        edge = _added_at(items[TAUTULLI_MAX_ITEMS - 1])
+        if _added_at(items[0]) == edge:
+            # Every row up to the cap shares one second: cutting there would
+            # hold the mark below that second and re-read the same rows for
+            # ever. Take the whole second (all of it was read unless the page
+            # cap was hit, which is logged) so the mark can pass it.
+            if len(items) >= TAUTULLI_READ_PAGES * TAUTULLI_PAGE:
+                logger.warning(
+                    "Tautulli listed over %d items; rows past the page cap "
+                    "in the oldest second are skipped",
+                    TAUTULLI_READ_PAGES * TAUTULLI_PAGE)
+            items = [i for i in items if _added_at(i) == edge]
+            truncated = False
+    if truncated:
+        items = items[:TAUTULLI_MAX_ITEMS]
     now = int(time.time())
     show_ids: dict = {}
     pending: list[int] = []  # added_at of items to read again
