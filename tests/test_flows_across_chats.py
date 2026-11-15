@@ -5,7 +5,9 @@ Application from bot.app._build_app (every conversation, reset_stale_flows
 and global_btn_gate as in production); only the Telegram network calls and
 the Seerr, Radarr and store clients are faked. The DM's chat id is the user's
 id; the group is a supergroup with a negative id, and the bot's group
-messages quote the user, as real replies do."""
+messages quote the user, as real replies do. A command or Hub button ends
+only its own chat's flows; each draft records the chat that owns it, and a
+flow in another chat refuses to act on a draft a newer flow took over."""
 from __future__ import annotations
 
 import time
@@ -18,7 +20,8 @@ from telegram import Chat, Message, Update, User
 from telegram.ext import ExtBot
 
 import bot.app as app_mod
-from bot.callback_prefixes import (ISSUE_TYPE, RESOLVE, TICKET_AUTOFIX_CONFIRM,
+from bot.callback_prefixes import (ISSUE_TYPE, REQUESTS_MINE, RESOLVE, RQ_GO,
+                                   RQ_MEDIA, TICKET_AUTOFIX_CONFIRM,
                                    TICKET_AUTOFIX_OFFER, TICKET_MEDIA,
                                    TK_CLOSE_WITH_COMMENT, TK_REPLY)
 from seerr import CreatedIssue, MediaResult
@@ -172,15 +175,27 @@ def rig(monkeypatch):
     return _Rig(monkeypatch)
 
 
+# --- each draft belongs to the chat whose flow started it --------------------
 
-# --- one flow per user across chats ------------------------------------------
+
+ISSUE_REPLACED = "That report was replaced by one you started in another chat."
+RQ_REPLACED = "That request was replaced by one you started in another chat."
 
 
-async def test_a_group_issue_ends_the_dm_issue_so_alien_is_never_filed_or_fixed(rig):
+def _live(rig, name: str, chat_id: int) -> bool:
+    conv = rig.app.bot_data["conversations"][name]
+    return (chat_id, USER_ID) in conv._conversations
+
+
+async def test_a_group_issue_takes_over_the_draft_so_the_dm_files_and_fixes_nothing(rig):
+    """The pass-6 case: the DM report waits for its description while a group
+    /issue picks Alien. The DM text must not file against Alien, and its
+    Auto-fix taps must not delete Alien's file."""
     await rig.issue_to_description(DM_ID, "movie x", 1)
     await rig.issue_to_description(GROUP_ID, "alien", 2)
     await rig.say(DM_ID, "the picture is green")
-    # The DM text is not part of any flow: nothing offered, nothing filed.
+    assert rig.texts(DM_ID)[-1].startswith(ISSUE_REPLACED)
+    assert not _live(rig, "issue", DM_ID)
     version = rig.user_data.get("search_version")
     await rig.tap(DM_ID, f"{TICKET_AUTOFIX_OFFER}:{version}:yes",
                   rig.last_menu(DM_ID))
@@ -189,13 +204,38 @@ async def test_a_group_issue_ends_the_dm_issue_so_alien_is_never_filed_or_fixed(
     rig.seerr.create_issue.assert_not_awaited()
     rig.radarr.auto_fix.assert_not_awaited()
     assert not any("auto-fix" in t.lower() for t in rig.texts(DM_ID))
-    # The group report is still open and still files Alien.
+    # The group report keeps its draft and still files Alien.
     assert rig.user_data["media"]["title"] == "Alien"
+    assert rig.user_data.get("description") is None
+    await rig.say(GROUP_ID, "no sound at all")
+    await rig.tap(GROUP_ID, f"{TICKET_AUTOFIX_OFFER}:{version}:no",
+                  rig.last_menu(GROUP_ID))
+    rig.seerr.create_issue.assert_awaited_once()
+    assert rig.seerr.create_issue.call_args.kwargs["seerr_media_id"] == 20
+    assert rig.seerr.create_issue.call_args.kwargs["message"] == "no sound at all"
 
 
-async def test_a_command_in_a_group_ends_the_dm_issue(rig):
+async def test_another_bots_command_in_a_group_leaves_the_dm_issue(rig):
     await rig.issue_to_description(DM_ID, "movie x", 4)
-    await rig.say(GROUP_ID, "/status")
+    await rig.say(GROUP_ID, "/weather")
+    assert _live(rig, "issue", DM_ID)
+    await rig.say(DM_ID, "the picture is green")
+    rig.seerr.create_issue.assert_awaited_once()
+    assert rig.seerr.create_issue.call_args.kwargs["seerr_media_id"] == 10
+
+
+async def test_a_hub_tap_in_a_group_leaves_the_dm_issue(rig):
+    await rig.issue_to_description(DM_ID, "movie x", 4)
+    rig.recorded(GROUP_ID, 610)
+    await rig.tap(GROUP_ID, REQUESTS_MINE, 610)
+    assert _live(rig, "issue", DM_ID)
+    await rig.say(DM_ID, "the picture is green")
+    assert rig.seerr.create_issue.call_args.kwargs["seerr_media_id"] == 10
+
+
+async def test_a_command_in_the_dm_still_ends_the_dm_issue(rig):
+    await rig.issue_to_description(DM_ID, "movie x", 4)
+    await rig.say(DM_ID, "/status")
     assert "media" not in rig.user_data
     await rig.say(DM_ID, "the picture is green")
     rig.seerr.create_issue.assert_not_awaited()
@@ -215,27 +255,46 @@ async def test_a_group_only_issue_still_files(rig):
     assert rig.seerr.create_issue.call_args.kwargs["seerr_media_id"] == 20
 
 
+async def test_a_command_in_the_group_ending_its_own_issue_leaves_the_dm_draft(rig):
+    """The group's /issue is live but the DM's newer /issue owns the draft:
+    ending the group's conversation must not clear the DM's report."""
+    await rig.issue_to_description(GROUP_ID, "alien", 4)
+    await rig.issue_to_description(DM_ID, "movie x", 4)
+    assert _live(rig, "issue", GROUP_ID)
+    await rig.say(GROUP_ID, "/status")
+    assert not _live(rig, "issue", GROUP_ID)
+    assert rig.user_data["media"]["title"] == "Movie X"
+    await rig.say(DM_ID, "the picture is green")
+    assert rig.seerr.create_issue.call_args.kwargs["seerr_media_id"] == 10
+
+
 async def test_a_command_in_a_group_leaves_another_users_dm_flow(rig):
-    """The force-end matches the user part of each key, not any key."""
     issue_conv = rig.app.bot_data["conversations"]["issue"]
     issue_conv._conversations[(777, 777)] = 1
     await rig.say(GROUP_ID, "/status")
     assert issue_conv._conversations.get((777, 777)) == 1
 
 
-async def test_a_command_in_the_dm_ends_a_ticket_reply_left_open_in_a_group(rig):
+async def test_a_command_in_the_dm_leaves_a_ticket_reply_open_in_a_group(rig):
     rig.recorded(GROUP_ID, 600)
     await rig.tap(GROUP_ID, f"{TK_REPLY}:7", 600)
-    assert rig.user_data["tk_reply_id"] == 7
     await rig.say(DM_ID, "/status")
-    conv = rig.app.bot_data["conversations"]["ticket_reply"]
-    assert (GROUP_ID, USER_ID) not in conv._conversations
-    assert "tk_reply_chat" not in rig.user_data
-    await rig.say(GROUP_ID, "a reply that is now just chat")
+    assert _live(rig, "ticket_reply", GROUP_ID)
+    assert rig.user_data["tk_reply_chat"] == GROUP_ID
+    await rig.say(GROUP_ID, "a reply for seven")
+    assert rig.seerr.add_issue_comment.call_args.args[:2] == (7, "a reply for seven")
+
+
+async def test_a_command_in_the_reply_chat_still_ends_the_reply(rig):
+    rig.recorded(GROUP_ID, 600)
+    await rig.tap(GROUP_ID, f"{TK_REPLY}:7", 600)
+    await rig.say(GROUP_ID, "/status")
+    assert "tk_reply_id" not in rig.user_data
+    await rig.say(GROUP_ID, "just chat now")
     rig.seerr.add_issue_comment.assert_not_awaited()
 
 
-def test_a_force_end_names_each_conversation_once(rig):
+def test_a_force_end_ends_only_its_own_chats_conversation(rig):
     from bot.shared import force_end_flow_conversations
     from telegram.ext import CallbackContext
     conv = rig.app.bot_data["conversations"]["ticket_reply"]
@@ -247,7 +306,377 @@ def test_a_force_end_names_each_conversation_once(rig):
     ended = force_end_flow_conversations(
         CallbackContext.from_update(upd, rig.app), upd)
     assert ended == [conv]
-    assert conv._conversations == {}
+    assert conv._conversations == {(GROUP_ID, USER_ID): 1}
+
+
+# --- a DM /link PIN poll and a command in a group -----------------------------
+
+
+async def test_a_dm_link_poll_finishes_after_a_command_in_a_group(rig, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from bot import link_flow
+    from bot.callback_prefixes import LINK_CONSENT, LINK_PLATFORM
+    monkeypatch.setattr(link_flow, "PLEX_POLL_INTERVAL_S", 0)
+    started, release = asyncio.Event(), asyncio.Event()
+    plex = rig.app.bot_data["plex"]
+    plex.request_pin = AsyncMock(return_value=SimpleNamespace(
+        id=1, auth_url="https://plex.example/auth", code="abcd"))
+
+    async def poll_pin(pin_id):
+        started.set()
+        await release.wait()
+        return "tok"
+
+    plex.poll_pin = poll_pin
+    plex.get_user = AsyncMock(return_value=SimpleNamespace(uuid="u", username="un"))
+    rig.seerr.login_with_plex = AsyncMock(return_value=(7, "U"))
+    rig.app.bot_data["store"].link_with_plex = AsyncMock()
+    await rig.say(DM_ID, "/link")
+    await rig.tap(DM_ID, f"{LINK_CONSENT}:yes", rig.last_menu(DM_ID))
+    task = asyncio.create_task(
+        rig.tap(DM_ID, f"{LINK_PLATFORM}:desktop", rig.last_menu(DM_ID)))
+    await asyncio.wait_for(started.wait(), 5)
+    await rig.say(GROUP_ID, "/weather")
+    assert rig.user_data.get("link_active_loop")
+    release.set()
+    await asyncio.wait_for(task, 5)
+    rig.app.bot_data["store"].link_with_plex.assert_awaited_once()
+    # The poll step's own END stands: a command in another chat is no
+    # overtake, so the DM's link conversation does not stay open.
+    assert not _live(rig, "link", DM_ID)
+
+
+# --- /request and /invite drafts ----------------------------------------------
+
+
+def _requests(rig) -> list:
+    return [c.kwargs["tmdb_id"] for c in rig.seerr.create_request.call_args_list]
+
+
+async def _request_to_confirm(rig, chat_id: int, title: str) -> int:
+    await rig.say(chat_id, f"/request {title}")
+    version = rig.user_data["rq_search_version"]
+    tmdb = {"movie x": 100, "alien": 348}[title]
+    await rig.tap(chat_id, f"{RQ_MEDIA}:{version}:movie:{tmdb}",
+                  rig.last_menu(chat_id))
+    assert "Request <b>" in rig.texts(chat_id)[-1]
+    return version
+
+
+@pytest.fixture
+def rq_rig(rig):
+    from seerr import CreatedRequest, REQUEST_STATUS_APPROVED
+    rig.seerr.create_request = AsyncMock(return_value=CreatedRequest(
+        id=9, status=REQUEST_STATUS_APPROVED))
+    return rig
+
+
+async def test_a_group_request_takes_over_so_the_dm_confirm_files_nothing(rq_rig):
+    rig = rq_rig
+    dm_version = await _request_to_confirm(rig, DM_ID, "movie x")
+    dm_confirm = rig.last_menu(DM_ID)
+    group_version = await _request_to_confirm(rig, GROUP_ID, "alien")
+    await rig.tap(DM_ID, f"{RQ_GO}:{dm_version}", dm_confirm)
+    assert _requests(rig) == []
+    assert rig.texts(DM_ID)[-1].startswith(RQ_REPLACED)
+    await rig.tap(GROUP_ID, f"{RQ_GO}:{group_version}", rig.last_menu(GROUP_ID))
+    assert _requests(rig) == [348]
+
+
+async def test_another_bots_command_in_a_group_leaves_the_dm_request(rq_rig):
+    rig = rq_rig
+    version = await _request_to_confirm(rig, DM_ID, "movie x")
+    confirm = rig.last_menu(DM_ID)
+    await rig.say(GROUP_ID, "/weather")
+    rig.recorded(GROUP_ID, 611)
+    await rig.tap(GROUP_ID, REQUESTS_MINE, 611)
+    await rig.tap(DM_ID, f"{RQ_GO}:{version}", confirm)
+    assert _requests(rig) == [100]
+
+
+async def test_another_bots_command_in_a_group_leaves_the_dm_invite(rig):
+    from types import SimpleNamespace
+    from bot.callback_prefixes import INV_DONE, INV_GO
+    plex = rig.app.bot_data["plex"]
+    plex.get_owned_server = AsyncMock(return_value=("m1", "Server"))
+    plex.get_library_sections = AsyncMock(return_value=[
+        SimpleNamespace(id=1, title="Movies", type="movie")])
+    plex.invite_to_server = AsyncMock()
+    await rig.say(DM_ID, "/invite")
+    await rig.say(DM_ID, "friend@example.com")
+    version = rig.user_data["inv_version"]
+    await rig.tap(DM_ID, f"{INV_DONE}:{version}", rig.last_menu(DM_ID))
+    await rig.say(GROUP_ID, "/weather")
+    await rig.tap(DM_ID, f"{INV_GO}:{version}", rig.last_menu(DM_ID))
+    plex.invite_to_server.assert_awaited_once()
+    assert plex.invite_to_server.call_args.args[2] == "friend@example.com"
+
+
+# --- every step that acts on a draft checks the draft's chat ------------------
+#
+# A draft whose owner chat is the group, read from a DM step whose buttons
+# still carry the current version: only the owner check can refuse it.
+
+def _issue_draft() -> dict:
+    return {"issue_chat": GROUP_ID, "search_version": 3,
+            "media": {"type": "movie", "tmdb_id": 348, "seerr_media_id": 20,
+                      "title": "Alien", "year": "1979"},
+            "season": None, "episode": None, "issue_type": 1,
+            "description": "the group's words"}
+
+
+def _rq_draft() -> dict:
+    return {"rq_chat": GROUP_ID, "rq_search_version": 3,
+            "rq_media": {"type": "movie", "tmdb_id": 348, "title": "Alien",
+                         "year": "1979"},
+            "rq_confirm_for": {"gen": 0, "version": 3, "target": None}}
+
+
+def _inv_draft() -> dict:
+    return {"inv_chat": GROUP_ID, "inv_version": 3,
+            "inv_email": "friend@example.com", "inv_machine": "m1",
+            "inv_selected": {1}, "inv_sections": []}
+
+
+def _issue_steps():
+    from bot import ticket_flow as tf
+    return [
+        (tf.ticket_title, dict(text="alien")),
+        (tf.ticket_pick_type, dict(callback_data=f"{ISSUE_TYPE}:3:1")),
+        (tf.ticket_description, dict(text="the dm's words")),
+        (tf.ticket_offer_autofix, dict(callback_data=f"{TICKET_AUTOFIX_OFFER}:3:yes")),
+        (tf.ticket_confirm_autofix, dict(callback_data=f"{TICKET_AUTOFIX_CONFIRM}:3:yes")),
+    ]
+
+
+@pytest.mark.parametrize("index", range(5))
+async def test_each_issue_step_refuses_a_report_another_chat_took_over(index):
+    from tests._handler_harness import make_update
+    step, kw = _issue_steps()[index]
+    ctx = make_ctx(admin_id=USER_ID, link=make_link(telegram_id=USER_ID),
+                   user_data=_issue_draft())
+    ctx.bot_data["seerr"].create_issue = AsyncMock()
+    upd = make_update(user_id=USER_ID, chat_id=DM_ID, **kw)
+    state = await step(upd, ctx)
+    from telegram.ext import ConversationHandler
+    assert state == ConversationHandler.END
+    shown = (upd.callback_query.edits if upd.callback_query
+             else upd.effective_message.reply_calls)
+    # The refusal is all this chat sees: no "Submitting" or "Checking" first.
+    assert [e["text"] for e in shown] == [shown[-1]["text"]]
+    assert shown[-1]["text"].startswith(ISSUE_REPLACED)
+    ctx.bot_data["seerr"].create_issue.assert_not_awaited()
+    ctx.bot_data["seerr"].search.assert_not_awaited()
+    ctx.bot_data["radarr"].auto_fix.assert_not_awaited()
+    assert ctx.user_data == _issue_draft()
+
+
+async def test_the_issue_submit_refuses_a_report_another_chat_took_over():
+    from bot.ticket_flow import _submit_ticket
+    from tests._handler_harness import make_update
+    ctx = make_ctx(admin_id=USER_ID, link=make_link(telegram_id=USER_ID),
+                   user_data=_issue_draft())
+    ctx.bot_data["seerr"].create_issue = AsyncMock()
+    upd = make_update(callback_data="x", user_id=USER_ID, chat_id=DM_ID)
+    await _submit_ticket(upd, ctx, autofix=True)
+    ctx.bot_data["seerr"].create_issue.assert_not_awaited()
+    ctx.bot_data["radarr"].auto_fix.assert_not_awaited()
+    assert ctx.user_data == _issue_draft()
+
+
+async def test_an_issue_step_in_the_owner_chat_still_acts():
+    from bot.ticket_flow import ticket_description
+    from tests._handler_harness import make_update
+    ctx = make_ctx(admin_id=USER_ID, link=make_link(telegram_id=USER_ID),
+                   user_data={**_issue_draft(), "issue_type": 4})
+    ctx.bot_data["seerr"].create_issue = AsyncMock(
+        return_value=CreatedIssue(id=5, url="https://seerr.example/5"))
+    upd = make_update(text="the group's words", user_id=USER_ID, chat_id=GROUP_ID)
+    await ticket_description(upd, ctx)
+    ctx.bot_data["seerr"].create_issue.assert_awaited_once()
+
+
+def _rq_steps():
+    from bot import request_flow as rf
+    return [
+        (rf.request_title, dict(text="alien")),
+        (rf._show_confirm, dict(callback_data=f"{RQ_MEDIA}:3:movie:348")),
+        (rf.request_submit, dict(callback_data=f"{RQ_GO}:3")),
+    ]
+
+
+@pytest.mark.parametrize("index", range(3))
+async def test_each_request_step_refuses_a_draft_another_chat_took_over(index):
+    from telegram.ext import ConversationHandler
+    from tests._handler_harness import make_update
+    step, kw = _rq_steps()[index]
+    ctx = make_ctx(admin_id=USER_ID, link=make_link(telegram_id=USER_ID),
+                   user_data=_rq_draft())
+    upd = make_update(user_id=USER_ID, chat_id=DM_ID, **kw)
+    assert await step(upd, ctx) == ConversationHandler.END
+    shown = (upd.callback_query.edits if upd.callback_query
+             else upd.effective_message.reply_calls)
+    assert shown[-1]["text"].startswith(RQ_REPLACED)
+    ctx.bot_data["seerr"].search.assert_not_awaited()
+    ctx.bot_data["seerr"].create_request.assert_not_awaited()
+    assert ctx.user_data == _rq_draft()
+
+
+@pytest.mark.parametrize("step_name,kw", [
+    ("invite_email", dict(text="other@example.com")),
+    ("invite_send", dict(callback_data="invgo:3")),
+])
+async def test_each_invite_step_refuses_a_draft_another_chat_took_over(step_name, kw):
+    from telegram.ext import ConversationHandler
+    from bot import invite_flow
+    from tests._handler_harness import make_update
+    ctx = make_ctx(admin_id=USER_ID, link=make_link(telegram_id=USER_ID),
+                   user_data=_inv_draft())
+    upd = make_update(user_id=USER_ID, chat_id=DM_ID, **kw)
+    assert await getattr(invite_flow, step_name)(upd, ctx) == ConversationHandler.END
+    shown = (upd.callback_query.edits if upd.callback_query
+             else upd.effective_message.reply_calls)
+    assert shown[-1]["text"].startswith(
+        "That invite was replaced by one you started in another chat.")
+    ctx.bot_data["plex"].invite_to_server.assert_not_awaited()
+    ctx.bot_data["plex"].get_owned_server.assert_not_awaited()
+    assert ctx.user_data == _inv_draft()
+
+
+async def test_a_typed_cancel_in_the_older_chat_leaves_the_newer_report():
+    from bot.ticket_flow import ticket_cancel
+    from tests._handler_harness import make_update
+    ctx = make_ctx(admin_id=USER_ID, user_data=_issue_draft())
+    upd = make_update(text="/cancel", user_id=USER_ID, chat_id=DM_ID)
+    await ticket_cancel(upd, ctx)
+    assert upd.effective_message.reply_calls[-1]["text"].startswith("Cancelled")
+    assert ctx.user_data == _issue_draft()
+
+
+async def test_a_typed_cancel_in_the_older_chat_leaves_the_newer_request():
+    from bot.request_flow import request_cancel
+    from tests._handler_harness import make_update
+    ctx = make_ctx(admin_id=USER_ID, user_data=_rq_draft())
+    upd = make_update(text="/cancel", user_id=USER_ID, chat_id=DM_ID)
+    await request_cancel(upd, ctx)
+    assert upd.effective_message.reply_calls[-1]["text"].startswith("Cancelled")
+    assert ctx.user_data == _rq_draft()
+
+
+async def test_a_timeout_in_the_older_chat_leaves_the_newer_report_and_request():
+    from bot.request_flow import _request_timeout
+    from bot.ticket_flow import _ticket_timeout
+    from tests._handler_harness import make_update
+    for handler, draft in ((_ticket_timeout, _issue_draft),
+                           (_request_timeout, _rq_draft)):
+        ctx = make_ctx(admin_id=USER_ID, user_data=draft())
+        await handler(make_update(text="x", user_id=USER_ID, chat_id=DM_ID), ctx)
+        assert ctx.user_data == draft()
+        ctx.bot.send_message.assert_not_awaited()
+
+
+async def test_a_finished_submit_in_the_older_chat_leaves_the_newer_draft():
+    """A submit in the DM that finishes after a group flow took the draft
+    over must not clear the group's draft."""
+    from bot.request_flow import _clear_finished_rq_state
+    from tests._handler_harness import make_update
+    ctx = make_ctx(admin_id=USER_ID, user_data=_rq_draft())
+    _clear_finished_rq_state(ctx, make_update(callback_data="x", user_id=USER_ID,
+                                              chat_id=DM_ID))
+    assert ctx.user_data == _rq_draft()
+    _clear_finished_rq_state(ctx, make_update(callback_data="x", user_id=USER_ID,
+                                              chat_id=GROUP_ID))
+    assert "rq_media" not in ctx.user_data
+
+
+def test_each_new_flow_entry_records_its_chat_as_the_drafts_owner():
+    """Source-level map of the claims, checked by the flows above end to end."""
+    from bot.shared import ISSUE_KEYS, RQ_KEYS
+    from bot.invite_flow import _INV_KEYS
+    from bot.app import _CONVERSATION_USER_DATA_KEYS
+    assert "issue_chat" in ISSUE_KEYS and "rq_chat" in RQ_KEYS
+    assert "inv_chat" in _INV_KEYS
+    assert {"issue_chat", "rq_chat", "inv_chat"} <= set(_CONVERSATION_USER_DATA_KEYS)
+
+
+# Each entry point that starts a new flow takes the draft for its chat, so a
+# draft another chat's flow left behind no longer refuses this one.
+def _entries():
+    from bot import invite_flow as inv
+    from bot import request_flow as rf
+    from bot import ticket_flow as tf
+    from bot.callback_prefixes import (ACCESS_APPROVE, ADMIN_INVITE,
+                                       REQUESTS_BEHALF, REQUESTS_NEW,
+                                       TICKETS_REPORT)
+    return [
+        (tf.ticket_start, dict(text="/issue"), "issue_chat"),
+        (tf.ticket_hub_report, dict(callback_data=TICKETS_REPORT), "issue_chat"),
+        (rf.request_start, dict(text="/request movie x"), "rq_chat"),
+        (rf.request_hub_new, dict(callback_data=REQUESTS_NEW), "rq_chat"),
+        (rf.request_hub_behalf, dict(callback_data=REQUESTS_BEHALF), "rq_chat"),
+        (rf.request_from_ticket, dict(callback_data="rqfi:movie:5:i"), "rq_chat"),
+        (inv.invite_start, dict(text="/invite"), "inv_chat"),
+        (inv.invite_hub_start, dict(callback_data=ADMIN_INVITE), "inv_chat"),
+        (inv.invite_access_start, dict(callback_data=f"{ACCESS_APPROVE}:4"),
+         "inv_chat"),
+    ]
+
+
+@pytest.mark.parametrize("index", range(9))
+async def test_each_new_flow_takes_the_draft_for_its_own_chat(index):
+    from types import SimpleNamespace
+    from tests._handler_harness import make_update
+    entry, kw, owner_key = _entries()[index]
+    ctx = make_ctx(admin_id=USER_ID, link=make_link(telegram_id=USER_ID),
+                   user_data={owner_key: GROUP_ID})
+    ctx.args = ["movie", "x"]
+    store = ctx.bot_data["store"]
+    store.list_linked_users = AsyncMock(return_value=[(1000, 20, "Person 0")])
+    store.get_access_ask = AsyncMock(return_value=SimpleNamespace(
+        id=4, status="open", plex_email="friend@example.com", plex_username=""))
+    plex = ctx.bot_data["plex"]
+    plex.get_owned_server = AsyncMock(return_value=("m1", "Server"))
+    plex.get_library_sections = AsyncMock(return_value=[
+        SimpleNamespace(id=1, title="Movies", type="movie")])
+    ctx.bot_data["flow_convs"] = []
+    upd = make_update(user_id=USER_ID, chat_id=DM_ID, **kw)
+    await entry(upd, ctx)
+    assert ctx.user_data[owner_key] == DM_ID
+
+
+async def test_a_group_command_ending_its_own_request_leaves_the_dm_draft(rq_rig):
+    """The group's /request is live but the DM's newer /request owns the
+    draft: ending the group's conversation must not clear the DM's draft."""
+    rig = rq_rig
+    await rig.say(GROUP_ID, "/request alien")
+    version = await _request_to_confirm(rig, DM_ID, "movie x")
+    assert _live(rig, "request", GROUP_ID)
+    await rig.say(GROUP_ID, "/status")
+    assert not _live(rig, "request", GROUP_ID)
+    assert rig.user_data["rq_media"]["tmdb_id"] == 100
+    await rig.tap(DM_ID, f"{RQ_GO}:{version}", rig.last_menu(DM_ID))
+    assert _requests(rig) == [100]
+
+
+async def test_a_report_taken_over_mid_submit_keeps_the_newer_draft():
+    """A group /issue started while the DM's report was being filed owns the
+    draft by the time the DM submit finishes: the DM submit leaves it."""
+    from bot.ticket_flow import _submit_ticket
+    from tests._handler_harness import make_update
+    draft = {**_issue_draft(), "issue_chat": DM_ID}
+    ctx = make_ctx(admin_id=USER_ID, link=make_link(telegram_id=USER_ID),
+                   user_data=dict(draft))
+
+    async def create_issue(**kw):
+        ctx.user_data.update(issue_chat=GROUP_ID, description="newer")
+        return CreatedIssue(id=5, url="https://seerr.example/5")
+
+    ctx.bot_data["seerr"].create_issue = AsyncMock(side_effect=create_issue)
+    upd = make_update(text="x", user_id=USER_ID, chat_id=DM_ID)
+    await _submit_ticket(upd, ctx, autofix=False)
+    assert ctx.user_data["issue_chat"] == GROUP_ID
+    assert ctx.user_data["description"] == "newer"
 
 
 # --- text-awaiting markers belong to the chat they were started in -----------

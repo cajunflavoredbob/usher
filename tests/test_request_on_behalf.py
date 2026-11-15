@@ -194,13 +194,24 @@ async def test_admin_submit_without_this_confirms_snapshot_files_nothing(snapsho
     assert "Lost conversation state" in upd.callback_query.edits[-1]["text"]
 
 
-async def test_admin_submit_from_another_generation_files_nothing():
+async def test_admin_submit_after_its_chats_flows_were_reset_files_nothing():
     ctx = _confirm_ctx()
-    ctx.user_data["flow_gen"] = 3  # flows were reset since the confirm
     upd = make_update(callback_data="rqgo:1", user_id=ADMIN_ID)
+    # This chat's flows were reset since the confirm.
+    ctx.user_data["flow_gen"] = 3
+    ctx.user_data["flow_ended_at"] = {upd.effective_chat.id: 3}
     await request_submit(upd, ctx)
     ctx.bot_data["seerr"].create_request.assert_not_called()
     assert "That Request for someone was ended" in upd.callback_query.edits[-1]["text"]
+
+
+async def test_admin_submit_after_a_reset_in_another_chat_still_files():
+    ctx = _confirm_ctx()
+    upd = make_update(callback_data="rqgo:1", user_id=ADMIN_ID)
+    ctx.user_data["flow_gen"] = 3
+    ctx.user_data["flow_ended_at"] = {-1001234: 3}
+    await request_submit(upd, ctx)
+    ctx.bot_data["seerr"].create_request.assert_called_once()
 
 
 async def test_behalf_progress_card_is_owned_by_the_picked_user():

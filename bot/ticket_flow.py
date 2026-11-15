@@ -58,6 +58,7 @@ from bot.shared import (
     CONFIRM_AUTOFIX,
     DESCRIPTION,
     ISSUE_KEYS,
+    ISSUE_OWNER_KEY,
     ISSUE_TYPES,
     OFFER_AUTOFIX,
     PICK_EPISODE,
@@ -74,6 +75,9 @@ from bot.shared import (
     submit_in_flight,
     flow_step_is_stale,
     force_end_flow_conversations,
+    owns_draft,
+    claim_draft,
+    refuse_replaced_draft,
     send_typing,
     media_action_key,
     prompt_plex_relink,
@@ -142,6 +146,16 @@ async def _is_stale(update, ctx, version: Optional[int]) -> bool:
     return True
 
 
+# A step in a chat whose report a newer /issue in another chat replaced.
+REPLACED_TEXT = ("That report was replaced by one you started in another chat. "
+                 "/issue to start again.")
+
+
+def _replaced(update, ctx) -> bool:
+    """True when the report draft belongs to another chat's /issue."""
+    return not owns_draft(ctx, update, ISSUE_OWNER_KEY)
+
+
 def _clear_issue_state(ctx, *, keep_resume: bool = False) -> None:
     for key in ISSUE_KEYS:
         ctx.user_data.pop(key, None)
@@ -169,7 +183,10 @@ async def _ticket_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Conversation_timeout handler. Clears every user_data key the new-Ticket
     flow can populate so an abandoned conversation doesn't leak state for
     the life of the process (a stale research_parent otherwise resurfaces
-    as a wrong search suggestion in the next /issue)."""
+    as a wrong search suggestion in the next /issue). A report that a newer
+    /issue in another chat replaced ends quietly and leaves that draft."""
+    if _replaced(update, ctx):
+        return ConversationHandler.END
     hub = _tickets_origin(ctx)
     _clear_issue_state(ctx)
     # Without a notice, text typed after the timeout hits a bot that forgot
@@ -258,6 +275,7 @@ def _new_ticket_conversation() -> ConversationHandler:
 async def ticket_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     # A typed /issue is never a Hub flow, even if a Hub left its mark behind.
     _clear_issue_state(ctx, keep_resume=True)
+    claim_draft(ctx, update, ISSUE_OWNER_KEY)
     set_hub_origin(ctx, None)
     # A restart makes every button of the earlier report stale, even before
     # this one runs a search.
@@ -296,6 +314,7 @@ async def ticket_hub_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     await q.answer()
     force_end_flow_conversations(ctx, update)
     _clear_issue_state(ctx, keep_resume=True)
+    claim_draft(ctx, update, ISSUE_OWNER_KEY)
     set_hub_origin(ctx, TICKETS_HUB)
     _bump_version(ctx)
     if await require_seerr(update, ctx,
@@ -432,6 +451,8 @@ async def _show_search_results(
 
 
 async def ticket_title(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    if _replaced(update, ctx):
+        return await refuse_replaced_draft(update, REPLACED_TEXT)
     query = update.effective_message.text.strip()
     await send_typing(update, ctx)  # search can take seconds on a big library
     return await _show_search_results(
@@ -746,6 +767,8 @@ async def _show_type_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
 
 
 async def ticket_pick_type(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    if _replaced(update, ctx):
+        return await refuse_replaced_draft(update, REPLACED_TEXT)
     q = update.callback_query
     await q.answer()
     version, args = _split_cb(q.data)
@@ -771,6 +794,10 @@ async def ticket_pick_type(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
 
 
 async def ticket_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    if _replaced(update, ctx):
+        # The draft is another chat's report: its title must not get this
+        # text, and an Auto-fix must not delete its file.
+        return await refuse_replaced_draft(update, REPLACED_TEXT)
     description = update.effective_message.text.strip()
     if not description:
         await update.effective_message.reply_text(
@@ -893,6 +920,8 @@ def _has_arr_for_media(ctx: ContextTypes.DEFAULT_TYPE) -> bool:
 
 
 async def ticket_offer_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    if _replaced(update, ctx):
+        return await refuse_replaced_draft(update, REPLACED_TEXT)
     q = update.callback_query
     await q.answer()
     version, args = _split_cb(q.data)
@@ -922,6 +951,8 @@ async def ticket_offer_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
 
 
 async def ticket_confirm_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    if _replaced(update, ctx):
+        return await refuse_replaced_draft(update, REPLACED_TEXT)
     q = update.callback_query
     await q.answer()
     version, args = _split_cb(q.data)
@@ -954,6 +985,8 @@ async def _submit_ticket(
     concurrent_updates(True), a second confirm tap runs in parallel and
     would file a duplicate Seerr Ticket. user_data is shared across the
     user's updates and there is no await between check and set."""
+    if _replaced(update, ctx):
+        return await refuse_replaced_draft(update, REPLACED_TEXT)
     # The marker holds the flow generation the submit started under, so it
     # blocks only this report's double tap: a /issue started while this one
     # is still submitting runs under a later generation and is not blocked.
@@ -1159,8 +1192,8 @@ async def _submit_ticket_inner(
         except Exception as exc:
             logger.exception("couldn't attach autofix card message", exc_info=exc)
     # A force-end while this submit ran already cleared its draft, and a newer
-    # report may own the keys now: leave them alone.
-    if not flow_step_is_stale(ctx):
+    # report (here or in another chat) may own the keys now: leave them alone.
+    if not flow_step_is_stale(ctx) and not _replaced(update, ctx):
         _clear_issue_state(ctx)
     return ConversationHandler.END
 
@@ -1203,7 +1236,12 @@ async def ticket_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Optio
             await _refuse_stale(update, ctx)
             return None
         await q.answer("Cancelled")
-    elif submit_in_flight(ctx, "submitting_ticket"):
+    if _replaced(update, ctx):
+        # The draft is another chat's report now: end only this chat's flow.
+        await end_flow(update, ctx, "Cancelled.", None,
+                       typed_text="Cancelled. /issue to start over.")
+        return ConversationHandler.END
+    if q is None and submit_in_flight(ctx, "submitting_ticket"):
         # A typed /cancel while the report is being filed: it completes, so
         # do not say it was cancelled.
         await update.effective_message.reply_text(

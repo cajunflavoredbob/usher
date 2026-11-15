@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.test_flows_across_chats import DM_ID, USER_ID, _Rig, rig  # noqa: F401
+from tests.test_flows_across_chats import DM_ID, GROUP_ID, USER_ID, _Rig, rig  # noqa: F401
 
 # (command that opens the flow, the in-flight marker its submit sets)
 FLOWS = [
@@ -31,6 +31,20 @@ async def test_typed_cancel_during_a_submit_says_already_sending(rig, opener, ma
     assert not any(t.startswith("Cancelled") for t in texts)
     # The running submit's marker is left for it to pop.
     assert rig.user_data[marker] == _gen(rig)
+
+
+@pytest.mark.parametrize("opener,marker", FLOWS)
+async def test_a_command_in_a_group_mid_submit_still_says_already_sending(
+        rig, opener, marker):
+    """A command in another chat is no new flow here: the DM's own submit is
+    still the one running."""
+    await rig.say(DM_ID, opener)
+    rig.user_data[marker] = _gen(rig)
+    await rig.say(GROUP_ID, "/weather")
+    before = len(rig.sent)
+    await rig.say(DM_ID, "/cancel")
+    texts = [t for _c, t in rig.sent[before:]]
+    assert any("Already sending" in t for t in texts), texts
 
 
 @pytest.mark.parametrize("opener,marker", FLOWS)

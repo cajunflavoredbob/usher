@@ -142,26 +142,26 @@ async def test_a_refused_jump_tap_before_the_confirm_keeps_the_person(h):
     assert _filed_user_ids(h) == [21]
 
 
-async def test_a_request_in_a_group_mid_confirm_files_nothing(h):
+async def test_a_bare_request_in_a_group_mid_confirm_still_files_for_the_person(h):
+    """A command in the group ends only the group's flows: the DM confirm
+    still files for the person it names."""
     await _pick_person_1(h)
     version = await _to_confirm(h)
     confirm = _last_menu(h)
     assert "for <b>Person 1</b>" in h.sent[-1]
-    await _say_in_group(h, "/request")  # opens the Hub there, ends the DM flow
+    await _say_in_group(h, "/request")  # opens the Hub there, ends nothing here
     await h.tap(f"{RQ_GO}:{version}", confirm)
-    assert _filed_user_ids(h) == []
+    assert _filed_user_ids(h) == [21]
 
 
-async def test_a_group_command_ends_the_admins_own_dm_confirm(h):
-    """One flow per user across chats: a command in the group ends the DM
-    request too, so its confirm files nothing."""
+async def test_the_admins_own_confirm_still_files_after_a_group_command(h):
     await h.say("/request movie b")
     version = h.user_data["rq_search_version"]
     await h.tap(f"{RQ_MEDIA}:{version}:movie:444", _last_menu(h))
     confirm = _last_menu(h)
     await _say_in_group(h, "/request")
     await h.tap(f"{RQ_GO}:{version}", confirm)
-    assert _filed_user_ids(h) == []
+    assert _filed_user_ids(h) == [None]
 
 
 async def test_a_jump_in_another_chat_names_no_person_at_its_confirm(h):
@@ -174,48 +174,56 @@ async def test_a_jump_in_another_chat_names_no_person_at_its_confirm(h):
     assert "Person 1" not in h.sent[-1]
 
 
-# --- a flow in a group ends the DM's Request for someone ---------------------
+# --- the pick belongs to the DM: other chats never clear or read it ---------
 
 
-async def _dm_title_does_nothing(h) -> None:
-    """The DM flow was ended: its next title is not searched and nothing
-    is filed."""
+async def _confirm_files_for_person_1(h) -> None:
+    version = await _to_confirm(h)
+    assert "for <b>Person 1</b>" in h.sent[-1]
+    await h.tap(f"{RQ_GO}:{version}", _last_menu(h))
+    assert _filed_user_ids(h) == [21]
+
+
+async def test_a_bare_request_in_a_group_keeps_the_dm_pick(h):
+    await _pick_person_1(h)
+    await _say_in_group(h, "/request")
+    await _confirm_files_for_person_1(h)
+
+
+async def test_a_trending_command_in_a_group_keeps_the_dm_pick(h):
+    await _pick_person_1(h)
+    await _say_in_group(h, "/trending")
+    await _confirm_files_for_person_1(h)
+
+
+async def _dm_title_is_refused_as_replaced(h) -> None:
+    """A new request in the group took the draft over: the DM's next title
+    is not searched, nothing is filed, and the DM says why."""
     searches = h.app.bot_data["seerr"].search.await_count
     await h.say("movie b")
     assert h.app.bot_data["seerr"].search.await_count == searches
     assert _filed_user_ids(h) == []
+    assert h.sent[-1].startswith(
+        "That request was replaced by one you started in another chat.")
 
 
-async def test_a_bare_request_in_a_group_ends_the_dm_pick(h):
-    await _pick_person_1(h)
-    await _say_in_group(h, "/request")
-    assert "rq_for" not in h.user_data
-    await _dm_title_does_nothing(h)
-
-
-async def test_a_trending_command_in_a_group_ends_the_dm_pick(h):
-    await _pick_person_1(h)
-    await _say_in_group(h, "/trending")
-    assert "rq_for" not in h.user_data
-    await _dm_title_does_nothing(h)
-
-
-async def test_a_new_request_tap_in_a_group_ends_the_dm_pick(h):
+async def test_a_new_request_tap_in_a_group_takes_the_draft_over(h):
     await _pick_person_1(h)
     record_btn(h.app, USER_ID, SimpleNamespace(message_id=7001, chat_id=GROUP_ID))
     await _tap_in_group(h, REQUESTS_NEW, 7001)
-    assert "rq_for" not in h.user_data
-    await _dm_title_does_nothing(h)
+    # The group's flow never reads or clears the DM's pick.
+    assert h.user_data["rq_for"]["seerr_id"] == 21
+    await _dm_title_is_refused_as_replaced(h)
 
 
-async def test_a_request_it_instead_tap_in_a_group_ends_the_dm_pick(h):
+async def test_a_request_it_instead_tap_in_a_group_takes_the_draft_over(h):
     h.app.bot_data["seerr"].get_media_title = AsyncMock(
         return_value=("Movie C", "2022"))
     await _pick_person_1(h)
     record_btn(h.app, USER_ID, SimpleNamespace(message_id=7000, chat_id=GROUP_ID))
     await _tap_in_group(h, "rqfi:movie:222:i", 7000)
-    assert "rq_for" not in h.user_data
-    await _dm_title_does_nothing(h)
+    assert h.user_data["rq_for"]["seerr_id"] == 21
+    await _dm_title_is_refused_as_replaced(h)
 
 
 async def test_a_group_request_names_nobody_and_files_as_the_admin(h):
@@ -233,12 +241,16 @@ async def test_a_group_request_names_nobody_and_files_as_the_admin(h):
                for c in h.app.bot_data["seerr"].get_quota.call_args_list)
 
 
-async def test_a_group_request_then_its_cancel_leaves_no_dm_flow(h):
+async def test_a_pick_cleared_by_a_group_flow_refuses_the_title(h):
     await _pick_person_1(h)
+    # A /request flow in the group, then its /cancel: the group's flow owned
+    # the draft, so ending it clears the Request keys, the pick among them.
     await _say_in_group(h, "/request movie b")
     await _say_in_group(h, "/cancel")
     assert "rq_for" not in h.user_data
-    await _dm_title_does_nothing(h)
+    await h.say("movie b")
+    assert CLEARED in h.sent[-1]
+    assert _filed_user_ids(h) == []
     h.app.bot_data["seerr"].search.assert_awaited_once()  # only the group's
 
 

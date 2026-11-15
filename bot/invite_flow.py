@@ -75,8 +75,11 @@ from bot.shared import (
     edit_or_send,
     flow_step_gen,
     flow_step_is_stale,
+    claim_draft,
     force_end_flow_conversations,
+    owns_draft,
     record_btn,
+    refuse_replaced_draft,
     send_typing,
     submit_in_flight,
 )
@@ -91,7 +94,13 @@ _STALE_INVITE_TOAST = "That invite menu is stale: /invite to start over."
 # counter surviving every reset (same lesson as rq_search_version).
 _INV_KEYS = ("inv_email", "inv_sections", "inv_selected", "inv_machine",
              "inv_server_name", "inv_submitting", "inv_access_ask",
-             "inv_expiry_days")
+             "inv_expiry_days", "inv_chat")
+# The chat that owns the invite draft (bot.shared.owns_draft). The flow is
+# Admin and DM only, so this is the DM; a step checks it like /issue and
+# /request do.
+_OWNER_KEY = "inv_chat"
+REPLACED_TEXT = ("That invite was replaced by one you started in another "
+                 "chat. /invite to start again.")
 
 
 def _looks_like_email(s: str) -> bool:
@@ -205,6 +214,7 @@ async def invite_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     token = await _admin_gate(update, ctx)
     if token is None:
         return ConversationHandler.END
+    claim_draft(ctx, update, _OWNER_KEY)
     arg = " ".join(ctx.args or ()).strip()
     if arg:
         return await _accept_email(update, ctx, arg)
@@ -226,6 +236,7 @@ async def invite_hub_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
     ctx.user_data.pop("inv_access_ask", None)
     if await _admin_gate(update, ctx, ADMIN_HUB) is None:
         return ConversationHandler.END
+    claim_draft(ctx, update, _OWNER_KEY)
     await edit_or_send(
         q, "Who am I inviting? Reply with their email (or Plex username).")
     return INV_EMAIL
@@ -264,10 +275,13 @@ async def invite_access_start(update: Update,
             "That ask has no Plex email or username: /invite them by hand.")
         return ConversationHandler.END
     ctx.user_data["inv_access_ask"] = ask.id
+    claim_draft(ctx, update, _OWNER_KEY)
     return await _accept_email(update, ctx, who)
 
 
 async def invite_email(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    if not owns_draft(ctx, update, _OWNER_KEY):
+        return await refuse_replaced_draft(update, REPLACED_TEXT)
     return await _accept_email(update, ctx,
                                update.effective_message.text.strip())
 
@@ -499,6 +513,8 @@ async def invite_send(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     except (ValueError, IndexError):
         await q.answer()
         return ConversationHandler.END
+    if not owns_draft(ctx, update, _OWNER_KEY):
+        return await refuse_replaced_draft(update, REPLACED_TEXT)
     if _stale(ctx, version):
         await q.answer(_STALE_INVITE_TOAST,
                        show_alert=True)

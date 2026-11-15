@@ -17,6 +17,7 @@ from typing import Callable, Final, Optional
 
 import telegram
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity, Update
+from telegram.constants import ChatType
 from telegram.ext import ApplicationHandlerStop, ContextTypes, ConversationHandler
 
 from seerr import SeerrClient
@@ -1033,7 +1034,8 @@ async def reset_stale_flows(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
 # every button of an ended flow stays stale for the next one.
 ISSUE_KEYS: Final = ("media", "search_results", "seasons", "season", "episode",
                      "issue_type", "description", "research_parent",
-                     "submitting_ticket", "rq_jump_media", "hub_origin")
+                     "submitting_ticket", "rq_jump_media", "hub_origin",
+                     "issue_chat")
 # The ones force-ending the /issue conversation leaves alone: a jump that
 # ends it hands the Hub origin to the next flow, and submitting_ticket belongs
 # to the in-flight submit (it pops its own marker itself).
@@ -1047,90 +1049,141 @@ _ISSUE_KEYS_KEPT_ON_FORCE_END: Final = ("hub_origin", "submitting_ticket")
 RQ_KEYS: Final = ("rq_media", "rq_search_results",
                   "rq_results", "rq_screen", "rq_perms", "rq_is4k",
                   "rq_seasons", "rq_selected", "rq_submitting", "rq_for",
-                  "rq_confirm_for")
+                  "rq_confirm_for", "rq_chat")
 # The one a force-end leaves alone: it belongs to the in-flight submit, which
 # pops it itself.
 _RQ_KEYS_KEPT_ON_FORCE_END: Final = ("rq_submitting",)
 
 
-def _user_conversation_keys(conv: ConversationHandler, update: Update) -> list:
-    """The keys of `conv`'s live conversations that belong to this update's
-    user, in any chat. Every flow conversation is per_chat + per_user, keyed
-    (chat_id, user_id) (PTB's _get_key; tests pin the shape). Any other shape
-    falls back to the update's own key."""
-    key = conv._get_key(update)
-    if (getattr(conv, "per_chat", True) and getattr(conv, "per_user", True)
-            and not getattr(conv, "per_message", False)):
-        user_id = key[1]
-        return [k for k in list(conv._conversations)
-                if isinstance(k, tuple) and len(k) == 2 and k[1] == user_id]
-    return [key] if key in conv._conversations else []
+def _chat_id(update) -> Optional[int]:
+    chat = getattr(update, "effective_chat", None)
+    return getattr(chat, "id", None)
+
+
+def owns_draft(ctx, update, owner_key: str) -> bool:
+    """True when the per-user draft whose owner chat is kept under
+    `owner_key` belongs to this update's chat. user_data is per user while
+    each conversation is per chat, so a flow started in another chat
+    overwrites the draft and its owner. A draft with no owner recorded (none
+    written yet, or already cleared) and an update that names no chat (a bare
+    timeout) count as owned."""
+    owner = ctx.user_data.get(owner_key)
+    chat_id = _chat_id(update)
+    return owner is None or chat_id is None or owner == chat_id
+
+
+def claim_draft(ctx, update, owner_key: str) -> None:
+    """Record this update's chat as the owner of a new flow's draft."""
+    ctx.user_data[owner_key] = _chat_id(update)
+
+
+async def refuse_replaced_draft(update, text: str) -> int:
+    """A step in the chat whose draft a newer flow in another chat took
+    over: say so, act on nothing, and end this chat's conversation. A tap
+    edits its message (dropping the buttons); text gets a reply."""
+    q = update.callback_query
+    if q is not None:
+        try:
+            await q.answer()
+        except telegram.error.TelegramError as exc:
+            logger.debug("callback answer failed", exc_info=exc)
+        try:
+            await q.edit_message_text(text)
+            return ConversationHandler.END
+        except telegram.error.TelegramError as exc:
+            logger.debug("replaced-draft edit failed", exc_info=exc)
+    await update.effective_message.reply_text(text)
+    return ConversationHandler.END
+
+
+# The owner chat of each per-user draft (see owns_draft).
+ISSUE_OWNER_KEY: Final = "issue_chat"
+RQ_OWNER_KEY: Final = "rq_chat"
+_REPLY_CHAT_KEY: Final = "tk_reply_chat"
 
 
 def force_end_flow_conversations(ctx: ContextTypes.DEFAULT_TYPE,
                                  update: Update) -> list:
-    """End every registered flow conversation of this update's user, in every
-    chat, and drop the free-text flow markers those conversations own. A
-    user has one flow at a time across chats: the drafts and markers live in
-    per-user user_data, so a flow left open in another chat would otherwise
-    act on what the new one picks. Shared by
-    reset_stale_flows and by cross-flow jump entry points (e.g. the /issue
-    dead-end's "Request it instead" button, whose tap starts the request
-    conversation while /issue is still mid-state -- without this the
-    abandoned /issue would fire a confusing timeout notice minutes into the
-    new flow).
+    """End every registered flow conversation for this update's (chat, user)
+    and drop the free-text flow markers those conversations own. Flows the
+    user has open in other chats are left alone; each per-user draft records
+    the chat that owns it (owns_draft), so a flow there refuses to act on a
+    draft a newer flow here took over, and this end clears a draft only when
+    this chat owns it. Shared by reset_stale_flows and by cross-flow jump
+    entry points (e.g. the /issue dead-end's "Request it instead" button,
+    whose tap starts the request conversation while /issue is still
+    mid-state -- without this the abandoned /issue would fire a confusing
+    timeout notice minutes into the new flow).
 
     The markers travel WITH the force-end, never separately: ending the link
     conversation also cancels the timeout job that would normally clear
     link_active_loop, so leaving the marker set would let an in-flight Plex
-    PIN poll outlive its conversation and fire _finalize_link mid-flow.
+    PIN poll outlive its conversation and fire _finalize_link mid-flow. The
+    link flow runs only in the private chat, so only an end there drops its
+    markers; the Ticket reply markers are dropped only by an end in the chat
+    they were set in.
 
-    Returns the conversations that were actually live and got ended, each
-    once however many chats it was live in."""
+    Returns the conversations that were actually live and got ended."""
+    chat_id = _chat_id(update)
     before = _flow_gen(ctx)
-    ctx.user_data[_FLOW_GEN_KEY] = before + 1
+    now = before + 1
+    ctx.user_data[_FLOW_GEN_KEY] = now
     cell = _STEP_GEN.get()
-    if cell is not None and cell[0] == before:
-        # The calling step ends flows on purpose, so its own bump is not an
+    if (cell is not None and cell[1] == chat_id
+            and not _ended_since(ctx, chat_id, cell[0])):
+        # The calling step ends flows on purpose, so its own end is not an
         # overtake. A step already overtaken earlier stays overtaken.
-        cell[0] = before + 1
+        cell[0] = now
+    ended_at = dict(ctx.user_data.get(_FLOW_ENDED_KEY) or {})
+    ended_at[chat_id] = now
+    ctx.user_data[_FLOW_ENDED_KEY] = ended_at
     ended = []
     for conv in ctx.application.bot_data.get("flow_convs", ()):
         try:
-            keys = _user_conversation_keys(conv, update)
+            key = conv._get_key(update)
         except Exception:
             continue
-        for key in keys:
+        if key in conv._conversations:
             conv._update_state(ConversationHandler.END, key)
-            job = conv.timeout_jobs.pop(key, None)
-            if job is not None:
-                job.schedule_removal()
-        if keys:
             ended.append(conv)
-            if getattr(conv, "name", None) == "issue":
+            if (getattr(conv, "name", None) == "issue"
+                    and owns_draft(ctx, update, ISSUE_OWNER_KEY)):
                 # The abandoned report's draft must not seed the next one.
                 for draft_key in ISSUE_KEYS:
                     if draft_key not in _ISSUE_KEYS_KEPT_ON_FORCE_END:
                         ctx.user_data.pop(draft_key, None)
-            if getattr(conv, "name", None) == "request":
+            if (getattr(conv, "name", None) == "request"
+                    and owns_draft(ctx, update, RQ_OWNER_KEY)):
                 # The abandoned draft must not be read by anything later
                 # (a re-link resume, the next flow).
                 for draft_key in RQ_KEYS:
                     if draft_key not in _RQ_KEYS_KEPT_ON_FORCE_END:
                         ctx.user_data.pop(draft_key, None)
-    for marker in ("tk_reply_id", "tk_close_after", "tk_reply_chat",
-                   "link_active_loop", "link_retry_ok"):
-        ctx.user_data.pop(marker, None)
+            job = conv.timeout_jobs.pop(key, None)
+            if job is not None:
+                job.schedule_removal()
+    reply_chat = ctx.user_data.get(_REPLY_CHAT_KEY)
+    if reply_chat is None or chat_id is None or reply_chat == chat_id:
+        for marker in ("tk_reply_id", "tk_close_after", _REPLY_CHAT_KEY):
+            ctx.user_data.pop(marker, None)
+    chat = getattr(update, "effective_chat", None)
+    if chat is None or getattr(chat, "type", None) == ChatType.PRIVATE:
+        for marker in ("link_active_loop", "link_retry_ok"):
+            ctx.user_data.pop(marker, None)
     return ended
 
 
-# Per-user flow generation. Force-ending a user's flows bumps it; a flow step
-# remembers the value it started under (in _STEP_GEN) and, if the value moved
-# while it ran, the step's returned state is dropped (guard_flow_steps) and its
-# own writes can be skipped (flow_step_is_stale). Lives in user_data under a key
-# no flow reset clears, like rq_search_version and inv_version, but is separate
-# from them: those answer "is this button from the latest menu".
+# Per-user flow generation. Force-ending a user's flows bumps it and records,
+# per chat, the generation of the last force-end there (_FLOW_ENDED_KEY). A
+# flow step remembers the generation it started under and its chat (in
+# _STEP_GEN) and, if its chat's flows were force-ended while it ran, the step's
+# returned state is dropped (guard_flow_steps) and its own writes can be
+# skipped (flow_step_is_stale). A force-end in another chat never overtakes it.
+# Both live in user_data under keys no flow reset clears, like
+# rq_search_version and inv_version, but are separate from them: those answer
+# "is this button from the latest menu".
 _FLOW_GEN_KEY: Final = "flow_gen"
+_FLOW_ENDED_KEY: Final = "flow_ended_at"
 _STEP_GEN: ContextVar[Optional[list]] = ContextVar("flow_step_gen", default=None)
 
 
@@ -1138,11 +1191,24 @@ def _flow_gen(ctx) -> int:
     return ctx.user_data.get(_FLOW_GEN_KEY) or 0
 
 
+def _ended_since(ctx, chat_id, gen: int) -> bool:
+    """True when this user's flows in `chat_id` were force-ended after
+    generation `gen`."""
+    ended_at = ctx.user_data.get(_FLOW_ENDED_KEY) or {}
+    return (ended_at.get(chat_id) or 0) > gen
+
+
+def flows_ended_here_since(ctx, update, gen: int) -> bool:
+    """True when this update's chat had its flows force-ended after
+    generation `gen` (for a snapshot stamped with flow_step_gen)."""
+    return _ended_since(ctx, _chat_id(update), gen)
+
+
 def flow_step_is_stale(ctx) -> bool:
-    """True when the flow step running in this task started before the user's
+    """True when the flow step running in this task started before its chat's
     flows were last force-ended. Always False outside a guarded step."""
     cell = _STEP_GEN.get()
-    return cell is not None and cell[0] != _flow_gen(ctx)
+    return cell is not None and _ended_since(ctx, cell[1], cell[0])
 
 
 def flow_step_gen(ctx) -> int:
@@ -1156,12 +1222,18 @@ def flow_step_gen(ctx) -> int:
 
 def submit_in_flight(ctx, marker_key: str) -> bool:
     """True when this flow's own submit is running: its in-flight marker holds
-    the flow generation the step runs under. An older submit still finishing
-    (the user has since started a newer flow) carries an older generation and
-    does not count. A typed /cancel asks this to say "Already sending" instead
-    of "Cancelled." while the submit goes on to complete."""
+    the flow generation the submit started under, and this chat's flows were
+    not force-ended since. An older submit still finishing (the user has
+    since started a newer flow here) does not count. A typed /cancel asks
+    this to say "Already sending" instead of "Cancelled." while the submit
+    goes on to complete."""
     marker = ctx.user_data.get(marker_key)
-    return marker is not None and marker == flow_step_gen(ctx)
+    if marker is None:
+        return False
+    cell = _STEP_GEN.get()
+    if cell is None:
+        return marker == _flow_gen(ctx)
+    return not _ended_since(ctx, cell[1], marker)
 
 
 def guard_flow_steps(conv: ConversationHandler) -> None:
@@ -1182,9 +1254,10 @@ def guard_flow_steps(conv: ConversationHandler) -> None:
 
 
 @contextlib.contextmanager
-def _step_scope(ctx):
-    """Run a step under the generation the user's flows have right now."""
-    cell = [_flow_gen(ctx)]
+def _step_scope(ctx, update):
+    """Run a step of this update's chat under the generation the user's flows
+    have right now."""
+    cell = [_flow_gen(ctx), _chat_id(update)]
     token = _STEP_GEN.set(cell)
     try:
         yield cell
@@ -1198,7 +1271,7 @@ def track_flow_generation(cb):
     flow_step_is_stale work inside it. Does not change what it returns."""
     @functools.wraps(cb)
     async def step(update, ctx):
-        with _step_scope(ctx):
+        with _step_scope(ctx, update):
             return await cb(update, ctx)
     return step
 
@@ -1206,9 +1279,9 @@ def track_flow_generation(cb):
 def _guarded_step(conv: ConversationHandler, cb):
     @functools.wraps(cb)
     async def step(update, ctx):
-        with _step_scope(ctx) as cell:
+        with _step_scope(ctx, update) as cell:
             result = await cb(update, ctx)
-            if cell[0] == _flow_gen(ctx):
+            if not _ended_since(ctx, cell[1], cell[0]):
                 return result
         # Overtaken. If the conversation has a live state again, a newer step
         # (the user restarted the flow) owns it: leave it alone.

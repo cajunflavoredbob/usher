@@ -112,12 +112,17 @@ from bot.shared import (
     RQ_TITLE,
     RELINK_RESUME_EXECUTORS,
     RQ_KEYS,
+    RQ_OWNER_KEY,
+    claim_draft,
     edit_or_send,
     flow_step_gen,
     flow_step_is_stale,
+    flows_ended_here_since,
     force_end_flow_conversations,
+    owns_draft,
     prompt_plex_relink,
     record_btn,
+    refuse_replaced_draft,
     require_seerr,
     send_typing,
     submit_in_flight,
@@ -145,9 +150,9 @@ _RQ_KEYS = RQ_KEYS
 # The confirm screen's snapshot of whom it names (see _show_confirm). One of
 # RQ_KEYS, so ending the flow clears it; entry points never pop it themselves.
 _CONFIRM_KEY = "rq_confirm_for"
-# Starting anything else ends the user's open flows in every chat, so a flow
-# that finds its pick gone was ended behind its back: say that, not that the
-# person was "cleared".
+# A flow that finds its pick gone was ended behind its back (its own chat's
+# flows were reset while a step ran): say that, not that the person was
+# "cleared".
 _TARGET_CLEARED_TEXT = ("That Request for someone was ended when you started "
                         "something else. Start Request for someone again.")
 _TARGET_CLEARED_TYPED = ("That Request for someone was ended when you started "
@@ -157,13 +162,20 @@ _TARGET_CLEARED_TYPED = ("That Request for someone was ended when you started "
 # Request for someone is DM-only (admin_view), so its pick (rq_for) belongs to
 # the private chat: only an entry point in a private chat pops it, and only a
 # flow in a private chat reads it. _PICKED_KEY marks that the DM flow was
-# started as Request for someone. It is NOT one of RQ_KEYS: should anything
-# clear RQ_KEYS (rq_for among them, user_data is per user) while the DM flow
-# runs on, the marker is how the DM flow then knows its person is gone. A flow
-# started in another chat no longer leaves it running (force-ending ends the
-# user's flows in every chat), so this is a backstop. Only the private-chat
-# entry points pop it.
+# started as Request for someone. It is NOT one of RQ_KEYS: ending a /request
+# in another chat clears RQ_KEYS (rq_for among them, user_data is per user)
+# while the DM flow runs on, and the marker is how the DM flow then knows its
+# person is gone. Only the private-chat entry points pop it.
 _PICKED_KEY = "rq_for_picked"
+
+# A step in a chat whose draft a newer /request in another chat replaced.
+REPLACED_TEXT = ("That request was replaced by one you started in another "
+                 "chat. /request to start again.")
+
+
+def _replaced(update, ctx) -> bool:
+    """True when the request draft belongs to another chat's /request."""
+    return not owns_draft(ctx, update, RQ_OWNER_KEY)
 
 # Availability annotations for the search list come from
 # bot.media_card.STATUS_NOTES (shared with the detail cards): UNKNOWN/DELETED
@@ -180,6 +192,9 @@ def _current_version(ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def _request_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    if _replaced(update, ctx):
+        # A newer /request in another chat owns the draft: end quietly.
+        return ConversationHandler.END
     hub = hub_origin(ctx)
     _clear_rq_state(ctx)
     try:
@@ -304,8 +319,7 @@ def _in_private_chat(update: Update) -> bool:
 
 def _forget_behalf_pick(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """A new request started in the private chat forgets a Request for
-    someone pick. One started in another chat does not pop it here: starting
-    it force-ends the user's open DM request, which clears the pick."""
+    someone pick. One started in another chat leaves the DM's pick alone."""
     if _in_private_chat(update):
         ctx.user_data.pop("rq_for", None)
         ctx.user_data.pop(_PICKED_KEY, None)
@@ -327,6 +341,7 @@ async def request_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     await send_typing(update, ctx)
     if not await _gate_entry(update, ctx):
         return ConversationHandler.END
+    claim_draft(ctx, update, RQ_OWNER_KEY)
     # `/request dune part two` skips the title prompt.
     return await _run_search(
         update, ctx, update.effective_message.reply_text, query,
@@ -345,6 +360,7 @@ async def request_hub_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     await send_typing(update, ctx)
     if not await _gate_entry(update, ctx, hub=REQUESTS_HUB):
         return ConversationHandler.END
+    claim_draft(ctx, update, RQ_OWNER_KEY)
     await edit_or_send(q, "What movie or show do you want? (Reply with the title.)")
     return RQ_TITLE
 
@@ -396,6 +412,7 @@ async def request_hub_behalf(update: Update,
     await send_typing(update, ctx)
     if not await _gate_entry(update, ctx, hub=REQUESTS_HUB):
         return ConversationHandler.END
+    claim_draft(ctx, update, RQ_OWNER_KEY)
     store: UserStore = ctx.bot_data["store"]
     users = await store.list_linked_users()
     if not users:
@@ -616,7 +633,7 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
             return ConversationHandler.END
     # The jump files for the tapper. Only a tap that goes ahead forgets a
     # Request for someone pick: a refused one leaves the open flow's pick, and
-    # a tap in another chat leaves the DM's to the force-end below.
+    # a tap in another chat leaves the DM's.
     _forget_behalf_pick(update, ctx)
     set_hub_origin(ctx, hub)
     # Another flow may still be parked in a pick state, an open /request
@@ -629,6 +646,7 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     force_end_flow_conversations(ctx, update)
     if perms is not None:
         ctx.user_data["rq_perms"] = perms
+    claim_draft(ctx, update, RQ_OWNER_KEY)
     try:
         media_type, tmdb_id, _ = _split_jump(q.data)
     except (ValueError, AttributeError):
@@ -662,6 +680,8 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def request_title(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    if _replaced(update, ctx):
+        return await refuse_replaced_draft(update, REPLACED_TEXT)
     if _behalf_pick_lost(update, ctx):
         return await _refuse_lost_pick(update, ctx)
     query = update.effective_message.text.strip()
@@ -1163,6 +1183,8 @@ async def _quota_line(ctx: ContextTypes.DEFAULT_TYPE, tg_id: int,
 
 async def _show_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
+    if _replaced(update, ctx):
+        return await refuse_replaced_draft(update, REPLACED_TEXT)
     if _behalf_pick_lost(update, ctx):
         return await _refuse_lost_pick(update, ctx)
     # The person this confirm names, taken before any await and kept under a
@@ -1222,6 +1244,9 @@ async def request_submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Double-tap guard around the real submit (concurrent_updates(True):
     a second confirm tap runs in parallel and would file a duplicate)."""
     q = update.callback_query
+    if _replaced(update, ctx):
+        # Another chat's /request owns the draft: file nothing of it.
+        return await refuse_replaced_draft(update, REPLACED_TEXT)
     try:
         prefix, version_s = q.data.split(":")
         version = int(version_s)
@@ -1288,10 +1313,11 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                            typed_text="Lost conversation state. /request to start over.")
             return ConversationHandler.END
         target = confirm.get("target")
-        if target is not None and confirm.get("gen") != gen:
-            # The user's flows were reset since the confirm was drawn (a
-            # command or a Hub button, maybe in another chat): the pick is no
-            # longer this flow's to file.
+        if (target is not None
+                and flows_ended_here_since(ctx, update, confirm.get("gen") or 0)):
+            # This chat's flows were reset since the confirm was drawn (a
+            # command or a Hub button here): the pick is no longer this
+            # flow's to file.
             await end_flow(update, ctx, _TARGET_CLEARED_TEXT, hub,
                            REQUESTS_BEHALF, typed_text=_TARGET_CLEARED_TYPED)
             return ConversationHandler.END
@@ -1348,7 +1374,7 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             "or requested. Nothing to do 🎉",
             hub, parse_mode="HTML",
         )
-        _clear_finished_rq_state(ctx)
+        _clear_finished_rq_state(ctx, update)
         return ConversationHandler.END
     except DuplicateRequestError:
         await end_flow(
@@ -1358,20 +1384,20 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             typed_text=f"<b>{html.escape(label)}</b> is already requested. "
                        "It's on its way. See /requests for status.",
         )
-        _clear_finished_rq_state(ctx)
+        _clear_finished_rq_state(ctx, update)
         return ConversationHandler.END
     except QuotaExceededError as exc:
         await end_flow(
             update, ctx,
             _quota_text(exc, who), hub, parse_mode="HTML",
         )
-        _clear_finished_rq_state(ctx)
+        _clear_finished_rq_state(ctx, update)
         return ConversationHandler.END
     except RequestPermissionError as exc:
         await end_flow(
             update, ctx, _permission_text(exc, who), hub, parse_mode="HTML",
         )
-        _clear_finished_rq_state(ctx)
+        _clear_finished_rq_state(ctx, update)
         return ConversationHandler.END
     except Exception as exc:
         logger.exception("create_request failed")
@@ -1429,7 +1455,7 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         # same show.
         seasons=(sorted(created.seasons or seasons)
                  if media["type"] == "tv" else None))
-    _clear_finished_rq_state(ctx)
+    _clear_finished_rq_state(ctx, update)
     return ConversationHandler.END
 
 
@@ -1647,12 +1673,14 @@ def _clear_rq_state(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         ctx.user_data.pop(key, None)
 
 
-def _clear_finished_rq_state(ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """The end of a submit: clear the draft unless the user's flows were
-    force-ended while it ran. Then a newer /request may own these keys (the
-    force-end already cleared the draft this submit belonged to), and wiping
-    them would break its list and confirm."""
-    if not flow_step_is_stale(ctx):
+def _clear_finished_rq_state(ctx: ContextTypes.DEFAULT_TYPE,
+                             update=None) -> None:
+    """The end of a submit: clear the draft unless this chat's flows were
+    force-ended while it ran, or a /request in another chat took the draft
+    over. Then a newer /request owns these keys (a force-end already cleared
+    the draft this submit belonged to), and wiping them would break its list
+    and confirm."""
+    if not flow_step_is_stale(ctx) and not _replaced(update, ctx):
         _clear_rq_state(ctx)
 
 
@@ -1718,7 +1746,7 @@ async def _resume_submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                  if media["type"] == "tv" else None))
     # A /request started while this resume waited on Seerr owns the keys now
     # (the re-link step it runs in, strong or weak PIN, is then stale).
-    _clear_finished_rq_state(ctx)
+    _clear_finished_rq_state(ctx, update)
 
 
 RELINK_RESUME_EXECUTORS["submit_request"] = _resume_submit_request
@@ -1739,7 +1767,12 @@ async def request_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.answer(_STALE_MENU_TOAST, show_alert=True)
             return None
         await q.answer("Cancelled")
-    elif submit_in_flight(ctx, "rq_submitting"):
+    if _replaced(update, ctx):
+        # The draft is another chat's request now: end only this chat's flow.
+        await end_flow(update, ctx, "Cancelled.", None,
+                       typed_text="Cancelled. /request to start over.")
+        return ConversationHandler.END
+    if q is None and submit_in_flight(ctx, "rq_submitting"):
         # A typed /cancel while the Request is being filed: it completes, so
         # do not say it was cancelled.
         await update.effective_message.reply_text(

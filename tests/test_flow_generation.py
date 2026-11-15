@@ -119,6 +119,40 @@ async def test_next_text_is_not_swallowed_after_slow_step_was_force_ended():
     assert rig.conv.check_update(_update("next plain text")) is None
 
 
+def _group_update(text: str) -> Update:
+    chat = Chat(-1001234, "supergroup", title="g")
+    user = User(USER_ID, "u", False)
+    entities = (MessageEntity(MessageEntity.BOT_COMMAND, 0, len(text.split()[0])),)
+    msg = Message(next(_MSG_IDS), _NOW, chat, from_user=user, text=text, entities=entities)
+    msg.set_bot(_BOT)
+    return Update(next(_MSG_IDS), message=msg)
+
+
+async def test_a_force_end_in_another_chat_does_not_overtake_a_step():
+    """The same user's command in a group ends only the group's flows: the
+    DM step that was running keeps the state it returns, and is not stale."""
+    rig = _Rig()
+    stale_seen = []
+
+    async def slow_entry(update, ctx):
+        rig.started.set()
+        await rig.release.wait()
+        stale_seen.append(flow_step_is_stale(ctx))
+        return 1
+
+    rig.conv.entry_points[0].callback = slow_entry
+    rig.conv.entry_points[0].callback._flow_guarded = False
+    guard_flow_steps(rig.conv)
+    task = asyncio.create_task(rig.feed(_update("/go")))
+    await asyncio.wait_for(rig.started.wait(), 5)
+    other = _group_update("/weather")
+    force_end_flow_conversations(rig.ctx_for(other), other)
+    rig.release.set()
+    await task
+    assert rig.conv._conversations[rig.key] == 1
+    assert stale_seen == [False]
+
+
 async def test_step_with_no_force_end_keeps_its_own_state():
     rig = _Rig()
     rig.release.set()
