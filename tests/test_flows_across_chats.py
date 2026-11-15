@@ -1311,3 +1311,114 @@ async def test_a_replaced_refusal_without_a_hub_origin_has_no_buttons():
     upd = make_update(text="the dm's words", user_id=USER_ID, chat_id=DM_ID)
     await tf.ticket_description(upd, ctx)
     assert upd.effective_message.reply_calls[-1].get("reply_markup") is None
+
+
+# --- a /cancel in a replaced chat whose own submit still files ---------------
+
+async def test_a_cancel_in_a_replaced_chat_says_its_report_is_still_sending():
+    from bot.ticket_flow import ticket_cancel
+    from tests._handler_harness import make_update
+    # The DM (claim 5) is submitting; a group /issue (claim 6) took the draft.
+    ctx = make_ctx(admin_id=USER_ID, user_data={
+        "issue_chat": GROUP_ID, "issue_chat_draft": 6,
+        "issue_chat_claims": {DM_ID: 5, GROUP_ID: 6},
+        "submitting_ticket": ((DM_ID, 5), 0)})
+    upd = make_update(text="/cancel", user_id=USER_ID, chat_id=DM_ID)
+    await ticket_cancel(upd, ctx)
+    assert upd.effective_message.reply_calls[-1]["text"].startswith("Already sending")
+    assert ctx.user_data["issue_chat"] == GROUP_ID  # the newer draft is untouched
+
+
+async def test_a_cancel_in_a_replaced_chat_says_its_request_is_still_sending():
+    from bot.request_flow import request_cancel
+    from tests._handler_harness import make_update
+    ctx = make_ctx(admin_id=USER_ID, user_data={
+        "rq_chat": GROUP_ID, "rq_chat_draft": 6,
+        "rq_chat_claims": {DM_ID: 5, GROUP_ID: 6},
+        "rq_submitting": ((DM_ID, 5), 0)})
+    upd = make_update(text="/cancel", user_id=USER_ID, chat_id=DM_ID)
+    await request_cancel(upd, ctx)
+    assert upd.effective_message.reply_calls[-1]["text"].startswith("Already sending")
+
+
+async def test_a_cancel_in_a_replaced_chat_with_the_newer_chats_submit_running_cancels():
+    from bot.ticket_flow import ticket_cancel
+    from tests._handler_harness import make_update
+    # The group's report is the one sending; the DM's own was only replaced.
+    ctx = make_ctx(admin_id=USER_ID, user_data={
+        "issue_chat": GROUP_ID, "issue_chat_draft": 6,
+        "issue_chat_claims": {DM_ID: 5, GROUP_ID: 6},
+        "submitting_ticket": ((GROUP_ID, 6), 0)})
+    upd = make_update(text="/cancel", user_id=USER_ID, chat_id=DM_ID)
+    await ticket_cancel(upd, ctx)
+    assert upd.effective_message.reply_calls[-1]["text"].startswith("Cancelled")
+    assert ctx.user_data["submitting_ticket"] == ((GROUP_ID, 6), 0)
+
+
+# --- the submit marker is held before the tap is answered --------------------
+
+def _answer_sees_marker(upd, ctx, key, seen):
+    q = upd.callback_query
+    real = q.answer
+
+    async def answer(*a, **k):
+        seen.append(key in ctx.user_data)
+        return await real(*a, **k)
+    q.answer = answer
+
+
+@pytest.mark.parametrize("step,data", [
+    ("ticket_offer_autofix", f"{TICKET_AUTOFIX_OFFER}:3:no"),
+    ("ticket_confirm_autofix", f"{TICKET_AUTOFIX_CONFIRM}:3:yes"),
+    ("ticket_confirm_autofix", f"{TICKET_AUTOFIX_CONFIRM}:3:no"),
+])
+async def test_a_report_confirm_holds_its_marker_before_it_answers(
+        monkeypatch, step, data):
+    from telegram.ext import ConversationHandler
+    from bot import ticket_flow as tf
+    from tests._handler_harness import make_update
+
+    async def inner(*a, **k):
+        return ConversationHandler.END
+    monkeypatch.setattr(tf, "_submit_ticket_inner", inner)
+    ctx = make_ctx(admin_id=USER_ID, link=make_link(telegram_id=USER_ID),
+                   user_data={**_issue_draft(), "issue_chat": DM_ID})
+    upd = make_update(callback_data=data, user_id=USER_ID, chat_id=DM_ID)
+    seen: list = []
+    _answer_sees_marker(upd, ctx, "submitting_ticket", seen)
+    await getattr(tf, step)(upd, ctx)
+    assert seen == [True]
+
+
+async def test_a_request_confirm_holds_its_marker_before_it_answers(monkeypatch):
+    from telegram.ext import ConversationHandler
+    from bot import request_flow as rf
+    from tests._handler_harness import make_update
+
+    async def inner(*a, **k):
+        return ConversationHandler.END
+    monkeypatch.setattr(rf, "_submit_request", inner)
+    ctx = make_ctx(admin_id=USER_ID, link=make_link(telegram_id=USER_ID),
+                   user_data={**_rq_draft(), "rq_chat": DM_ID})
+    upd = make_update(callback_data=f"{RQ_GO}:3", user_id=USER_ID, chat_id=DM_ID)
+    seen: list = []
+    _answer_sees_marker(upd, ctx, "rq_submitting", seen)
+    await rf.request_submit(upd, ctx)
+    assert seen == [True]
+
+
+async def test_an_invite_confirm_holds_its_marker_before_it_answers(monkeypatch):
+    from telegram.ext import ConversationHandler
+    from bot import invite_flow
+    from tests._handler_harness import make_update
+
+    async def inner(*a, **k):
+        return ConversationHandler.END
+    monkeypatch.setattr(invite_flow, "_invite_send_inner", inner)
+    ctx = make_ctx(admin_id=USER_ID, link=make_link(telegram_id=USER_ID),
+                   user_data={**_inv_draft(), "inv_chat": DM_ID})
+    upd = make_update(callback_data="invgo:3", user_id=USER_ID, chat_id=DM_ID)
+    seen: list = []
+    _answer_sees_marker(upd, ctx, "inv_submitting", seen)
+    await invite_flow.invite_send(upd, ctx)
+    assert seen == [True]

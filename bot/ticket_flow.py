@@ -928,15 +928,19 @@ async def ticket_offer_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
     if _replaced(update, ctx):
         return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
     q = update.callback_query
-    await q.answer()
     version, args = _split_cb(q.data)
-    if await _is_stale(update, ctx, version):
+    # Before the first await, so a submit's marker is set before the tap is
+    # answered (_submit_ticket answers it once the marker is held).
+    if version is None or version != _current_version(ctx):
+        await q.answer()
+        await _is_stale(update, ctx, version)
         return None
     choice = args[0] if args else ""
     if choice == "no":
         return await _submit_ticket(
-            update, ctx, autofix=False,
+            update, ctx, autofix=False, answer_tap=True,
             before_edit="Got it. Submitting your report without auto-fix.")
+    await q.answer()
     rows = [[
         InlineKeyboardButton("⚠️ Yes, delete & re-search", callback_data=f"{TICKET_AUTOFIX_CONFIRM}:{version}:yes"),
         InlineKeyboardButton("No, report to Admin", callback_data=f"{TICKET_AUTOFIX_CONFIRM}:{version}:no"),
@@ -960,17 +964,18 @@ async def ticket_confirm_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
     if _replaced(update, ctx):
         return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
     q = update.callback_query
-    await q.answer()
     version, args = _split_cb(q.data)
-    if await _is_stale(update, ctx, version):
+    if version is None or version != _current_version(ctx):
+        await q.answer()
+        await _is_stale(update, ctx, version)
         return None
     choice = args[0] if args else ""
     if choice == "no":
         return await _submit_ticket(
-            update, ctx, autofix=False,
+            update, ctx, autofix=False, answer_tap=True,
             before_edit="Skipping auto-fix. Submitting your report.")
     return await _submit_ticket(
-        update, ctx, autofix=True,
+        update, ctx, autofix=True, answer_tap=True,
         before_edit="Submitting your report and triggering auto-fix...")
 
 
@@ -990,6 +995,7 @@ async def _submit_ticket(
     autofix: bool,
     before_edit: Optional[str] = None,
     resumed: bool = False,
+    answer_tap: bool = False,
 ) -> int:
     """Double-tap guard around the real submit: with
     concurrent_updates(True), a second confirm tap runs in parallel and
@@ -998,7 +1004,10 @@ async def _submit_ticket(
     is the text the confirm message is edited to once the submit is claimed.
     `resumed` is the relink resume, which runs in the private chat and has
     already checked that the draft is the one its marker was written for, so
-    the draft's owner chat (maybe a group) is not this chat's to check."""
+    the draft's owner chat (maybe a group) is not this chat's to check.
+    `answer_tap` answers the tapped button once the marker is held (or the tap
+    is found to be a second one): answering first would let a Cancel arrive
+    before the marker."""
     if not resumed and _replaced(update, ctx):
         return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
     # The marker holds the identity of this report's draft (owner chat plus
@@ -1008,8 +1017,12 @@ async def _submit_ticket(
     # a draft of its own and is not blocked.
     marker = begin_submit(ctx, "submitting_ticket", ISSUE_OWNER_KEY)
     if marker is None:
+        if answer_tap:
+            await update.callback_query.answer()
         return ConversationHandler.END
     try:
+        if answer_tap:
+            await update.callback_query.answer()
         if before_edit is not None:
             # Edited only now the marker is set: a Cancel button tapped while
             # this edit is in flight must find the submit already running.
@@ -1309,9 +1322,10 @@ async def ticket_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Optio
             await _refuse_stale(update, ctx)
             return None
     replaced = _replaced(update, ctx)
-    if not replaced and submit_in_flight(ctx, "submitting_ticket", ISSUE_OWNER_KEY):
+    if submit_in_flight(ctx, "submitting_ticket", ISSUE_OWNER_KEY, update):
         # A Cancel while the report is being filed: it completes, so do not
-        # say it was cancelled.
+        # say it was cancelled (also in a chat whose draft another chat's
+        # /issue took over meanwhile: its own submit still files).
         text = "Already sending. The report can't be cancelled now."
         if q is not None:
             await q.answer(text, show_alert=True)

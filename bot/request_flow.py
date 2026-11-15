@@ -1269,7 +1269,6 @@ async def request_submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     # tap, and a /request started while this one is still submitting has a
     # draft of its own and is not blocked. It is set before the first await,
     # so a Cancel tapped while this answers finds the submit running.
-    gen = flow_step_gen(ctx)
     # Read before any await: the person this confirm named.
     confirm = ctx.user_data.get(_CONFIRM_KEY)
     if not isinstance(confirm, dict) or confirm.get("version") != version:
@@ -1284,18 +1283,16 @@ async def request_submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         # tier the user actually chose.
         is4k = prefix == RQ_GO_4K
         ctx.user_data["rq_is4k"] = is4k
-        return await _submit_request(update, ctx, is4k=is4k, confirm=confirm,
-                                     gen=gen)
+        return await _submit_request(update, ctx, is4k=is4k, confirm=confirm)
     finally:
         # Only our own marker: a newer flow's submit may have replaced it.
         end_submit(ctx, "rq_submitting", marker)
 
 
 async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
-                          *, is4k: bool = False, confirm: Optional[dict],
-                          gen: int) -> int:
+                          *, is4k: bool = False, confirm: Optional[dict]) -> int:
     """`confirm` is the tapped confirm's snapshot (None when there is none for
-    its version) and `gen` the flow generation the submit started under."""
+    its version)."""
     q = update.callback_query
     hub = hub_origin(ctx)
     media = ctx.user_data.get("rq_media")
@@ -1775,9 +1772,10 @@ async def request_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.answer(_STALE_MENU_TOAST, show_alert=True)
             return None
     replaced = _replaced(update, ctx)
-    if not replaced and submit_in_flight(ctx, "rq_submitting", RQ_OWNER_KEY):
+    if submit_in_flight(ctx, "rq_submitting", RQ_OWNER_KEY, update):
         # A Cancel while the Request is being filed: it completes, so do not
-        # say it was cancelled.
+        # say it was cancelled (also in a chat whose draft another chat's
+        # /request took over meanwhile: its own submit still files).
         text = "Already sending. The request can't be cancelled now."
         if q is not None:
             await q.answer(text, show_alert=True)

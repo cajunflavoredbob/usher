@@ -1350,15 +1350,25 @@ def timeout_is_live(ctx, update, name: str) -> bool:
     return key in conv._conversations
 
 
-def submit_in_flight(ctx, marker_key: str, owner_key: str) -> bool:
+def submit_in_flight(ctx, marker_key: str, owner_key: str, update=None) -> bool:
     """True when this flow's own submit is running: its in-flight marker holds
-    the identity of the draft that is the user's draft now, and this chat's
-    flows were not force-ended since the submit started. An older submit
-    still finishing (the user has since started a newer flow) does not count.
+    the identity of the draft that is the user's draft now, or (when `update`
+    is given) the draft this update's chat claimed, which a newer flow in
+    another chat has since replaced; and this chat's flows were not
+    force-ended since the submit started. An older submit of some other
+    chat's draft (the user has since started a newer flow) does not count.
     A /cancel asks this to say "Already sending" instead of "Cancelled."
     while the submit goes on to complete."""
-    if not submit_marker_matches(ctx, marker_key, owner_key):
-        return False
+    if not (submit_marker_matches(ctx, marker_key, owner_key)
+            and (update is None or owns_draft(ctx, update, owner_key))):
+        marker = ctx.user_data.get(marker_key)
+        claimed = None
+        if update is not None:
+            claimed = (ctx.user_data.get(owner_key + _CLAIMS_SUFFIX) or {}).get(
+                _chat_id(update))
+        if not (isinstance(marker, tuple) and claimed is not None
+                and marker[0][1] == claimed):
+            return False
     cell = _STEP_GEN.get()
     if cell is None:
         return True
