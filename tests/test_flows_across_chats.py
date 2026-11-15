@@ -347,6 +347,75 @@ async def test_a_dm_link_poll_finishes_after_a_command_in_a_group(rig, monkeypat
     assert not _live(rig, "link", DM_ID)
 
 
+# --- a report cut off by a revoked sign-in, resumed by a DM /link -------------
+
+
+async def _relink_in_dm(rig, monkeypatch) -> None:
+    """/link in the DM, through the PIN poll, to _finalize_link (which runs
+    the relink resume)."""
+    from types import SimpleNamespace
+    from bot import link_flow
+    from bot.callback_prefixes import LINK_CONSENT, LINK_PLATFORM
+    monkeypatch.setattr(link_flow, "PLEX_POLL_INTERVAL_S", 0)
+    plex = rig.app.bot_data["plex"]
+    plex.request_pin = AsyncMock(return_value=SimpleNamespace(
+        id=1, auth_url="https://plex.example/auth", code="abcd"))
+    plex.poll_pin = AsyncMock(return_value="fresh-tok")
+    plex.get_user = AsyncMock(return_value=SimpleNamespace(uuid="u", username="un"))
+    rig.seerr.login_with_plex = AsyncMock(return_value=(7, "U"))
+    rig.app.bot_data["store"].link_with_plex = AsyncMock()
+    await rig.say(DM_ID, "/link")
+    await rig.tap(DM_ID, f"{LINK_CONSENT}:yes", rig.last_menu(DM_ID))
+    await rig.tap(DM_ID, f"{LINK_PLATFORM}:desktop", rig.last_menu(DM_ID))
+    rig.app.bot_data["store"].link_with_plex.assert_awaited_once()
+
+
+def _revoked_then_filed(rig) -> None:
+    from seerr import PlexTokenInvalidError
+    rig.seerr.create_issue = AsyncMock(side_effect=[
+        PlexTokenInvalidError(),
+        CreatedIssue(id=5, url="https://seerr.example/5")])
+
+
+@pytest.mark.parametrize("chat_id,title,media_id", [
+    (GROUP_ID, "alien", 20), (DM_ID, "movie x", 10)])
+async def test_a_report_cut_off_by_a_revoked_sign_in_is_filed_once_after_a_dm_link(
+        rig, monkeypatch, chat_id, title, media_id):
+    """The pass-8 case is the group report: the resume runs in the DM, where
+    the group's draft is not the DM's own, and it must still be filed."""
+    _revoked_then_filed(rig)
+    await rig.issue_to_description(chat_id, title, 4)
+    await rig.say(chat_id, "no sound at all")
+    assert rig.user_data["relink_resume"]["kind"] == "submit_ticket"
+    await _relink_in_dm(rig, monkeypatch)
+    assert rig.seerr.create_issue.await_count == 2
+    kwargs = rig.seerr.create_issue.call_args.kwargs
+    assert (kwargs["seerr_media_id"], kwargs["message"]) == (media_id,
+                                                            "no sound at all")
+    assert any("Reported as ticket #5" in t for t in rig.texts(DM_ID))
+    assert not any(t.startswith(ISSUE_REPLACED) for t in rig.texts(DM_ID))
+    # The filed report's draft is gone, so nothing files it a second time.
+    assert "media" not in rig.user_data and "relink_resume" not in rig.user_data
+
+
+async def test_a_resume_whose_report_is_no_longer_the_draft_files_nothing():
+    """The marker names the draft it was written for: another draft in its
+    place (even one this chat owns) is not filed by the resume."""
+    from bot.shared import run_relink_resume
+    from tests._handler_harness import make_update
+    ctx = make_ctx(admin_id=USER_ID, link=make_link(telegram_id=USER_ID),
+                   user_data={**_issue_draft(), "issue_chat": DM_ID,
+                              "issue_chat_draft": 8, "relink_resume": {
+                                  "kind": "submit_ticket", "saved_at": time.time(),
+                                  "payload": {"autofix": False, "draft": 7}}})
+    ctx.bot_data["seerr"].create_issue = AsyncMock()
+    upd = make_update(text="", user_id=USER_ID, chat_id=DM_ID)
+    await run_relink_resume(upd, ctx)
+    ctx.bot_data["seerr"].create_issue.assert_not_awaited()
+    assert "didn't send the earlier report" in upd.effective_message.reply_calls[-1]["text"]
+    assert ctx.user_data["media"]["title"] == "Alien"
+
+
 # --- /request and /invite drafts ----------------------------------------------
 
 

@@ -78,6 +78,7 @@ from bot.shared import (
     force_end_flow_conversations,
     owns_draft,
     claim_draft,
+    draft_identity,
     refuse_replaced_draft,
     send_typing,
     media_action_key,
@@ -988,13 +989,17 @@ async def _submit_ticket(
     *,
     autofix: bool,
     before_edit: Optional[str] = None,
+    resumed: bool = False,
 ) -> int:
     """Double-tap guard around the real submit: with
     concurrent_updates(True), a second confirm tap runs in parallel and
     would file a duplicate Seerr Ticket. user_data is shared across the
     user's updates and there is no await between check and set. before_edit
-    is the text the confirm message is edited to once the submit is claimed."""
-    if _replaced(update, ctx):
+    is the text the confirm message is edited to once the submit is claimed.
+    `resumed` is the relink resume, which runs in the private chat and has
+    already checked that the draft is the one its marker was written for, so
+    the draft's owner chat (maybe a group) is not this chat's to check."""
+    if not resumed and _replaced(update, ctx):
         return await refuse_replaced_draft(update, REPLACED_TEXT)
     # The marker holds the identity of this report's draft (owner chat plus
     # a per-draft id), not the user's flow generation, which a command in
@@ -1009,7 +1014,8 @@ async def _submit_ticket(
             # Edited only now the marker is set: a Cancel button tapped while
             # this edit is in flight must find the submit already running.
             await update.callback_query.edit_message_text(before_edit)
-        return await _submit_ticket_inner(update, ctx, autofix=autofix)
+        return await _submit_ticket_inner(update, ctx, autofix=autofix,
+                                          draft=marker[0])
     finally:
         # Only our own marker: a newer report's submit may have replaced it.
         end_submit(ctx, "submitting_ticket", marker)
@@ -1020,7 +1026,12 @@ async def _submit_ticket_inner(
     ctx: ContextTypes.DEFAULT_TYPE,
     *,
     autofix: bool,
+    draft: Optional[tuple] = None,
 ) -> int:
+    """`draft` is the identity (draft_identity) of the report being filed,
+    taken when the submit was claimed; the current one when not given."""
+    if draft is None:
+        draft = draft_identity(ctx, ISSUE_OWNER_KEY)
     await send_typing(update, ctx)  # Seerr create + optional Arr calls are slow
     store: UserStore = ctx.bot_data["store"]
     seerr: SeerrClient = ctx.bot_data["seerr"]
@@ -1057,10 +1068,12 @@ async def _submit_ticket_inner(
             as_plex_token=link.plex_token,
         )
     except PlexTokenInvalidError:
-        # The draft (media, type, description) stays in user_data; only the
-        # autofix choice needs carrying for the post-relink resume.
+        # The draft (media, type, description) stays in user_data; the
+        # resume carries the autofix choice and the draft's id, so it files
+        # this draft and no other.
         await prompt_plex_relink(update, ctx, resume_kind="submit_ticket",
-                                 resume_payload={"autofix": autofix},
+                                 resume_payload={"autofix": autofix,
+                                                 "draft": draft[1]},
                                  back=back_button(hub) if hub else None)
         return ConversationHandler.END
     except Exception as exc:
@@ -1239,7 +1252,8 @@ async def _submit_ticket_inner(
             logger.exception("couldn't attach autofix card message", exc_info=exc)
     # A force-end while this submit ran already cleared its draft, and a newer
     # report (here or in another chat) may own the keys now: leave them alone.
-    if not flow_step_is_stale(ctx) and not _replaced(update, ctx):
+    if (not flow_step_is_stale(ctx)
+            and draft_identity(ctx, ISSUE_OWNER_KEY) == draft):
         _clear_issue_state(ctx)
     return ConversationHandler.END
 
@@ -1265,7 +1279,20 @@ async def _resume_submit_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             "the interrupted report. Finish the current one instead."
         )
         return
-    await _submit_ticket(update, ctx, autofix=bool(payload.get("autofix")))
+    draft = payload.get("draft")
+    if draft is None:
+        # A marker written before the payload named its draft.
+        await _submit_ticket(update, ctx, autofix=bool(payload.get("autofix")))
+        return
+    if draft != draft_identity(ctx, ISSUE_OWNER_KEY)[1]:
+        await update.effective_message.reply_text(
+            "I didn't send the earlier report: it was replaced or ended since "
+            "then. /issue to report it again.")
+        return
+    # The draft is the one the marker was written for. The resume runs in the
+    # private chat, so a report started in a group is filed from here too.
+    await _submit_ticket(update, ctx, autofix=bool(payload.get("autofix")),
+                         resumed=True)
 
 
 RELINK_RESUME_EXECUTORS["submit_ticket"] = _resume_submit_ticket
