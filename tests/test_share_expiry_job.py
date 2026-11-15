@@ -673,7 +673,7 @@ async def test_a_gone_share_with_no_stored_username_unlinks_nobody(
     assert await fresh_store.get(HOLDER_ID) is not None
 
 
-# --- unlink only when the username is on no other Share (ticket 43) ----------
+# --- unlink only when the username is on no other Share ---------------------
 
 async def test_job_keeps_a_holder_whose_username_is_on_another_share(
         fresh_store):
@@ -742,7 +742,7 @@ async def test_a_gone_and_a_removed_share_of_one_holder_unlink_them(
     assert await fresh_store.get(HOLDER_ID) is None
 
 
-# --- an Extend during a slow removal (ticket 43) -----------------------------
+# --- an Extend during a slow removal ----------------------------------------
 
 async def test_a_date_moved_during_the_removals_own_listing_is_not_removed(
         fresh_store):

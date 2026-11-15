@@ -838,7 +838,7 @@ async def test_removing_a_share_keeps_an_admin_link_with_the_same_username(
     assert await fresh_store.get(5) is not None
 
 
-# --- unlink only when the username is on no other Share (ticket 43) ----------
+# --- unlink only when the username is on no other Share ---------------------
 
 def _friend(id=71, username="friend", accepted=True):
     return PlexShare(id=id, email="friend@example.com", username=username,

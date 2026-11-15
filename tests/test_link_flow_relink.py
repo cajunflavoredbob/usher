@@ -215,7 +215,7 @@ async def test_restart_during_weak_poll_says_restarting_not_timed_out(monkeypatc
     assert "link_retry_ok" not in ctx.user_data
 
 
-# --- a re-link whose plex.tv lookup fails (ticket 44) ------------------------
+# --- a re-link whose plex.tv lookup fails -----------------------------------
 
 async def _finalize_with(store, get_user):
     from unittest.mock import AsyncMock
