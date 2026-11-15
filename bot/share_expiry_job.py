@@ -10,9 +10,13 @@ same call as /uninvite (which re-reads the row right before the removal and
 leaves a Share whose date moved or was cleared), its row dropped and the
 Admin told. While the job removes a Share, Extend on it is refused. A
 removal that fails keeps the row, records the error, is retried every hour,
-and tells the Admin at most once a day, with Retry."""
+and tells the Admin at most once a day, with Retry. A row with no username
+(an Invite stored before it was accepted) makes the job read the listing
+every tick, while the Admin is linked, until the listing names that Share's
+username, which it then stores for the holder reminder and the unlink."""
 from __future__ import annotations
 
+import dataclasses
 import html
 import logging
 from datetime import datetime, timedelta, timezone
@@ -155,6 +159,22 @@ async def _alert_failure(app, store: UserStore, row: ShareExpiry, error: str,
                                              error, sent)
 
 
+async def _fill_usernames(store: UserStore, rows: list[ShareExpiry],
+                          shares: list) -> list[ShareExpiry]:
+    """Store the username the listing now reports for each row that has
+    none, and return the rows as they now are. A pending Invite lists no
+    username yet; once accepted, its holder's shows up here, and the holder
+    reminder and the gone path's unlink both need it."""
+    listed = {s.id: s.username for s in shares if s.username}
+    out = []
+    for row in rows:
+        name = listed.get(row.share_id) if not row.username else None
+        if name and await store.fill_share_expiry_username(row.share_id, name):
+            row = dataclasses.replace(row, username=name)
+        out.append(row)
+    return out
+
+
 async def run_share_expiries(app, now: Optional[datetime] = None) -> None:
     """One tick: due reminders, then due removals."""
     now = now or datetime.now(timezone.utc)
@@ -163,15 +183,33 @@ async def run_share_expiries(app, now: Optional[datetime] = None) -> None:
     if not rows:
         return
     admin_id = app.bot_data["admin_id"]
+    any_due = any(_parse(r.expires_at) <= now for r in rows)
+    # A row with no username (an Invite stored before it was accepted) needs
+    # the listing too: it is the only place the holder's username shows up,
+    # and it must be learnt while the Share is still listed.
+    unnamed = any(not r.username for r in rows)
+    plex = app.bot_data["plex"]
+    token: Optional[str] = None
+    shares: Optional[list] = None
+    listing_error: Optional[Exception] = None
+    if any_due or unnamed:
+        link = await store.get(admin_id)
+        token = getattr(link, "plex_token", None) if link else None
+    if token:
+        try:
+            machine_id, _ = await plex.get_owned_server(token)
+            shares = list(await plex.list_shares(token, machine_id))
+        except Exception as exc:
+            logger.exception("share listing failed during expiry")
+            listing_error = exc
+    if shares is not None and unnamed:
+        rows = await _fill_usernames(store, rows, shares)
     due = [r for r in rows if _parse(r.expires_at) <= now]
     for row in rows:
         if row not in due and _parse(row.expires_at) - now <= REMIND_BEFORE:
             await _remind(app, store, row, admin_id, now)
     if not due:
         return
-    plex = app.bot_data["plex"]
-    link = await store.get(admin_id)
-    token = getattr(link, "plex_token", None) if link else None
     if not token:
         logger.warning("Share expiry removal skipped: the Admin has no Plex "
                        "token (link Plex with /link)")
@@ -181,13 +219,10 @@ async def run_share_expiries(app, now: Optional[datetime] = None) -> None:
                 "Your Plex link is missing: run /link, then tap Retry.",
                 admin_id, now)
         return
-    try:
-        machine_id, _ = await plex.get_owned_server(token)
-        shares = list(await plex.list_shares(token, machine_id))
-    except Exception as exc:
-        logger.exception("share listing failed during expiry")
+    if shares is None:
         for row in due:
-            await _alert_failure(app, store, row, user_friendly_message(exc),
+            await _alert_failure(app, store, row,
+                                 user_friendly_message(listing_error),
                                  admin_id, now)
         return
     removing: set[int] = app.bot_data.setdefault(REMOVING_KEY, set())

@@ -56,7 +56,8 @@ class ShareExpiry:
     """The Expiry of one Share (or pending Invite), keyed by its Plex share
     id. `expires_at` is UTC text, "%Y-%m-%d %H:%M:%S", so it sorts and
     compares as text. email and username are what the Share listing reported,
-    kept to match the Share after a re-list."""
+    kept to match the Share after a re-list; an empty username is filled in
+    from a later listing (fill_share_expiry_username)."""
     share_id: int
     email: str
     username: str
@@ -1247,6 +1248,19 @@ class UserStore:
                                 ':', '') = ?
                     """,
                     (expires_at, share_id, digits)).rowcount > 0
+        return await self._run(_do)
+
+    async def fill_share_expiry_username(self, share_id: int,
+                                         username: str) -> bool:
+        """Store the Plex username a Share's listing now reports, only while
+        the row has none (an Invite stored before it was accepted). Never
+        replaces one already stored. True when the row changed."""
+        def _do() -> bool:
+            with self._conn() as c:
+                return c.execute(
+                    "UPDATE share_expiries SET username = ? "
+                    "WHERE share_id = ? AND username = ''",
+                    (username, share_id)).rowcount > 0
         return await self._run(_do)
 
     _SHARE_EXPIRY_COLS = (

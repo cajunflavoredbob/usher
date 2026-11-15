@@ -867,3 +867,106 @@ async def test_a_share_removed_this_tick_does_not_keep_a_gone_ones_holder(
     plex.remove_share.assert_awaited_once_with("admin-tok", 2)
     assert await fresh_store.get_share_expiry(1) is None
     assert await fresh_store.get(HOLDER_ID) is None
+
+
+# --- An Invite's expiry learns the holder's username --------------------------
+
+def _pending(id, email="a@example.com"):
+    return PlexShare(id=id, email=email, username="", accepted=False,
+                     all_libraries=True)
+
+
+async def _invite_with_expiry(store, plex, days=30):
+    """Send Invite for a@example.com with an Expiry through the real handler,
+    while the new Share lists no username yet."""
+    from bot.invite_flow import invite_send
+    from plex import PlexLibrarySection
+    ctx = make_ctx(admin_id=ADMIN_ID, user_data={
+        "inv_sections": [PlexLibrarySection(id=101, title="Movies",
+                                            type="movie")],
+        "inv_selected": {101}, "inv_version": 1,
+        "inv_email": "a@example.com", "inv_machine": "machine-1",
+        "inv_server_name": "server1", "inv_expiry_days": days})
+    ctx.bot_data["store"] = store
+    ctx.bot_data["plex"] = plex
+    await invite_send(make_update(callback_data="invgo:1", user_id=ADMIN_ID),
+                      ctx)
+    row = (await store.list_share_expiries())[0]
+    assert (row.share_id, row.username) == (1, "")
+    return datetime.strptime(row.expires_at, "%Y-%m-%d %H:%M:%S").replace(
+        tzinfo=timezone.utc)
+
+
+async def test_an_invites_expiry_reminds_the_holder_once_they_accept(
+        fresh_store):
+    app, plex = await _setup(fresh_store, [_pending(1)])
+    ends = await _invite_with_expiry(fresh_store, plex)
+    await _holder(fresh_store)
+    plex.list_shares.return_value = [_share(1)]  # accepted: lists alice
+    await run_share_expiries(app, ends - timedelta(days=20))
+    assert (await fresh_store.get_share_expiry(1)).username == "alice"
+    app.bot.send_message.assert_not_awaited()  # not in the window yet
+    await run_share_expiries(app, ends - timedelta(days=2))
+    holder = _sent_to(app, HOLDER_ID)
+    assert len(holder) == 1 and "ask the Admin" in holder[0]["text"]
+
+
+async def test_an_invites_expiry_unlinks_the_holder_once_the_share_is_gone(
+        fresh_store):
+    app, plex = await _setup(fresh_store, [_pending(1)])
+    ends = await _invite_with_expiry(fresh_store, plex)
+    await _holder(fresh_store)
+    plex.list_shares.return_value = [_share(1)]
+    await run_share_expiries(app, ends - timedelta(days=20))
+    plex.list_shares.return_value = []  # removed in Plex web meanwhile
+    await run_share_expiries(app, ends + timedelta(hours=1))
+    assert await fresh_store.get_share_expiry(1) is None
+    assert await fresh_store.get(HOLDER_ID) is None
+
+
+async def test_a_still_pending_invite_keeps_its_empty_username(fresh_store):
+    app, plex = await _setup(fresh_store, [_pending(1)])
+    await fresh_store.set_share_expiry(1, "a@example.com", "",
+                                       _at(timedelta(days=20)))
+    await run_share_expiries(app, NOW)
+    assert (await fresh_store.get_share_expiry(1)).username == ""
+
+
+async def test_a_stored_username_is_not_replaced_by_the_listing(fresh_store):
+    app, plex = await _setup(fresh_store, [_share(1, username="mallory")])
+    await fresh_store.set_share_expiry(1, "a@example.com", "alice",
+                                       _at(timedelta(days=20)))
+    await run_share_expiries(app, NOW)
+    assert (await fresh_store.get_share_expiry(1)).username == "alice"
+    plex.list_shares.assert_not_awaited()  # nothing to learn: no listing
+
+
+async def test_a_failed_listing_still_sends_the_reminders(fresh_store):
+    app, plex = await _setup(fresh_store)
+    plex.list_shares.side_effect = TransientAPIError("down", service="Plex")
+    await fresh_store.set_share_expiry(1, "a@example.com", "",
+                                       _at(timedelta(days=2)))
+    await run_share_expiries(app, NOW)
+    assert len(_sent_to(app, ADMIN_ID)) == 1
+    assert (await fresh_store.get_share_expiry(1)).admin_reminded
+
+
+async def test_no_admin_link_still_sends_a_reminder_for_an_unnamed_row(
+        fresh_store):
+    app, plex = await _setup(fresh_store, [_share(1)])
+    await fresh_store.unlink(ADMIN_ID)
+    await fresh_store.set_share_expiry(1, "a@example.com", "",
+                                       _at(timedelta(days=2)))
+    await run_share_expiries(app, NOW)
+    assert len(_sent_to(app, ADMIN_ID)) == 1
+    plex.list_shares.assert_not_awaited()
+
+
+async def test_an_unnamed_row_in_the_window_reminds_its_holder_that_tick(
+        fresh_store):
+    app, plex = await _setup(fresh_store, [_share(1)])
+    await _holder(fresh_store)
+    await fresh_store.set_share_expiry(1, "a@example.com", "",
+                                       _at(timedelta(days=2)))
+    await run_share_expiries(app, NOW)
+    assert len(_sent_to(app, HOLDER_ID)) == 1

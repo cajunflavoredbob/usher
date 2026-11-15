@@ -364,3 +364,18 @@ async def test_old_ticket_escalations_are_pruned(fresh_store: UserStore):
                   "datetime('now', '-200 days')")
     await fresh_store.prune_autofix_history()
     assert await fresh_store.claim_ticket_escalation(5)
+
+
+async def test_a_share_expiry_username_is_filled_only_while_empty(
+        fresh_store: UserStore):
+    await fresh_store.set_share_expiry(1, "a@example.com", "",
+                                       "2030-01-01 00:00:00")
+    await fresh_store.set_share_expiry(2, "b@example.com", "bob",
+                                       "2030-01-01 00:00:00")
+    assert await fresh_store.fill_share_expiry_username(1, "alice")
+    assert not await fresh_store.fill_share_expiry_username(2, "mallory")
+    assert not await fresh_store.fill_share_expiry_username(3, "carol")
+    assert (await fresh_store.get_share_expiry(1)).username == "alice"
+    assert (await fresh_store.get_share_expiry(2)).username == "bob"
+    assert not await fresh_store.fill_share_expiry_username(1, "other")
+    assert (await fresh_store.get_share_expiry(1)).username == "alice"
