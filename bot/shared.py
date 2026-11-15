@@ -1115,8 +1115,8 @@ def force_end_flow_conversations(ctx: ContextTypes.DEFAULT_TYPE,
                 for draft_key in RQ_KEYS:
                     if draft_key not in _RQ_KEYS_KEPT_ON_FORCE_END:
                         ctx.user_data.pop(draft_key, None)
-    for marker in ("tk_reply_id", "tk_close_after", "link_active_loop",
-                   "link_retry_ok"):
+    for marker in ("tk_reply_id", "tk_close_after", "tk_reply_chat",
+                   "link_active_loop", "link_retry_ok"):
         ctx.user_data.pop(marker, None)
     return ended
 

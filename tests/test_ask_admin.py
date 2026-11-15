@@ -111,7 +111,7 @@ async def test_a_dm_without_a_repeat_has_neither_button():
 
 
 async def test_comment_confirmation_carries_the_button_for_a_reporter():
-    ctx = make_ctx(admin_id=ADMIN, link=make_link(), user_data={"awaiting_comment_for": 7})
+    ctx = make_ctx(admin_id=ADMIN, link=make_link(), user_data={"awaiting_comment_for": 7, "awaiting_comment_chat": 100})
     upd = make_update(text="still broken", user_id=REPORTER)
     await resolve_comment(upd, ctx)
     call = upd.effective_message.reply_calls[0]
@@ -121,7 +121,7 @@ async def test_comment_confirmation_carries_the_button_for_a_reporter():
 
 
 async def test_comment_confirmation_has_no_button_for_the_admin():
-    ctx = make_ctx(admin_id=ADMIN, user_data={"awaiting_comment_for": 7})
+    ctx = make_ctx(admin_id=ADMIN, user_data={"awaiting_comment_for": 7, "awaiting_comment_chat": 100})
     upd = make_update(text="still broken", user_id=ADMIN)
     await resolve_comment(upd, ctx)
     assert upd.effective_message.reply_calls[0]["reply_markup"] is None

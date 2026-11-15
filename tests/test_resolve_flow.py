@@ -81,7 +81,7 @@ async def test_comment_refused_when_link_vanished_mid_conversation():
     rotated) before sending the text: must not post via the admin key."""
     upd = make_update(text="it is still broken", user_id=42)
     ctx = make_ctx(admin_id=999, link=None,
-                   user_data={"awaiting_comment_for": 42})
+                   user_data={"awaiting_comment_for": 42, "awaiting_comment_chat": 100})
     state = await resolve_comment(upd, ctx)
     assert state == ConversationHandler.END
     ctx.bot_data["seerr"].add_issue_comment.assert_not_called()
@@ -92,7 +92,7 @@ async def test_comment_refused_when_link_vanished_mid_conversation():
 async def test_comment_posts_with_user_token():
     upd = make_update(text="audio still off", user_id=42)
     ctx = make_ctx(admin_id=999, link=make_link(plex_token="plex-abc"),
-                   user_data={"awaiting_comment_for": 42})
+                   user_data={"awaiting_comment_for": 42, "awaiting_comment_chat": 100})
     await resolve_comment(upd, ctx)
     ctx.bot_data["seerr"].add_issue_comment.assert_called_once_with(
         42, "audio still off", as_plex_token="plex-abc")
@@ -123,14 +123,14 @@ async def test_admin_comment_prompt_omits_admin_reference():
 async def test_user_comment_ack_mentions_followup():
     upd = make_update(text="audio still off", user_id=42)
     ctx = make_ctx(admin_id=999, link=make_link(plex_token="plex-abc"),
-                   user_data={"awaiting_comment_for": 42})
+                   user_data={"awaiting_comment_for": 42, "awaiting_comment_chat": 100})
     await resolve_comment(upd, ctx)
     assert "Admin will follow up" in upd.effective_message.reply_calls[0]["text"]
 
 
 async def test_admin_comment_ack_omits_followup():
     upd = make_update(text="fixed the sub track", user_id=999)
-    ctx = make_ctx(admin_id=999, user_data={"awaiting_comment_for": 42})
+    ctx = make_ctx(admin_id=999, user_data={"awaiting_comment_for": 42, "awaiting_comment_chat": 100})
     await resolve_comment(upd, ctx)
     text = upd.effective_message.reply_calls[0]["text"]
     assert "Added your comment" in text
@@ -154,7 +154,7 @@ async def test_revoked_token_on_close_prompts_relink():
 async def test_revoked_token_on_comment_prompts_relink_and_clears_marker():
     upd = make_update(text="still not working", user_id=42)
     ctx = make_ctx(admin_id=999, link=make_link(plex_token="plex-abc"),
-                   user_data={"awaiting_comment_for": 42})
+                   user_data={"awaiting_comment_for": 42, "awaiting_comment_chat": 100})
     ctx.bot_data["seerr"].add_issue_comment.side_effect = PlexTokenInvalidError()
     state = await resolve_comment(upd, ctx)
     assert state == ConversationHandler.END
@@ -174,7 +174,7 @@ def test_conversation_has_timeout():
 
 
 async def test_timeout_handler_clears_marker():
-    ctx = make_ctx(user_data={"awaiting_comment_for": 42})
+    ctx = make_ctx(user_data={"awaiting_comment_for": 42, "awaiting_comment_chat": 100})
     state = await _resolve_timeout(None, ctx)
     assert state == ConversationHandler.END
     assert "awaiting_comment_for" not in ctx.user_data

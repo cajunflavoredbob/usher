@@ -16,7 +16,7 @@ from tests._handler_harness import make_ctx, make_link, make_update
 
 async def test_admin_reply_posts_comment_no_token():
     upd = make_update(text="thanks, will look into it", user_id=999)
-    ctx = make_ctx(admin_id=999, user_data={"tk_reply_id": 42, "tk_close_after": False})
+    ctx = make_ctx(admin_id=999, user_data={"tk_reply_id": 42, "tk_reply_chat": 100, "tk_close_after": False})
     state = await tk_reply_text(upd, ctx)
     assert state == ConversationHandler.END
     # add_issue_comment called with as_plex_token=None (admin)
@@ -39,7 +39,7 @@ async def test_user_reply_with_token():
     link = make_link(telegram_id=42, plex_token="user-token-abc")
     upd = make_update(text="this is my reply", user_id=42)
     ctx = make_ctx(admin_id=999, link=link,
-                   user_data={"tk_reply_id": 7, "tk_close_after": False})
+                   user_data={"tk_reply_id": 7, "tk_reply_chat": 100, "tk_close_after": False})
     state = await tk_reply_text(upd, ctx)
     assert state == ConversationHandler.END
     args, kwargs = ctx.bot_data["seerr"].add_issue_comment.call_args
@@ -53,7 +53,7 @@ async def test_user_with_decrypt_failed_link():
     link = make_link(telegram_id=42, decrypt_failed=True)
     upd = make_update(text="hi", user_id=42)
     ctx = make_ctx(admin_id=999, link=link,
-                   user_data={"tk_reply_id": 1, "tk_close_after": False})
+                   user_data={"tk_reply_id": 1, "tk_reply_chat": 100, "tk_close_after": False})
     state = await tk_reply_text(upd, ctx)
     assert state == ConversationHandler.END
     text = upd.message.reply_calls[0]["text"]
@@ -72,7 +72,7 @@ async def test_close_after_suppressed_when_user_started_new_reply():
     entry), but the close-after side effect must NOT fire -- it would
     affect a stale flow."""
     upd = make_update(text="closing comment", user_id=999)
-    ctx = make_ctx(admin_id=999, user_data={"tk_reply_id": 42, "tk_close_after": True})
+    ctx = make_ctx(admin_id=999, user_data={"tk_reply_id": 42, "tk_reply_chat": 100, "tk_close_after": True})
 
     # Simulate the user starting a new reply during the comment-post await
     # by overwriting tk_reply_id while add_issue_comment is in flight.
@@ -101,7 +101,7 @@ async def test_close_after_suppressed_when_user_started_new_reply():
 
 async def test_close_after_happy_path_calls_resolve():
     upd = make_update(text="closing", user_id=999)
-    ctx = make_ctx(admin_id=999, user_data={"tk_reply_id": 42, "tk_close_after": True})
+    ctx = make_ctx(admin_id=999, user_data={"tk_reply_id": 42, "tk_reply_chat": 100, "tk_close_after": True})
     state = await tk_reply_text(upd, ctx)
     assert state == ConversationHandler.END
     ctx.bot_data["seerr"].add_issue_comment.assert_called_once()
@@ -115,7 +115,7 @@ async def test_close_after_happy_path_calls_resolve():
 
 async def test_empty_message_re_prompts():
     upd = make_update(text="   ", user_id=999)  # whitespace only
-    ctx = make_ctx(admin_id=999, user_data={"tk_reply_id": 42, "tk_close_after": False})
+    ctx = make_ctx(admin_id=999, user_data={"tk_reply_id": 42, "tk_reply_chat": 100, "tk_close_after": False})
     state = await tk_reply_text(upd, ctx)
     assert state == AWAIT_TICKET_REPLY  # stay in the state
     assert "Empty message" in upd.message.reply_calls[0]["text"]

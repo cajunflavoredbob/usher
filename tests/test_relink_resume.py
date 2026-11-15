@@ -79,7 +79,7 @@ async def test_gated_close_stashes_resume_marker():
 async def test_gated_comment_stashes_typed_text():
     upd = make_update(text="the audio is still german", user_id=42)
     ctx = make_ctx(admin_id=999, link=make_link(plex_token="plex-abc"),
-                   user_data={"awaiting_comment_for": 42})
+                   user_data={"awaiting_comment_for": 42, "awaiting_comment_chat": 100})
     ctx.bot_data["seerr"].add_issue_comment.side_effect = PlexTokenInvalidError()
     await resolve_comment(upd, ctx)
     marker = ctx.user_data["relink_resume"]
@@ -91,7 +91,7 @@ async def test_gated_comment_stashes_typed_text():
 async def test_gated_ticket_reply_stashes_typed_text():
     upd = make_update(text="any update on this?", user_id=42)
     ctx = make_ctx(admin_id=999, link=make_link(plex_token="plex-abc"),
-                   user_data={"tk_reply_id": 7})
+                   user_data={"tk_reply_id": 7, "tk_reply_chat": 100})
     ctx.bot_data["seerr"].add_issue_comment.side_effect = PlexTokenInvalidError()
     await tk_reply_text(upd, ctx)
     marker = ctx.user_data["relink_resume"]

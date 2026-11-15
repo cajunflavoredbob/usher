@@ -35,13 +35,39 @@ from const import RESOLVE_FLOW_TIMEOUT_S
 
 logger = logging.getLogger("usher")
 
+# The chat the "add a comment" prompt was sent in. user_data is per user
+# while the conversation is per chat, so a newer prompt in another chat
+# overwrites awaiting_comment_for; only that chat's text, /cancel or timeout
+# may use or clear it.
+_COMMENT_CHAT_KEY = "awaiting_comment_chat"
+
+
+def _owns_comment_prompt(ctx, update) -> bool:
+    """True when the comment prompt was sent in this update's chat (or the
+    update names no chat, as a bare timeout may)."""
+    chat = getattr(update, "effective_chat", None)
+    return chat is None or ctx.user_data.get(_COMMENT_CHAT_KEY) == chat.id
+
+
+def _clear_comment_prompt(ctx, update) -> None:
+    """Drop the comment prompt's markers, unless a newer prompt in another
+    chat owns them now."""
+    if _owns_comment_prompt(ctx, update):
+        ctx.user_data.pop("awaiting_comment_for", None)
+        ctx.user_data.pop(_COMMENT_CHAT_KEY, None)
+
 
 async def _resolve_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Conversation_timeout handler. Clears awaiting_comment_for so an
     abandoned 'add a comment' prompt can't swallow a later unrelated DM
     as a comment on a long-stale Ticket, and tells the user (the prompt
-    solicited text, so silence would lose their later message)."""
-    awaiting = ctx.user_data.pop("awaiting_comment_for", None)
+    solicited text, so silence would lose their later message). A
+    conversation whose prompt a newer one in another chat took over ends
+    quietly and leaves it."""
+    if not _owns_comment_prompt(ctx, update):
+        return ConversationHandler.END
+    awaiting = ctx.user_data.get("awaiting_comment_for")
+    _clear_comment_prompt(ctx, update)
     try:
         if (awaiting and update is not None
                 and update.effective_chat is not None):
@@ -149,6 +175,7 @@ async def resolve_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     # Copy differs by audience: telling the admin "admin will see it" reads
     # wrong when they ARE the admin.
     ctx.user_data["awaiting_comment_for"] = ticket_id
+    ctx.user_data[_COMMENT_CHAT_KEY] = update.effective_chat.id
     if is_admin:
         await q.edit_message_text(
             "Sorry it's still broken. What's still wrong? "
@@ -177,6 +204,10 @@ async def _reply_comment_added(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
 
 
 async def resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    if not _owns_comment_prompt(ctx, update):
+        # A newer prompt in another chat owns the marker: this chat's text
+        # is not a comment on anything.
+        return ConversationHandler.END
     ticket_id = ctx.user_data.get("awaiting_comment_for")
     if not ticket_id:
         return ConversationHandler.END
@@ -194,7 +225,7 @@ async def resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
             "Your Plex link is gone or can't be decrypted. Run /link to reconnect, "
             "then add the comment from /tickets."
         )
-        ctx.user_data.pop("awaiting_comment_for", None)
+        _clear_comment_prompt(ctx, update)
         return ConversationHandler.END
     try:
         await seerr.add_issue_comment(ticket_id, comment, as_plex_token=token)
@@ -203,15 +234,15 @@ async def resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
         await prompt_plex_relink(update, ctx, resume_kind="resolve_comment",
                                  resume_payload={"ticket_id": ticket_id,
                                                  "comment": comment})
-        ctx.user_data.pop("awaiting_comment_for", None)
+        _clear_comment_prompt(ctx, update)
         return ConversationHandler.END
     except Exception as exc:
         logger.exception("add_issue_comment failed")
         await update.effective_message.reply_text(f"Couldn't add comment. {user_friendly_message(exc)}")
-        ctx.user_data.pop("awaiting_comment_for", None)
+        _clear_comment_prompt(ctx, update)
         return ConversationHandler.END
     await _reply_comment_added(update, ctx, ticket_id, is_admin)
-    ctx.user_data.pop("awaiting_comment_for", None)
+    _clear_comment_prompt(ctx, update)
     return ConversationHandler.END
 
 
@@ -258,7 +289,7 @@ RELINK_RESUME_EXECUTORS["resolve_comment"] = _resume_resolve_comment
 
 
 async def resolve_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    ctx.user_data.pop("awaiting_comment_for", None)
+    _clear_comment_prompt(ctx, update)
     await update.effective_message.reply_text("Cancelled.")
     return ConversationHandler.END
 

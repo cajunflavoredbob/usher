@@ -1061,13 +1061,13 @@ async def _post_shutdown(app: Application) -> None:
 # resolve, ticket-reply, request, invite). Cleared on error so a
 # mid-conversation crash doesn't leak half-state into the next flow.
 _CONVERSATION_USER_DATA_KEYS = (
-    "tk_reply_id", "tk_close_after",
+    "tk_reply_id", "tk_close_after", "tk_reply_chat",
     "link_active_loop", "link_retry_ok", "hub_origin",
     "media", "search_results", "seasons", "season",
     "episode", "issue_type", "description",
     "submitting_ticket",
     "research_parent",
-    "awaiting_comment_for",
+    "awaiting_comment_for", "awaiting_comment_chat",
 ) + _RQ_KEYS + (
     # rq_jump_media is ticket_flow's stash for the Request-it-instead jump
     # (request_flow._RQ_KEYS rightly omits it). rq_search_version is

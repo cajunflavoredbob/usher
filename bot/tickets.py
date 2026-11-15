@@ -16,7 +16,7 @@ import asyncio
 import html
 import logging
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Final, Literal, Optional
 
 from telegram import (
     InlineKeyboardButton,
@@ -957,6 +957,7 @@ async def tk_reply_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
             return ConversationHandler.END  # a newer command ended this flow
         ctx.user_data["tk_reply_id"] = ticket_id
         ctx.user_data["tk_close_after"] = False
+        ctx.user_data[_REPLY_CHAT_KEY] = update.effective_chat.id
         ctx.user_data["tk_reply_from_list"] = _opened_from_list(q.message)
         # Strip the inline buttons but keep the original ticket-announcement text,
         # then prompt for the reply text in a separate message.
@@ -1004,6 +1005,7 @@ async def tk_close_with_comment_start(update: Update, ctx: ContextTypes.DEFAULT_
             return ConversationHandler.END  # a newer command ended this flow
         ctx.user_data["tk_reply_id"] = ticket_id
         ctx.user_data["tk_close_after"] = True
+        ctx.user_data[_REPLY_CHAT_KEY] = update.effective_chat.id
         ctx.user_data["tk_reply_from_list"] = _opened_from_list(q.message)
         # Strip the inline buttons but keep the original ticket-announcement text,
         # then prompt for the closing comment in a separate message.
@@ -1019,8 +1021,27 @@ async def tk_close_with_comment_start(update: Update, ctx: ContextTypes.DEFAULT_
         end_action(ctx, start_key)
 
 
-def _clear_reply_state(ctx) -> None:
-    for key in ("tk_reply_id", "tk_close_after", "tk_reply_from_list"):
+# The chat a Reply or Close with comment was started in. user_data is per
+# user while the conversation is per chat, so a newer start in another chat
+# overwrites the markers; only that chat's text, /cancel or timeout may use
+# or clear them.
+_REPLY_CHAT_KEY: Final = "tk_reply_chat"
+
+
+def _owns_reply_state(ctx, update) -> bool:
+    """True when the reply markers were set in this update's chat (or the
+    update names no chat, as a bare timeout may)."""
+    chat = getattr(update, "effective_chat", None)
+    return chat is None or ctx.user_data.get(_REPLY_CHAT_KEY) == chat.id
+
+
+def _clear_reply_state(ctx, update) -> None:
+    """Drop the reply markers, unless a newer start in another chat owns
+    them now."""
+    if not _owns_reply_state(ctx, update):
+        return
+    for key in ("tk_reply_id", "tk_close_after", "tk_reply_from_list",
+                _REPLY_CHAT_KEY):
         ctx.user_data.pop(key, None)
 
 
@@ -1033,6 +1054,10 @@ def _reply_retry(ctx, ticket_id: int) -> str:
 
 async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive the reply text, post it, optionally close."""
+    if not _owns_reply_state(ctx, update):
+        # A newer Reply or Close with comment in another chat owns the
+        # markers: this chat's text is not a reply to anything.
+        return ConversationHandler.END
     ticket_id = ctx.user_data.get("tk_reply_id")
     close_after = bool(ctx.user_data.get("tk_close_after"))
     from_list = bool(ctx.user_data.get("tk_reply_from_list"))
@@ -1051,7 +1076,7 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await _reply_result(update, ctx,
                             "Your /link is gone or incomplete. /link to re-link.",
                             _result_markup(from_list))
-        _clear_reply_state(ctx)
+        _clear_reply_state(ctx, update)
         return ConversationHandler.END
     seerr: SeerrClient = ctx.bot_data["seerr"]
     try:
@@ -1064,7 +1089,7 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
                                  resume_payload={"ticket_id": ticket_id,
                                                  "text": text},
                                  back=list_back_button() if from_list else None)
-        _clear_reply_state(ctx)
+        _clear_reply_state(ctx, update)
         return ConversationHandler.END
     except Exception as exc:
         logger.exception("add_issue_comment failed for #%d", ticket_id)
@@ -1072,21 +1097,23 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
             update, ctx,
             f"Couldn't post comment on #{ticket_id}. {user_friendly_message(exc)}",
             _result_markup(from_list, _reply_retry(ctx, ticket_id)))
-        _clear_reply_state(ctx)
+        _clear_reply_state(ctx, update)
         return ConversationHandler.END
     # If the user started a new reply flow for a different ticket during the
     # add_issue_comment await, our comment still landed on the right ticket
     # (we bound ticket_id at entry) but we mustn't apply the close-after side
     # effect to whatever flow they're now on.
-    if ctx.user_data.get("tk_reply_id") != ticket_id:
+    moved_chat = not _owns_reply_state(ctx, update)
+    if moved_chat or ctx.user_data.get("tk_reply_id") != ticket_id:
         await update.effective_message.reply_text(
             f"💬 Reply posted on #{ticket_id}. "
             "(You've started a new reply since then. That one's still active.)"
         )
         # Return None, not END: the shared (chat,user) conversation now belongs
         # to the NEW reply flow; ending it here would kill the flow the user
-        # just started and silently swallow their next message.
-        return None
+        # just started and silently swallow their next message. A new reply
+        # in another chat lives under that chat's key, so this one ends.
+        return ConversationHandler.END if moved_chat else None
     if close_after:
         try:
             await seerr.resolve_issue(ticket_id, as_plex_token=None)
@@ -1096,7 +1123,7 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
                 update, ctx,
                 f"💬 Comment posted on #{ticket_id}, but couldn't close. {user_friendly_message(exc)}",
                 _result_markup(from_list, f"{TK_CLOSE_DIRECT}:{ticket_id}"))
-            _clear_reply_state(ctx)
+            _clear_reply_state(ctx, update)
             return ConversationHandler.END
         await _reply_result(update, ctx,
                             f"💬 Replied and ✅ closed ticket #{ticket_id}.",
@@ -1104,7 +1131,7 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     else:
         await _reply_result(update, ctx, f"💬 Replied to ticket #{ticket_id}.",
                             _result_markup(from_list))
-    _clear_reply_state(ctx)
+    _clear_reply_state(ctx, update)
     return ConversationHandler.END
 
 
@@ -1132,8 +1159,9 @@ RELINK_RESUME_EXECUTORS["ticket_reply"] = _resume_ticket_reply
 
 
 async def tk_reply_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    markup = _result_markup(bool(ctx.user_data.get("tk_reply_from_list")))
-    _clear_reply_state(ctx)
+    markup = _result_markup(_owns_reply_state(ctx, update)
+                            and bool(ctx.user_data.get("tk_reply_from_list")))
+    _clear_reply_state(ctx, update)
     await _reply_result(update, ctx, "Cancelled.", markup)
     return ConversationHandler.END
 
@@ -1142,12 +1170,15 @@ async def tk_reply_timeout(update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Conversation_timeout handler. Clear ticket-reply state so an abandoned
     conversation doesn't leak user_data for the life of the process, and tell
     the user (the flow explicitly solicited text, so silence loses their
-    later reply with no explanation)."""
+    later reply with no explanation). A conversation whose markers a newer
+    start in another chat took over ends quietly and leaves them."""
+    if not _owns_reply_state(ctx, update):
+        return ConversationHandler.END
     ticket_id = ctx.user_data.get("tk_reply_id")
     markup = _result_markup(
         bool(ctx.user_data.get("tk_reply_from_list")) and ticket_id is not None,
         _reply_retry(ctx, ticket_id))
-    _clear_reply_state(ctx)
+    _clear_reply_state(ctx, update)
     try:
         if update is not None and update.effective_chat is not None:
             sent = await ctx.bot.send_message(

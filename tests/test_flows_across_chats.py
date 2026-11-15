@@ -18,8 +18,9 @@ from telegram import Chat, Message, Update, User
 from telegram.ext import ExtBot
 
 import bot.app as app_mod
-from bot.callback_prefixes import (ISSUE_TYPE, TICKET_AUTOFIX_CONFIRM,
-                                   TICKET_AUTOFIX_OFFER, TICKET_MEDIA, TK_REPLY)
+from bot.callback_prefixes import (ISSUE_TYPE, RESOLVE, TICKET_AUTOFIX_CONFIRM,
+                                   TICKET_AUTOFIX_OFFER, TICKET_MEDIA,
+                                   TK_CLOSE_WITH_COMMENT, TK_REPLY)
 from seerr import CreatedIssue, MediaResult
 from tests._handler_harness import make_ctx, make_link
 
@@ -229,6 +230,7 @@ async def test_a_command_in_the_dm_ends_a_ticket_reply_left_open_in_a_group(rig)
     await rig.say(DM_ID, "/status")
     conv = rig.app.bot_data["conversations"]["ticket_reply"]
     assert (GROUP_ID, USER_ID) not in conv._conversations
+    assert "tk_reply_chat" not in rig.user_data
     await rig.say(GROUP_ID, "a reply that is now just chat")
     rig.seerr.add_issue_comment.assert_not_awaited()
 
@@ -246,3 +248,171 @@ def test_a_force_end_names_each_conversation_once(rig):
         CallbackContext.from_update(upd, rig.app), upd)
     assert ended == [conv]
     assert conv._conversations == {}
+
+
+# --- text-awaiting markers belong to the chat they were started in -----------
+
+
+async def _reply_in_dm_then_close_with_comment_in_group(rig) -> None:
+    rig.recorded(DM_ID, 601)
+    await rig.tap(DM_ID, f"{TK_REPLY}:1", 601)
+    rig.recorded(GROUP_ID, 602)
+    await rig.tap(GROUP_ID, f"{TK_CLOSE_WITH_COMMENT}:2", 602)
+    assert rig.user_data["tk_reply_id"] == 2
+
+
+async def test_a_dm_text_does_not_land_on_the_ticket_closed_from_a_group(rig):
+    await _reply_in_dm_then_close_with_comment_in_group(rig)
+    await rig.say(DM_ID, "words for ticket one")
+    rig.seerr.add_issue_comment.assert_not_awaited()
+    rig.seerr.resolve_issue.assert_not_awaited()
+    # The group's Close with comment is untouched and still works.
+    await rig.say(GROUP_ID, "closing words")
+    rig.seerr.add_issue_comment.assert_awaited_once()
+    assert rig.seerr.add_issue_comment.call_args.args[:2] == (2, "closing words")
+    assert rig.seerr.resolve_issue.call_args.args[0] == 2
+
+
+async def test_a_cancel_in_the_older_chat_leaves_the_newer_reply(rig):
+    rig.recorded(GROUP_ID, 602)
+    await rig.tap(GROUP_ID, f"{TK_REPLY}:2", 602)
+    rig.recorded(DM_ID, 601)
+    await rig.tap(DM_ID, f"{TK_REPLY}:1", 601)
+    await rig.say(GROUP_ID, "/cancel")
+    assert rig.user_data["tk_reply_id"] == 1
+    await rig.say(DM_ID, "words for ticket one")
+    assert rig.seerr.add_issue_comment.call_args.args[:2] == (1, "words for ticket one")
+
+
+async def test_a_reply_in_one_chat_still_posts(rig):
+    rig.recorded(GROUP_ID, 602)
+    await rig.tap(GROUP_ID, f"{TK_REPLY}:2", 602)
+    await rig.say(GROUP_ID, "group words")
+    assert rig.seerr.add_issue_comment.call_args.args[:2] == (2, "group words")
+    assert "tk_reply_id" not in rig.user_data
+
+
+async def _comment_asked_in_dm_then_group(rig) -> None:
+    rig.recorded(DM_ID, 603)
+    await rig.tap(DM_ID, f"{RESOLVE}:1:no", 603)
+    rig.recorded(GROUP_ID, 604)
+    await rig.tap(GROUP_ID, f"{RESOLVE}:2:no", 604)
+    assert rig.user_data["awaiting_comment_for"] == 2
+
+
+async def test_a_dm_text_does_not_land_on_the_resolve_comment_asked_in_a_group(rig):
+    await _comment_asked_in_dm_then_group(rig)
+    await rig.say(DM_ID, "still broken in the dm")
+    rig.seerr.add_issue_comment.assert_not_awaited()
+    await rig.say(GROUP_ID, "still broken")
+    assert rig.seerr.add_issue_comment.call_args.args[:2] == (2, "still broken")
+
+
+async def test_a_cancel_in_the_older_chat_leaves_the_newer_comment_prompt(rig):
+    rig.recorded(GROUP_ID, 604)
+    await rig.tap(GROUP_ID, f"{RESOLVE}:2:no", 604)
+    rig.recorded(DM_ID, 603)
+    await rig.tap(DM_ID, f"{RESOLVE}:1:no", 603)
+    await rig.say(GROUP_ID, "/cancel")
+    await rig.say(DM_ID, "still broken")
+    assert rig.seerr.add_issue_comment.call_args.args[:2] == (1, "still broken")
+
+
+async def test_a_reply_timeout_in_the_older_chat_leaves_the_newer_reply():
+    from bot.tickets import tk_reply_timeout
+    from tests._handler_harness import make_update
+    ctx = make_ctx(admin_id=USER_ID, user_data={
+        "tk_reply_id": 1, "tk_close_after": False, "tk_reply_chat": DM_ID})
+    ctx.bot.send_message = AsyncMock()
+    await tk_reply_timeout(make_update(text="x", user_id=USER_ID,
+                                       chat_id=GROUP_ID), ctx)
+    assert ctx.user_data["tk_reply_id"] == 1
+    assert ctx.user_data["tk_reply_chat"] == DM_ID
+    ctx.bot.send_message.assert_not_awaited()
+
+
+async def test_a_reply_timeout_in_its_own_chat_still_clears_and_says_so():
+    from bot.tickets import tk_reply_timeout
+    from tests._handler_harness import make_update
+    ctx = make_ctx(admin_id=USER_ID, user_data={
+        "tk_reply_id": 1, "tk_close_after": False, "tk_reply_chat": DM_ID})
+    ctx.bot.send_message = AsyncMock()
+    await tk_reply_timeout(make_update(text="x", user_id=USER_ID,
+                                       chat_id=DM_ID), ctx)
+    assert "tk_reply_id" not in ctx.user_data
+    assert "tk_reply_chat" not in ctx.user_data
+    ctx.bot.send_message.assert_awaited_once()
+
+
+async def test_a_comment_timeout_in_the_older_chat_leaves_the_newer_prompt():
+    from bot.resolve_flow import _resolve_timeout
+    from tests._handler_harness import make_update
+    ctx = make_ctx(admin_id=USER_ID, user_data={
+        "awaiting_comment_for": 1, "awaiting_comment_chat": DM_ID})
+    ctx.bot.send_message = AsyncMock()
+    await _resolve_timeout(make_update(text="x", user_id=USER_ID,
+                                       chat_id=GROUP_ID), ctx)
+    assert ctx.user_data["awaiting_comment_for"] == 1
+    ctx.bot.send_message.assert_not_awaited()
+
+
+async def test_a_comment_timeout_in_its_own_chat_still_clears_and_says_so():
+    from bot.resolve_flow import _resolve_timeout
+    from tests._handler_harness import make_update
+    ctx = make_ctx(admin_id=USER_ID, user_data={
+        "awaiting_comment_for": 1, "awaiting_comment_chat": DM_ID})
+    ctx.bot.send_message = AsyncMock()
+    await _resolve_timeout(make_update(text="x", user_id=USER_ID,
+                                       chat_id=DM_ID), ctx)
+    assert "awaiting_comment_for" not in ctx.user_data
+    assert "awaiting_comment_chat" not in ctx.user_data
+    ctx.bot.send_message.assert_awaited_once()
+
+
+async def test_a_reply_moved_to_another_chat_mid_post_ends_this_chats_flow():
+    """The post-comment check: a newer Reply started in another chat while
+    the comment was posting keeps its markers, skips the close, and this
+    chat's conversation ends (its key no longer has a reply to wait for)."""
+    from bot.shared import AWAIT_TICKET_REPLY
+    from bot.tickets import tk_reply_text
+    from tests._handler_harness import make_update
+    from telegram.ext import ConversationHandler
+    ctx = make_ctx(admin_id=USER_ID, user_data={
+        "tk_reply_id": 2, "tk_close_after": True, "tk_reply_chat": GROUP_ID})
+
+    async def post(*a, **kw):
+        ctx.user_data.update(tk_reply_id=2, tk_close_after=False,
+                             tk_reply_chat=DM_ID)
+
+    ctx.bot_data["seerr"].add_issue_comment = AsyncMock(side_effect=post)
+    state = await tk_reply_text(make_update(text="words", user_id=USER_ID,
+                                            chat_id=GROUP_ID), ctx)
+    assert state == ConversationHandler.END and state != AWAIT_TICKET_REPLY
+    ctx.bot_data["seerr"].resolve_issue.assert_not_awaited()
+    assert ctx.user_data["tk_reply_chat"] == DM_ID
+
+
+async def test_a_cancel_in_the_older_chat_shows_no_back_button_of_the_newer_reply():
+    from bot.tickets import tk_reply_cancel
+    from tests._handler_harness import make_update
+    ctx = make_ctx(admin_id=USER_ID, user_data={
+        "tk_reply_id": 1, "tk_reply_chat": DM_ID, "tk_reply_from_list": True})
+    upd = make_update(text="/cancel", user_id=USER_ID, chat_id=GROUP_ID)
+    await tk_reply_cancel(upd, ctx)
+    assert upd.effective_message.reply_calls[-1]["reply_markup"] is None
+    assert ctx.user_data["tk_reply_from_list"] is True
+
+
+async def test_a_reply_timeout_with_no_update_still_clears():
+    from bot.tickets import tk_reply_timeout
+    ctx = make_ctx(admin_id=USER_ID, user_data={
+        "tk_reply_id": 1, "tk_reply_chat": DM_ID})
+    await tk_reply_timeout(None, ctx)
+    assert "tk_reply_id" not in ctx.user_data
+
+
+def test_an_error_clears_the_marker_chats_too():
+    from bot.app import _CONVERSATION_USER_DATA_KEYS
+    assert {"tk_reply_chat", "awaiting_comment_chat"} <= set(
+        _CONVERSATION_USER_DATA_KEYS)
+
