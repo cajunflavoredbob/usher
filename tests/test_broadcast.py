@@ -395,3 +395,40 @@ async def test_a_second_send_tap_leaves_the_sending_note_alone(fresh_store):
     assert second.callback_query.edits == []
     await _drain(ctx)
     assert ctx.bot.send_message.await_count == 2
+
+
+async def test_typed_cancel_during_send_says_it_is_sending(fresh_store):
+    await _link(fresh_store, 1, 2)
+    ctx, _upd, _ = await _preview(fresh_store)
+    started, release = asyncio.Event(), asyncio.Event()
+    real = fresh_store.create_broadcast
+
+    async def slow_create(*args):
+        started.set()
+        await release.wait()
+        return await real(*args)
+    fresh_store.create_broadcast = slow_create
+    send = asyncio.ensure_future(
+        broadcast_send(_tap(f"{BROADCAST_SEND}:1"), ctx))
+    await started.wait()
+    typed = make_update(text="/cancel", user_id=ADMIN)
+    assert await broadcast_cancel(typed, ctx) == ConversationHandler.END
+    reply = typed.effective_message.reply_calls[-1]
+    assert "Nothing was sent" not in str(reply)
+    assert "sending" in str(reply).lower()
+    release.set()
+    await send
+    await _drain(ctx)
+    assert ctx.bot.send_message.await_count == 2
+    assert "bc_sending" not in ctx.user_data
+
+
+async def test_typed_cancel_after_an_earlier_broadcast_still_cancels(
+        fresh_store):
+    await _link(fresh_store, 1)
+    ctx, _upd, _ = await _preview(fresh_store)
+    await broadcast_send(_tap(f"{BROADCAST_SEND}:1"), ctx)
+    await _drain(ctx)
+    typed = make_update(text="/cancel", user_id=ADMIN)
+    await broadcast_cancel(typed, ctx)
+    assert "Nothing was sent" in str(typed.effective_message.reply_calls[-1])

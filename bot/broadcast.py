@@ -39,6 +39,7 @@ HEADER = "📣 From the Admin"
 _TEXT_KEY = "bc_text"
 _VER_KEY = "bc_ver"
 _SENT_VER_KEY = "bc_sent_ver"  # the preview whose Send was taken
+_SENDING_KEY = "bc_sending"  # a Send handler is running (typed /cancel check)
 _BC_KEYS = (_TEXT_KEY,)  # the version counter is never cleared
 _RETRY_AFTER_TRIES = 3
 
@@ -176,6 +177,12 @@ async def broadcast_cancel(update: Update,
             await q.answer("Already sending.")
             return ConversationHandler.END
         await q.answer()
+    elif ctx.user_data.get(_SENDING_KEY):
+        # A typed /cancel while Send is being taken: the job is about to
+        # send, so say that rather than "nothing was sent".
+        await update.effective_message.reply_text(
+            "Already sending. The broadcast can't be cancelled now.")
+        return ConversationHandler.END
     _clear(ctx)
     markup = end_markup(ADMIN_HUB)
     if q is not None:
@@ -214,6 +221,19 @@ async def broadcast_send(update: Update,
         return BC_CONFIRM
     await q.answer()
     text = ctx.user_data.pop(_TEXT_KEY, None)
+    if text:
+        # Taken before the first await below, and cleared when the handler
+        # ends, so a typed /cancel in between is told it is sending.
+        ctx.user_data[_SENDING_KEY] = True
+        try:
+            return await _send_taken(update, ctx, q, text)
+        finally:
+            ctx.user_data.pop(_SENDING_KEY, None)
+    return await _send_taken(update, ctx, q, text)
+
+
+async def _send_taken(update: Update, ctx: ContextTypes.DEFAULT_TYPE, q,
+                      text) -> int:
     markup = end_markup(ADMIN_HUB)
     if text:
         ctx.user_data[_SENT_VER_KEY] = ctx.user_data.get(_VER_KEY)

@@ -186,3 +186,14 @@ def test_command_for_another_bot_is_not_ours():
 
 def test_command_for_this_bot_matches_any_case():
     assert command_name(_cmd_msg("/issue@usherbot", 15, "UsherBot")) == "issue"
+
+
+async def test_a_channel_post_with_a_command_is_ignored():
+    """A channel post has no user and no user_data: it must not raise."""
+    conv = _make_conv()
+    upd = _update("/tickets", is_command=True)
+    upd.effective_user = None
+    ctx = _ctx([conv])
+    ctx.user_data = None
+    await reset_stale_flows(upd, ctx)
+    upd.effective_message.reply_text.assert_not_awaited()

@@ -992,6 +992,10 @@ async def reset_stale_flows(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
     Uses ConversationHandler internals (_get_key / _update_state / timeout_jobs)
     because PTB exposes no public API to end another handler's conversation.
     """
+    if update.effective_user is None:
+        # A channel post or anonymous update has no user (and no user_data):
+        # there is no flow of anyone's to reset.
+        return
     cmd = command_name(update.effective_message)
     if cmd is None or cmd in FLOW_RESET_EXEMPT_COMMANDS:
         return

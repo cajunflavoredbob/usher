@@ -584,3 +584,43 @@ async def test_each_shows_episodes_are_marked_pinged_as_its_pings_go_out(
     # The first show was already marked when the second show's ping went out.
     assert marked_when_second_sent == [1]
     assert await fresh_store.list_unpinged_episodes() == []
+
+
+def _orphan(rec_id, date):
+    """An import whose episode block is missing and whose episode Sonarr no
+    longer has."""
+    return {"id": rec_id, "date": date, "seriesId": 3, "episodeId": rec_id}
+
+
+async def test_an_orphaned_import_does_not_stall_the_poll(
+        fresh_store, monkeypatch):
+    import time
+    monkeypatch.setattr(time, "time", lambda: 1794650400)  # 2026-11-14 10:00Z
+    await fresh_store.set_poller_mark("sonarr_history", "2026-11-14T09:00:00Z")
+    sonarr = _sonarr([_orphan(1, "2026-11-14T09:30:00Z"),
+                      _rec(2, 1, 2, "2026-11-14T09:40:00Z")])
+    sonarr.get_episode_numbers.side_effect = RuntimeError("404")
+    ctx = _app(fresh_store, sonarr=sonarr)
+    await poll_new_content(ctx)
+    # The good import after it is recorded; the orphan is read again until
+    # the retry window passes, so the mark stays before it.
+    assert not await fresh_store.add_new_content(
+        "sonarr:2", "episode", SHOW, "Breaking Bad", 1, 2)
+    assert await fresh_store.get_poller_mark("sonarr_history") < (
+        "2026-11-14T09:30:00Z")
+
+
+async def test_an_old_orphaned_import_is_skipped_and_the_mark_moves_on(
+        fresh_store, monkeypatch):
+    import time
+    monkeypatch.setattr(time, "time", lambda: 1794650400 + 86400)
+    await fresh_store.set_poller_mark("sonarr_history", "2026-11-14T09:00:00Z")
+    sonarr = _sonarr([_orphan(1, "2026-11-14T09:30:00Z"),
+                      _rec(2, 1, 2, "2026-11-14T09:40:00Z")])
+    sonarr.get_episode_numbers.side_effect = RuntimeError("404")
+    ctx = _app(fresh_store, sonarr=sonarr)
+    await poll_new_content(ctx)
+    assert await fresh_store.get_poller_mark("sonarr_history") == (
+        "2026-11-14T09:40:00Z")
+    assert not await fresh_store.add_new_content(
+        "sonarr:2", "episode", SHOW, "Breaking Bad", 1, 2)

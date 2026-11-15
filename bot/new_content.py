@@ -167,7 +167,23 @@ async def _poll_sonarr(store, sonarr) -> None:
         if season is None or number is None:
             if rec.get("episodeId") is None:
                 continue
-            nums = await sonarr.get_episode_numbers(rec["episodeId"])
+            # An import whose episode Sonarr no longer has (an orphan, a 404)
+            # must not fail the whole poll: skip it with a warning, reading
+            # it again until the retry window has passed, as with the
+            # history lookup below.
+            try:
+                nums = await sonarr.get_episode_numbers(rec["episodeId"])
+            except Exception:
+                if _gave_up(rec):
+                    logger.warning("Sonarr episode %s lookup failed past the "
+                                   "retry window; skipped",
+                                   rec["episodeId"], exc_info=True)
+                    continue
+                logger.warning("Sonarr episode %s lookup failed",
+                               rec["episodeId"], exc_info=True)
+                if isinstance(rec.get("date"), str):
+                    failed.append(rec["date"])
+                continue
             if nums is None:
                 continue
             season, number = nums
