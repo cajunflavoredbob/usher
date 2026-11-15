@@ -18,7 +18,8 @@ from typing import Callable, Final, Optional
 import telegram
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity, Update
 from telegram.constants import ChatType
-from telegram.ext import ApplicationHandlerStop, ContextTypes, ConversationHandler
+from telegram.ext import (ApplicationHandlerStop, CommandHandler, ContextTypes,
+                          ConversationHandler)
 
 from seerr import SeerrClient
 from store import UserStore
@@ -984,6 +985,27 @@ def _addressed_to_this_bot(msg, target: str) -> bool:
     return not own or own.lower() == target.lower()
 
 
+def _registered_commands(app) -> set:
+    """Every command name a CommandHandler of this application answers,
+    including those inside conversations."""
+    found: set = set()
+
+    def walk(handler) -> None:
+        if isinstance(handler, ConversationHandler):
+            for h in handler.entry_points + handler.fallbacks:
+                walk(h)
+            for hs in handler.states.values():
+                for h in hs:
+                    walk(h)
+        elif isinstance(handler, CommandHandler):
+            found.update(handler.commands)
+
+    for hs in getattr(app, "handlers", {}).values():
+        for h in hs:
+            walk(h)
+    return found
+
+
 async def reset_stale_flows(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """TypeHandler at group=-2: "most recent command wins".
 
@@ -1003,11 +1025,18 @@ async def reset_stale_flows(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
     cmd = command_name(update.effective_message)
     if cmd is None or cmd in FLOW_RESET_EXEMPT_COMMANDS:
         return
+    chat = update.effective_chat
+    in_group = (chat is not None
+                and getattr(chat, "type", ChatType.PRIVATE) != ChatType.PRIVATE)
+    if (in_group and "@" not in update.effective_message.text.split()[0]
+            and cmd not in _registered_commands(ctx.application)):
+        # A bare /weather in a group is as likely meant for another bot there;
+        # only this bot's own commands (or ones addressed to it) end a flow.
+        return
     ended = force_end_flow_conversations(ctx, update)
     if not ended:
         return
-    chat = update.effective_chat
-    if chat is not None and getattr(chat, "type", ChatType.PRIVATE) != ChatType.PRIVATE:
+    if in_group:
         # The notice names what the user was doing; a group would show it to
         # everyone there. The flow still ended.
         return
@@ -1147,10 +1176,21 @@ def end_submit(ctx, marker_key: str, marker: tuple) -> None:
         ctx.user_data.pop(marker_key, None)
 
 
-async def refuse_replaced_draft(update, text: str) -> int:
+async def refuse_replaced_draft(update, text: str, ctx=None) -> int:
     """A step in the chat whose draft a newer flow in another chat took
     over: say so, act on nothing, and end this chat's conversation. A tap
-    edits its message (dropping the buttons); text gets a reply."""
+    edits its message (dropping the buttons); text gets a reply. In a DM whose
+    flow came from a Hub the message carries that Hub's back button, as every
+    other end of a Hub flow does (hub_origin is per user, so it can be the
+    newer flow's Hub; a back button to any Hub is harmless)."""
+    markup = None
+    if ctx is not None and getattr(update.effective_chat, "type",
+                                   ChatType.PRIVATE) == ChatType.PRIVATE:
+        from bot.hub import HUBS, end_markup, hub_origin  # hub imports shared
+        hub = hub_origin(ctx)
+        if hub in HUBS:
+            markup = end_markup(hub)
+    sent = None
     q = update.callback_query
     if q is not None:
         try:
@@ -1158,11 +1198,14 @@ async def refuse_replaced_draft(update, text: str) -> int:
         except telegram.error.TelegramError as exc:
             logger.debug("callback answer failed", exc_info=exc)
         try:
-            await q.edit_message_text(text)
-            return ConversationHandler.END
+            sent = await q.edit_message_text(text, reply_markup=markup)
         except telegram.error.TelegramError as exc:
             logger.debug("replaced-draft edit failed", exc_info=exc)
-    await update.effective_message.reply_text(text)
+            q = None
+    if q is None:
+        sent = await update.effective_message.reply_text(text, reply_markup=markup)
+    if markup is not None:
+        record_btn(ctx.application, update.effective_user.id, sent)
     return ConversationHandler.END
 
 

@@ -457,7 +457,7 @@ async def _show_search_results(
 
 async def ticket_title(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if _replaced(update, ctx):
-        return await refuse_replaced_draft(update, REPLACED_TEXT)
+        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
     query = update.effective_message.text.strip()
     await send_typing(update, ctx)  # search can take seconds on a big library
     return await _show_search_results(
@@ -773,7 +773,7 @@ async def _show_type_picker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
 
 async def ticket_pick_type(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if _replaced(update, ctx):
-        return await refuse_replaced_draft(update, REPLACED_TEXT)
+        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
     q = update.callback_query
     await q.answer()
     version, args = _split_cb(q.data)
@@ -802,7 +802,7 @@ async def ticket_description(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     if _replaced(update, ctx):
         # The draft is another chat's report: its title must not get this
         # text, and an Auto-fix must not delete its file.
-        return await refuse_replaced_draft(update, REPLACED_TEXT)
+        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
     description = update.effective_message.text.strip()
     if not description:
         await update.effective_message.reply_text(
@@ -926,7 +926,7 @@ def _has_arr_for_media(ctx: ContextTypes.DEFAULT_TYPE) -> bool:
 
 async def ticket_offer_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if _replaced(update, ctx):
-        return await refuse_replaced_draft(update, REPLACED_TEXT)
+        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
     q = update.callback_query
     await q.answer()
     version, args = _split_cb(q.data)
@@ -958,7 +958,7 @@ async def ticket_offer_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
 
 async def ticket_confirm_autofix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if _replaced(update, ctx):
-        return await refuse_replaced_draft(update, REPLACED_TEXT)
+        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
     q = update.callback_query
     await q.answer()
     version, args = _split_cb(q.data)
@@ -1000,7 +1000,7 @@ async def _submit_ticket(
     already checked that the draft is the one its marker was written for, so
     the draft's owner chat (maybe a group) is not this chat's to check."""
     if not resumed and _replaced(update, ctx):
-        return await refuse_replaced_draft(update, REPLACED_TEXT)
+        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
     # The marker holds the identity of this report's draft (owner chat plus
     # a per-draft id), not the user's flow generation, which a command in
     # another chat bumps between two taps: it blocks only this report's

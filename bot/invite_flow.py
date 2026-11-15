@@ -285,7 +285,7 @@ async def invite_access_start(update: Update,
 
 async def invite_email(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if not owns_draft(ctx, update, _OWNER_KEY):
-        return await refuse_replaced_draft(update, REPLACED_TEXT)
+        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
     return await _accept_email(update, ctx,
                                update.effective_message.text.strip())
 
@@ -518,7 +518,7 @@ async def invite_send(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await q.answer()
         return ConversationHandler.END
     if not owns_draft(ctx, update, _OWNER_KEY):
-        return await refuse_replaced_draft(update, REPLACED_TEXT)
+        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
     if _stale(ctx, version):
         await q.answer(_STALE_INVITE_TOAST,
                        show_alert=True)

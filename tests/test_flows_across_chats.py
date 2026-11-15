@@ -1275,3 +1275,39 @@ async def test_an_error_after_a_comment_prompt_was_reopened_is_not_called_a_repl
     assert rig.texts(DM_ID)[-1] == ERROR_TEXT
     await rig.say(DM_ID, "words again")
     assert PROMPT_REPLACED not in rig.texts(DM_ID)
+
+
+# --- the replaced refusal keeps a Hub flow's back button ---------------------
+
+@pytest.mark.parametrize("kind", ["tap", "text"])
+async def test_a_replaced_refusal_of_a_hub_flow_carries_the_back_button(
+        kind, monkeypatch):
+    from bot import hub as hubmod
+    from bot import ticket_flow as tf
+    from tests._handler_harness import make_update
+    monkeypatch.setitem(hubmod.HUBS, "tickets", hubmod.Hub("Tickets", None))
+    ctx = make_ctx(admin_id=USER_ID, link=make_link(telegram_id=USER_ID),
+                   user_data={**_issue_draft(), "hub_origin": "tickets"})
+    if kind == "tap":
+        upd = make_update(callback_data=f"{ISSUE_TYPE}:3:1",
+                          user_id=USER_ID, chat_id=DM_ID)
+        await tf.ticket_pick_type(upd, ctx)
+        shown = upd.callback_query.edits[-1]
+    else:
+        upd = make_update(text="the dm's words", user_id=USER_ID, chat_id=DM_ID)
+        await tf.ticket_description(upd, ctx)
+        shown = upd.effective_message.reply_calls[-1]
+    assert shown["text"].startswith(ISSUE_REPLACED)
+    buttons = [b.callback_data for row in shown["reply_markup"].inline_keyboard
+               for b in row]
+    assert buttons == ["hubo:tickets"]
+
+
+async def test_a_replaced_refusal_without_a_hub_origin_has_no_buttons():
+    from bot import ticket_flow as tf
+    from tests._handler_harness import make_update
+    ctx = make_ctx(admin_id=USER_ID, link=make_link(telegram_id=USER_ID),
+                   user_data=_issue_draft())
+    upd = make_update(text="the dm's words", user_id=USER_ID, chat_id=DM_ID)
+    await tf.ticket_description(upd, ctx)
+    assert upd.effective_message.reply_calls[-1].get("reply_markup") is None

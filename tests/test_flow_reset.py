@@ -197,3 +197,50 @@ async def test_a_channel_post_with_a_command_is_ignored():
     ctx.user_data = None
     await reset_stale_flows(upd, ctx)
     upd.effective_message.reply_text.assert_not_awaited()
+
+
+# --- a bare command in a group ----------------------------------------------
+
+def _group_ctx(conv, commands=("tickets",)):
+    ctx = _ctx([conv], names={"issue": conv})
+    ctx.application.handlers = {0: [CommandHandler(c, _noop) for c in commands]}
+    return ctx
+
+
+def _group_update(text, length=None):
+    upd = _update(text, is_command=True)
+    upd.effective_chat = SimpleNamespace(id=CHAT_ID, type="supergroup")
+    upd.effective_message.get_bot = lambda: SimpleNamespace(username="UsherBot")
+    return upd
+
+
+async def test_a_bare_command_this_bot_lacks_does_not_end_a_flow_in_a_group():
+    conv = _live_conv()
+    await reset_stale_flows(_group_update("/weather"), _group_ctx(conv))
+    assert conv._conversations[(CHAT_ID, USER_ID)] == 1
+
+
+async def test_a_bare_registered_command_ends_the_flow_in_a_group():
+    conv = _live_conv()
+    await reset_stale_flows(_group_update("/tickets"), _group_ctx(conv))
+    assert (CHAT_ID, USER_ID) not in conv._conversations
+
+
+async def test_a_command_in_a_conversation_counts_as_registered():
+    conv = _live_conv()
+    ctx = _ctx([conv], names={"issue": conv})
+    ctx.application.handlers = {0: [conv]}  # _make_conv answers /x and /y
+    await reset_stale_flows(_group_update("/y"), ctx)
+    assert (CHAT_ID, USER_ID) not in conv._conversations
+
+
+async def test_a_command_addressed_to_this_bot_ends_the_flow_in_a_group():
+    conv = _live_conv()
+    await reset_stale_flows(_group_update("/weather@UsherBot"), _group_ctx(conv))
+    assert (CHAT_ID, USER_ID) not in conv._conversations
+
+
+async def test_a_bare_unknown_command_still_ends_the_flow_in_a_dm():
+    conv = _live_conv()
+    await reset_stale_flows(_update("/weather", is_command=True), _group_ctx(conv))
+    assert (CHAT_ID, USER_ID) not in conv._conversations

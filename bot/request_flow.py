@@ -686,7 +686,7 @@ async def request_from_ticket(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
 
 async def request_title(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if _replaced(update, ctx):
-        return await refuse_replaced_draft(update, REPLACED_TEXT)
+        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
     if _behalf_pick_lost(update, ctx):
         return await _refuse_lost_pick(update, ctx)
     query = update.effective_message.text.strip()
@@ -1189,7 +1189,7 @@ async def _quota_line(ctx: ContextTypes.DEFAULT_TYPE, tg_id: int,
 async def _show_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     if _replaced(update, ctx):
-        return await refuse_replaced_draft(update, REPLACED_TEXT)
+        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
     if _behalf_pick_lost(update, ctx):
         return await _refuse_lost_pick(update, ctx)
     # The person this confirm names, taken before any await and kept under a
@@ -1251,7 +1251,7 @@ async def request_submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     if _replaced(update, ctx):
         # Another chat's /request owns the draft: file nothing of it.
-        return await refuse_replaced_draft(update, REPLACED_TEXT)
+        return await refuse_replaced_draft(update, REPLACED_TEXT, ctx)
     try:
         prefix, version_s = q.data.split(":")
         version = int(version_s)
