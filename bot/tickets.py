@@ -1033,6 +1033,9 @@ async def tk_close_with_comment_start(update: Update, ctx: ContextTypes.DEFAULT_
 # overwrites the markers; only that chat's text, /cancel or timeout may use
 # or clear them.
 _REPLY_CHAT_KEY: Final = "tk_reply_chat"
+# Text typed in the older chat once a newer start took the markers over.
+REPLACED_PROMPT_TEXT: Final = ("That reply prompt was replaced by one you "
+                               "opened in another chat.")
 
 
 def _owns_reply_state(ctx, update) -> bool:
@@ -1063,7 +1066,10 @@ async def tk_reply_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive the reply text, post it, optionally close."""
     if not _owns_reply_state(ctx, update):
         # A newer Reply or Close with comment in another chat owns the
-        # markers: this chat's text is not a reply to anything.
+        # markers: this chat's text is not a reply to anything. Say so
+        # rather than drop it.
+        if ctx.user_data.get(_REPLY_CHAT_KEY) is not None:
+            await update.effective_message.reply_text(REPLACED_PROMPT_TEXT)
         return ConversationHandler.END
     ticket_id = ctx.user_data.get("tk_reply_id")
     close_after = bool(ctx.user_data.get("tk_close_after"))

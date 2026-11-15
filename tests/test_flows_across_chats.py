@@ -702,6 +702,39 @@ async def test_a_dm_text_does_not_land_on_the_ticket_closed_from_a_group(rig):
     assert rig.seerr.resolve_issue.call_args.args[0] == 2
 
 
+PROMPT_REPLACED = "That reply prompt was replaced by one you opened in another chat."
+
+
+async def test_text_in_the_older_reply_chat_is_told_its_prompt_was_replaced(rig):
+    await _reply_in_dm_then_close_with_comment_in_group(rig)
+    await rig.say(DM_ID, "words for ticket one")
+    assert rig.texts(DM_ID)[-1] == PROMPT_REPLACED
+    assert not _live(rig, "ticket_reply", DM_ID)
+    rig.seerr.add_issue_comment.assert_not_awaited()
+    assert rig.user_data["tk_reply_id"] == 2
+
+
+async def test_text_in_the_older_comment_chat_is_told_its_prompt_was_replaced(rig):
+    await _comment_asked_in_dm_then_group(rig)
+    await rig.say(DM_ID, "still broken in the dm")
+    assert rig.texts(DM_ID)[-1] == PROMPT_REPLACED
+    rig.seerr.add_issue_comment.assert_not_awaited()
+    assert rig.user_data["awaiting_comment_for"] == 2
+
+
+async def test_a_reply_with_its_markers_gone_stays_silent():
+    """No marker at all (an error cleared them) is not a takeover: nothing
+    is said about another chat."""
+    from bot.resolve_flow import resolve_comment
+    from bot.tickets import tk_reply_text
+    from tests._handler_harness import make_update
+    for handler in (tk_reply_text, resolve_comment):
+        ctx = make_ctx(admin_id=USER_ID)
+        upd = make_update(text="words", user_id=USER_ID, chat_id=DM_ID)
+        await handler(upd, ctx)
+        assert upd.effective_message.reply_calls == []
+
+
 async def test_a_cancel_in_the_older_chat_leaves_the_newer_reply(rig):
     rig.recorded(GROUP_ID, 602)
     await rig.tap(GROUP_ID, f"{TK_REPLY}:2", 602)

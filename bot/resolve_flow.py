@@ -40,6 +40,9 @@ logger = logging.getLogger("usher")
 # overwrites awaiting_comment_for; only that chat's text, /cancel or timeout
 # may use or clear it.
 _COMMENT_CHAT_KEY = "awaiting_comment_chat"
+# Text typed in the older chat once a newer prompt took the marker over.
+REPLACED_PROMPT_TEXT = ("That reply prompt was replaced by one you opened in "
+                        "another chat.")
 
 
 def _owns_comment_prompt(ctx, update) -> bool:
@@ -206,7 +209,9 @@ async def _reply_comment_added(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
 async def resolve_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if not _owns_comment_prompt(ctx, update):
         # A newer prompt in another chat owns the marker: this chat's text
-        # is not a comment on anything.
+        # is not a comment on anything. Say so rather than drop it.
+        if ctx.user_data.get(_COMMENT_CHAT_KEY) is not None:
+            await update.effective_message.reply_text(REPLACED_PROMPT_TEXT)
         return ConversationHandler.END
     ticket_id = ctx.user_data.get("awaiting_comment_for")
     if not ticket_id:
