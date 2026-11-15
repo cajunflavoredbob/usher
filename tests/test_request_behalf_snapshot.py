@@ -163,7 +163,7 @@ async def test_the_admins_own_confirm_still_files_after_a_group_command(h):
     assert _filed_user_ids(h) == [None]
 
 
-async def test_a_jump_in_another_chat_is_the_admins_own_request(h):
+async def test_a_jump_in_another_chat_names_no_person_at_its_confirm(h):
     h.app.bot_data["seerr"].get_media_title = AsyncMock(
         return_value=("Movie C", "2022"))
     await _pick_person_1(h)  # the DM flow waits for a title
