@@ -24,7 +24,4 @@ dist/
 build/
 
 # Local notes, not part of the project
-CLAUDE.md
-.claude/
-docs/agents/
 docs/prior-art/

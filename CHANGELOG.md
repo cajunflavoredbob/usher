@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.3] - 2026-11-16
+
 ### Changed
 - **Remove now asks first**: the Remove now button on the Share expiry reminder used to remove the Share with one tap. It now shows the same question as the Share view's Remove (what they lose, or that the Invite is cancelled), with Remove and Keep on the same message. After the confirm the DM shows "Removing" without its buttons while Plex is called, so a second Remove tap does nothing. Extend tapped meanwhile says the Share is being removed because you chose Remove (or because its date passed, when the hourly check is the one removing it, or because you chose Retry after its date passed). A confirmed Remove tapped while the hourly check is removing that Share says so, and the hourly check skips a Share a Remove tap is already removing.
 - **TV Fixes show which Sonarr episode they hit**: the Auto-fix confirm and the Admin's Fix menu show a short checking line, then the Sonarr episode the number resolves to (for example `Sonarr: S01E03 "Title"`), or say that Sonarr could not be checked or does not have it, before anything is deleted. The result text carries the same title. The episode picker also refuses a number past the season's episode count.
