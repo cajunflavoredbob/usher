@@ -34,7 +34,7 @@ from bot.tickets import require_admin
 
 logger = logging.getLogger("usher")
 
-OPEN_IN_SEERR_LABEL = "Open in Seerr"
+OPEN_IN_SEERR_LABEL = "Open on the web"
 # Start of every failure line; _base_text strips one before adding the next.
 _FAILURE_MARK = "⚠️ Couldn't "
 
@@ -172,7 +172,7 @@ async def rq_admin_action(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
             return
         except Exception as exc:
             logger.exception("get_request #%d failed before %s", request_id, verb)
-            await fail(user_friendly_message(exc))
+            await fail(user_friendly_message(exc, admin=True))
             return
         if current.status != required_status:
             note = _STATUS_NOTES.get(current.status,
@@ -183,7 +183,7 @@ async def rq_admin_action(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
             await getattr(seerr, method)(request_id)
         except Exception as exc:
             logger.exception("%s #%d failed", method, request_id)
-            await fail(user_friendly_message(exc))
+            await fail(user_friendly_message(exc, admin=True))
             return
         logger.info("Admin %s request #%d from the DM", verb, request_id)
         await _edit_dm(q, f"{base}\n\n{outcome}", _link_only(markup))

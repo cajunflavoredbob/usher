@@ -16,7 +16,7 @@ logger = logging.getLogger("usher." + __name__)
 
 _SERVICE = "Radarr"
 
-PREVIEW_UNKNOWN_MOVIE = "Radarr: couldn't check which movie this is."
+PREVIEW_UNKNOWN_MOVIE = "Movie: couldn't check which movie this is."
 
 
 @dataclass
@@ -228,9 +228,9 @@ class RadarrClient:
         try:
             movie = await self.get_movie_by_tmdb(tmdb_id)
         except APIError as exc:
-            return FixResult.failed(f"Radarr lookup failed {user_friendly_message(exc)}")
+            return FixResult.failed(f"Couldn't look up the movie {user_friendly_message(exc)}")
         if movie is None:
-            return FixResult.failed("Movie isn't in Radarr (not monitored).")
+            return FixResult.failed("Movie isn't in the download system (not monitored).")
         return await self._run_movie_workflow(movie=movie, blocklist=False)
 
     async def mark_failed(self, tmdb_id: int) -> FixResult:
@@ -241,9 +241,9 @@ class RadarrClient:
         try:
             movie = await self.get_movie_by_tmdb(tmdb_id)
         except APIError as exc:
-            return FixResult.failed(f"Radarr lookup failed {user_friendly_message(exc)}")
+            return FixResult.failed(f"Couldn't look up the movie {user_friendly_message(exc)}")
         if movie is None:
-            return FixResult.failed("Movie isn't in Radarr (not monitored).")
+            return FixResult.failed("Movie isn't in the download system (not monitored).")
         return await self._run_movie_workflow(movie=movie, blocklist=True)
 
     async def get_history_imports_since(self, since: str) -> list[dict]:

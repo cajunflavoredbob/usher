@@ -156,8 +156,8 @@ async def coming_week_hub(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     bot_data = ctx.bot_data
     sonarr, radarr = bot_data.get("sonarr"), bot_data.get("radarr")
     if sonarr is None and radarr is None:
-        text = ("Sonarr and Radarr aren't set up, so I have no calendar to "
-                "show. Ask the Admin to link them in the web admin panel.")
+        text = ("This server has no release calendar set up, so I have "
+                "nothing to show.")
         sent = await edit_or_send(
             q, text, reply_markup=InlineKeyboardMarkup(
                 [[back_button(REQUESTS_HUB)]]))
@@ -172,8 +172,9 @@ async def coming_week_hub(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     episodes: list[dict] = []
     movies: list[dict] = []
     failed: list[str] = []
-    for name, client, sink in (("Sonarr", sonarr, episodes),
-                               ("Radarr", radarr, movies)):
+    # The name is what a User reads in "Couldn't read ...": never the service.
+    for name, client, sink in (("the show calendar", sonarr, episodes),
+                               ("the movie calendar", radarr, movies)):
         if client is None:
             continue
         try:
@@ -182,8 +183,8 @@ async def coming_week_hub(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
             logger.warning("%s calendar read failed", name, exc_info=True)
             failed.append(name)
     if failed and len(failed) == sum(c is not None for c in (sonarr, radarr)):
-        text = ("I couldn't read the calendar from "
-                f"{' or '.join(failed)} just now. Try again in a moment.")
+        text = ("I couldn't read the calendar just now. "
+                "Try again in a moment.")
         sent = await edit_or_send(
             q, text, reply_markup=InlineKeyboardMarkup(
                 [[back_button(REQUESTS_HUB)]]))

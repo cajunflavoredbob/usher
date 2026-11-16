@@ -49,7 +49,7 @@ from telegram.ext import (
     filters,
 )
 
-from http_util import user_friendly_message
+from http_util import neutral_service_names, user_friendly_message
 from seerr import (
     MEDIA_STATUS_AVAILABLE,
     MEDIA_STATUS_BLOCKLISTED,
@@ -1179,8 +1179,8 @@ async def _quota_line(ctx: ContextTypes.DEFAULT_TYPE, tg_id: int,
         unit = "requests" if media_type == "movie" else "seasons"
         if bucket.remaining <= 0:
             return (f"\n🙅 {whose} quota ({bucket.limit} {unit} per "
-                    f"{day_count(bucket.days)}) is used up, Seerr will reject "
-                    "this until older requests age out of the window.")
+                    f"{day_count(bucket.days)}) is used up, so this will be "
+                    "refused until older requests age out of the window.")
         return (f"\nQuota: {bucket.remaining} of {bucket.limit} {unit} left "
                 f"in the current {bucket.days}-day window.")
     except Exception:
@@ -1429,7 +1429,7 @@ async def _submit_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                 label += " [4K]"
             dropped = sorted(set(seasons) - set(granted))
             dropped_note = (f"\n({_summarize_seasons(dropped)} was already "
-                            "available or requested, so Seerr skipped it.)")
+                            "available or requested, so it was skipped.)")
     approved = created.status == REQUEST_STATUS_APPROVED
     # Promise a DM only when the Admin has Request updates to requesters on.
     settings_store = ctx.bot_data.get("settings_store")
@@ -1512,17 +1512,17 @@ def _quota_text(exc: Exception, who: Optional[str] = None) -> str:
     """`who` names the user an Admin requested for; None means the
     requester's own quota."""
     if who:
-        return (f"🙅 {html.escape(who)}: {html.escape(str(exc))} Their quota "
+        return (f"🙅 {html.escape(who)}: {html.escape(neutral_service_names(str(exc)))} Their quota "
                 "frees up as older requests age out of the window.")
-    return (f"🙅 {html.escape(str(exc))} Your quota frees up as older "
+    return (f"🙅 {html.escape(neutral_service_names(str(exc)))} Your quota frees up as older "
             "requests age out of the window.")
 
 
 def _permission_text(exc: Exception, who: Optional[str] = None) -> str:
     if who:
-        return (f"🚫 Seerr said no for {html.escape(who)}: "
-                f"{html.escape(str(exc))}")
-    return f"🚫 Seerr said no: {html.escape(str(exc))}"
+        return (f"🚫 Request refused for {html.escape(who)}: "
+                f"{html.escape(neutral_service_names(str(exc)))}")
+    return f"🚫 Request refused: {html.escape(neutral_service_names(str(exc)))}"
 
 
 # Request remaining seasons (global handlers: the button sits on detail cards

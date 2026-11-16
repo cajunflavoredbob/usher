@@ -113,7 +113,8 @@ async def _render_requests(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
 
     scope = "All requests" if is_admin else "Your requests"
     if total > len(requests):
-        header = f"📥 {scope} (showing {len(requests)} of {total}; the rest are in Seerr):"
+        rest = "; the rest are in Seerr" if is_admin else ""
+        header = f"📥 {scope} (showing {len(requests)} of {total}{rest}):"
     else:
         header = f"📥 {scope} ({len(requests)}):"
     lines = ([notice, "", header, ""] if notice else [header, ""])

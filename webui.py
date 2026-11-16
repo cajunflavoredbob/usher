@@ -2313,7 +2313,7 @@ async def test_telegram(request: web.Request) -> web.Response:
             return _test_json(True, f"Connected as @{data['result'].get('username', '?')}")
         return _test_json(False, data.get("description") or f"HTTP {r.status_code}")
     except Exception as exc:
-        return _test_json(False, user_friendly_message(exc))
+        return _test_json(False, user_friendly_message(exc, admin=True))
 
 
 async def test_seerr(request: web.Request) -> web.Response:
@@ -2338,7 +2338,7 @@ async def test_seerr(request: web.Request) -> web.Response:
         version = await client.ping()
         return _test_json(True, f"Connected (Seerr v{version})")
     except Exception as exc:
-        return _test_json(False, user_friendly_message(exc))
+        return _test_json(False, user_friendly_message(exc, admin=True))
     finally:
         await client.close()
 
@@ -2387,7 +2387,7 @@ async def test_autofix(request: web.Request) -> web.Response:
             results.append(f"{name}: v{version}")
         except Exception as exc:
             ok_all = False
-            results.append(f"{name}: {user_friendly_message(exc)}")
+            results.append(f"{name}: {user_friendly_message(exc, admin=True)}")
         finally:
             await client.close()
     if not any_configured:
@@ -2418,7 +2418,7 @@ async def test_tautulli(request: web.Request) -> web.Response:
         version = await client.ping()
         return _test_json(True, f"Connected (Tautulli {version})")
     except Exception as exc:
-        return _test_json(False, user_friendly_message(exc))
+        return _test_json(False, user_friendly_message(exc, admin=True))
     finally:
         await client.close()
 
@@ -2446,7 +2446,7 @@ async def test_sabnzbd(request: web.Request) -> web.Response:
         version = await client.ping()
         return _test_json(True, f"Connected (SABnzbd {version})")
     except Exception as exc:
-        return _test_json(False, user_friendly_message(exc))
+        return _test_json(False, user_friendly_message(exc, admin=True))
     finally:
         await client.close()
 
@@ -2481,7 +2481,7 @@ async def test_webhook(request: web.Request) -> web.Response:
             return _test_json(False, "Receiver rejected the secret (401). Save first?")
         return _test_json(False, f"Receiver returned HTTP {r.status_code}.")
     except Exception as exc:
-        return _test_json(False, user_friendly_message(exc))
+        return _test_json(False, user_friendly_message(exc, admin=True))
 
 
 def _self_test_host(request: web.Request) -> str:

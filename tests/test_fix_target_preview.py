@@ -47,23 +47,23 @@ EPS = [
 
 async def test_describe_shows_the_sonarr_title():
     text = await _sonarr(EPS).describe_episode(42, 1, 3)
-    assert text == 'Sonarr: S01E03 "Third"'
+    assert text == 'Episode: S01E03 "Third"'
 
 
 async def test_describe_names_the_siblings_of_a_shared_file():
     text = await _sonarr(EPS).describe_episode(42, 1, 1)
-    assert 'Sonarr: S01E01 "Pilot"' in text
+    assert 'Episode: S01E01 "Pilot"' in text
     assert "also holds S01E02" in text
 
 
 async def test_describe_says_when_the_episode_is_not_in_sonarr():
     text = await _sonarr(EPS).describe_episode(42, 1, 9)
-    assert text == "Sonarr: S01E09 not found in Sonarr."
+    assert text == "Episode: S01E09 not found in the download system."
 
 
 async def test_describe_says_when_the_show_is_not_in_sonarr():
     text = await _sonarr(EPS, series_ok=False).describe_episode(42, 1, 1)
-    assert text == "Sonarr: Series isn't in Sonarr."
+    assert text == "Episode: Series isn't in the download system."
 
 
 async def test_describe_says_when_the_lookup_fails(monkeypatch):
@@ -71,7 +71,7 @@ async def test_describe_says_when_the_lookup_fails(monkeypatch):
         return None
     monkeypatch.setattr("http_util.asyncio.sleep", _no_sleep)
     text = await _sonarr(None).describe_episode(42, 1, 1)
-    assert text.startswith("Sonarr episode lookup failed")
+    assert text.startswith("Episode: Couldn't look up the episode")
 
 
 async def test_describe_fix_target_is_empty_without_an_episode_or_sonarr():
@@ -84,14 +84,14 @@ async def test_describe_fix_target_says_so_for_a_movie_with_no_title():
     sonarr = _sonarr(EPS)
     assert await describe_fix_target(
         {"type": "movie", "tmdb_id": 1}, None, None, sonarr
-    ) == "Radarr: couldn't check which movie this is."
+    ) == "Movie: couldn't check which movie this is."
 
 
 async def test_describe_fix_target_names_a_movie_by_title_and_year():
     movie = {"type": "movie", "tmdb_id": 348, "title": "Alien", "year": "1979"}
-    assert await describe_fix_target(movie, None, None, None) == "Radarr: Alien (1979)"
+    assert await describe_fix_target(movie, None, None, None) == "Movie: Alien (1979)"
     no_year = {**movie, "year": ""}
-    assert await describe_fix_target(no_year, None, None, None) == "Radarr: Alien"
+    assert await describe_fix_target(no_year, None, None, None) == "Movie: Alien"
 
 
 async def test_reporter_confirm_shows_the_sonarr_episode():
@@ -102,7 +102,7 @@ async def test_reporter_confirm_shows_the_sonarr_episode():
     upd = make_update(callback_data=f"{TICKET_AUTOFIX_OFFER}:1:yes", user_id=USER_ID)
     await ticket_offer_autofix(upd, ctx)
     text = upd.callback_query.edits[-1]["text"]
-    assert 'Sonarr: S01E03 "Third"' in text
+    assert 'Episode: S01E03 "Third"' in text
     assert "delete the current file" in text
 
 
@@ -130,7 +130,7 @@ async def test_admin_fix_menu_shows_the_sonarr_episode():
     upd = make_update(callback_data="tkf:5", user_id=ADMIN_ID)
     await tk_fix(upd, ctx)
     text = upd.callback_query.edits[-1]["text"]
-    assert 'Sonarr: S01E03 "Third"' in text
+    assert 'Episode: S01E03 "Third"' in text
     assert "delete the current file" in text
 
 

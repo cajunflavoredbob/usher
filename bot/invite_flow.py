@@ -318,7 +318,7 @@ async def _accept_email(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     except Exception as exc:
         logger.exception("plex server/section lookup failed")
         await end_flow(update, ctx,
-                       f"Couldn't read your Plex server. {user_friendly_message(exc)}",
+                       f"Couldn't read your Plex server. {user_friendly_message(exc, admin=True)}",
                        _admin_origin(ctx), ADMIN_INVITE, edit=edit)
         _clear(ctx)
         return ConversationHandler.END
@@ -596,7 +596,7 @@ async def _invite_send_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *,
                     "web app's sharing settings, then invite again.")
         else:
             retry = ADMIN_INVITE
-            text = f"Couldn't send the invite. {user_friendly_message(exc)}"
+            text = f"Couldn't send the invite. {user_friendly_message(exc, admin=True)}"
         await end_flow(update, ctx, text, hub, retry)
         _clear_finished(ctx)
         return ConversationHandler.END
@@ -865,7 +865,7 @@ async def _load_shares(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     except Exception as exc:
         logger.exception("share listing failed")
         await end_flow(update, ctx,
-                       f"Couldn't list Shares. {user_friendly_message(exc)}",
+                       f"Couldn't list Shares. {user_friendly_message(exc, admin=True)}",
                        ADMIN_HUB, retry)
         return None
     return _sorted_shares(shares)
@@ -939,7 +939,7 @@ async def admin_inactive(update: Update,
     except Exception as exc:
         logger.exception("Tautulli get_users_table failed")
         await end_flow(update, ctx,
-                       f"Couldn't ask Tautulli. {user_friendly_message(exc)}",
+                       f"Couldn't ask Tautulli. {user_friendly_message(exc, admin=True)}",
                        ADMIN_HUB, q.data)
         return
     days = ctx.bot_data["settings_store"].settings.inactive_share_days
@@ -1107,7 +1107,7 @@ async def cmd_uninvite(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as exc:
         logger.exception("share listing failed")
         await update.effective_message.reply_text(
-            f"Couldn't list shares. {user_friendly_message(exc)}")
+            f"Couldn't list shares. {user_friendly_message(exc, admin=True)}")
         return
     matches = _matching(shares, query)
     if not matches:
@@ -1286,7 +1286,7 @@ async def _uninvite_go_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     except Exception as exc:
         logger.exception("share removal failed")
         await end_flow(update, ctx,
-                       f"Couldn't remove the share. {user_friendly_message(exc)}",
+                       f"Couldn't remove the share. {user_friendly_message(exc, admin=True)}",
                        ADMIN_HUB, q.data)
         return
     if already_gone:

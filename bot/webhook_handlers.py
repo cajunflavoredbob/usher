@@ -137,7 +137,7 @@ async def handle_seerr_comment(app: Application, payload: dict) -> None:
     )
 
     safe_comment = html.escape(comment_text)
-    safe_commenter = html.escape(commenter_username or "Seerr")
+    safe_commenter = html.escape(commenter_username or "Unknown")
     safe_title = html.escape(title_line) if title_line else ""
 
     lines = [f"💬 New comment on ticket #{ticket_id}"]

@@ -225,7 +225,7 @@ async def run_share_expiries(app, now: Optional[datetime] = None) -> None:
     if shares is None:
         for row in due:
             await _alert_failure(app, store, row,
-                                 user_friendly_message(listing_error),
+                                 user_friendly_message(listing_error, admin=True),
                                  admin_id, now)
         return
     removing: dict[int, str] = app.bot_data.setdefault(REMOVING_KEY, {})
@@ -267,7 +267,7 @@ async def _remove_due(app, store: UserStore, plex, token: str,
                                                still_due=still_due)
     except Exception as exc:
         logger.exception("expired share removal failed")
-        await _alert_failure(app, store, row, user_friendly_message(exc),
+        await _alert_failure(app, store, row, user_friendly_message(exc, admin=True),
                              admin_id, now)
         return False
     if result is None:
@@ -384,7 +384,7 @@ async def _confirm_removal(q, ctx, store: UserStore, row: ShareExpiry) -> None:
         logger.exception("share listing failed for Remove now")
         await edit_or_send(
             q, f"⚠️ Couldn't check the Share. "
-               f"{html.escape(user_friendly_message(exc))}",
+               f"{html.escape(user_friendly_message(exc, admin=True))}",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
                 "🔁 Try again", callback_data=f"{SHARE_REMOVE_NOW}:{sid}")]]),
             parse_mode="HTML")
@@ -450,7 +450,7 @@ async def _remove_from_button(q, ctx, store: UserStore, row: ShareExpiry,
             still_due=still_due if only_if_due else None)
     except Exception as exc:
         logger.exception("share removal failed")
-        error = user_friendly_message(exc)
+        error = user_friendly_message(exc, admin=True)
         await store.record_share_removal_failure(
             row.share_id, _stamp(datetime.now(timezone.utc)), error, False)
         await edit_or_send(

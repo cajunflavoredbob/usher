@@ -170,7 +170,7 @@ async def test_whole_season_fix_leaves_sonarr_reason_and_ticket_back():
     ctx = _ctx(media_type="tv", problem_season=1, problem_episode=None)
     upd = await _fix(ctx)
     edit = upd.callback_query.edits[-1]
-    assert "fix it in Sonarr directly" in edit["text"]
+    assert "it has to be fixed by hand" in edit["text"]
     assert _flat(edit["reply_markup"]) == [TICKET_BACK]
     ctx.bot.send_message.assert_not_awaited()
 

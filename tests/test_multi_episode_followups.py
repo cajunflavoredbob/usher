@@ -92,12 +92,13 @@ async def test_preview_drops_a_missing_title_and_does_not_double_the_name():
             return httpx.Response(200, json=[{"id": 8, "tvdbId": 42, "title": "Show"}])
         return httpx.Response(200, json=[{**EPS[1], "hasFile": False}])
     text = await _client(handler).describe_episode(42, 1, 2)
-    assert text == "Sonarr: S01E02"
+    assert text == "Episode: S01E02"
 
     def broken(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("down")
     err = await _client(broken).describe_episode(42, 1, 2)
-    assert err.startswith("Sonarr lookup failed")
+    assert err.startswith("Episode: Couldn't look up the series")
+    assert "Episode: Episode" not in err
 
 
 # --- a sibling that 404s is dropped, the rest keep polling ------------------------

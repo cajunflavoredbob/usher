@@ -412,7 +412,7 @@ def _ticket_line(fix) -> list[str]:
 async def _notify_media_gone(ctx: ContextTypes.DEFAULT_TYPE, fix) -> None:
     lines = [
         f"⚠️ {_fix_name(fix)} abandoned for <b>{html.escape(fix.label)}</b>.",
-        "The media was removed from Sonarr/Radarr before the new file landed.",
+        "The title was removed from the download system before the new file landed.",
         *_ticket_line(fix),
     ]
     try:

@@ -23,8 +23,8 @@ from bot.shared import (DECRYPT_FAILED_MSG, NOT_LINKED_MSG, edit_or_send,
 logger = logging.getLogger("usher")
 
 TOP_TITLES = 5
-UNKNOWN_USER_MSG = ("Tautulli doesn't know you yet. Watch something on Plex "
-                    "and check back.")
+UNKNOWN_USER_MSG = ("Your watch history is empty so far. Watch something on "
+                    "Plex and check back.")
 NOT_CONFIGURED_MSG = "Watch stats aren't available on this server."
 
 

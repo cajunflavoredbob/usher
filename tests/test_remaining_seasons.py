@@ -210,7 +210,7 @@ async def test_send_permission_error_reuses_the_request_flow_message():
     ctx.bot_data["seerr"].create_request.side_effect = RequestPermissionError("No.")
     upd = make_update(callback_data=f"rqrgo:{SHOW}", user_id=USER_ID)
     await remaining_seasons_send(upd, ctx)
-    assert upd.callback_query.edits[-1]["text"] == "🚫 Seerr said no: No."
+    assert upd.callback_query.edits[-1]["text"] == "🚫 Request refused: No."
 
 
 async def test_send_unlinked_user_is_told_to_link():

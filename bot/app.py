@@ -383,7 +383,7 @@ async def _check_connections(app: Application) -> dict[str, str]:
             out[label] = f"✅ {version}"
         except Exception as exc:
             logger.exception("%s ping failed", label)
-            out[label] = f"❌ {user_friendly_message(exc)}"
+            out[label] = f"❌ {user_friendly_message(exc, admin=True)}"
     # Webhook-agent check: every Ticket/Request DM depends on Seerr having
     # the webhook agent on with the right event types, and a miss is
     # otherwise SILENT (upgraded installs predate the request events). One
@@ -405,7 +405,7 @@ async def _check_connections(app: Application) -> dict[str, str]:
                     out["Seerr webhook"] = "✅ all events enabled"
         except Exception as exc:
             logger.warning("webhook settings check failed", exc_info=True)
-            out["Seerr webhook"] = f"❓ couldn't check ({user_friendly_message(exc)})"
+            out["Seerr webhook"] = f"❓ couldn't check ({user_friendly_message(exc, admin=True)})"
     return out
 
 
@@ -417,7 +417,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         # Non-admins see ONLY greeting + commands. No connection diagnostics,
         # no inline "DM me /link" directive (/account is listed below).
         await update.effective_message.reply_text(
-            "Hi! I take movie/TV requests and file tickets in Seerr.\n\n"
+            "Hi! I take movie/TV requests and file tickets about problems "
+            "on this Plex server.\n\n"
             "*Commands*\n"
             "  /request - new request, your requests, trending, subscriptions\n"
             "  /tickets - report a problem or check on your tickets\n"
@@ -425,7 +426,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             "  /help - show this\n\n"
             "(/link, /unlink, /issue, /requests, /trending and /subscriptions "
             "still work when typed.)\n"
-            "(/mystats shows your watch stats when Tautulli is linked.)\n"
+            "(/mystats shows your watch stats when this server has them.)\n"
             "Requests also holds follows and what's coming this week; "
             "/account holds Notices (daily digest, automatic follows).",
             parse_mode="Markdown",

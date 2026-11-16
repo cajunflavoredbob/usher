@@ -45,7 +45,7 @@ def episode_code(e: "SonarrEpisode") -> str:
     return f"S{e.season:02d}E{e.episode:02d}"
 
 
-PREVIEW_UNKNOWN = "Sonarr: couldn't check which episode this is."
+PREVIEW_UNKNOWN = "Episode: couldn't check which episode this is."
 
 
 def _sibling_note(siblings: "list[SonarrEpisode]") -> str:
@@ -283,14 +283,14 @@ class SonarrClient:
         try:
             series = await self.get_series_by_tvdb(tvdb_id)
         except APIError as exc:
-            return None, None, [], FixResult.failed(f"Sonarr lookup failed {user_friendly_message(exc)}")
+            return None, None, [], FixResult.failed(f"Couldn't look up the series {user_friendly_message(exc)}")
         if series is None:
-            return None, None, [], FixResult.failed("Series isn't in Sonarr.")
+            return None, None, [], FixResult.failed("Series isn't in the download system.")
         try:
             episodes = await self.get_episodes(series.id, season)
         except APIError as exc:
             return series, None, [], FixResult.failed(
-                f"Sonarr episode lookup failed {user_friendly_message(exc)}"
+                f"Couldn't look up the episode {user_friendly_message(exc)}"
             )
         # Match on BOTH season and episode: if Sonarr ever ignores the
         # seasonNumber filter (or it serializes empty), an episode-only match
@@ -302,7 +302,7 @@ class SonarrClient:
         )
         if match is None:
             return series, None, [], FixResult.failed(
-                f"S{season:02d}E{episode:02d} not found in Sonarr."
+                f"S{season:02d}E{episode:02d} not found in the download system."
             )
         siblings: list[SonarrEpisode] = []
         if match.has_file and match.episode_file_id:
@@ -324,11 +324,9 @@ class SonarrClient:
                            exc_info=True)
             return PREVIEW_UNKNOWN
         if err is not None:
-            # Some messages already name Sonarr ("Sonarr lookup failed ...").
-            return (err.message if err.message.startswith("Sonarr")
-                    else f"Sonarr: {err.message}")
+            return f"Episode: {err.message}"
         title = f' "{match.title}"' if match.title and match.title != "?" else ""
-        line = f"Sonarr: {episode_code(match)}{title}"
+        line = f"Episode: {episode_code(match)}{title}"
         note = _sibling_note(siblings)
         return f"{line}\n{note}" if note else line
 

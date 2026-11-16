@@ -152,7 +152,7 @@ async def test_fix_menu_for_a_movie_names_the_movie():
     await tk_fix(upd, ctx)
     ctx.bot_data["seerr"].get_tv_seasons.assert_not_called()
     text = upd.callback_query.edits[-1]["text"]
-    assert "Radarr: Alien (1979)" in text
+    assert "Movie: Alien (1979)" in text
     assert "couldn't check" not in text
 
 
@@ -163,7 +163,7 @@ async def test_fix_menu_for_a_movie_still_opens_when_the_title_read_fails():
     await tk_fix(upd, ctx)
     text = upd.callback_query.edits[-1]["text"]
     assert "how?" in text
-    assert "Radarr: couldn't check which movie this is." in text
+    assert "Movie: couldn't check which movie this is." in text
 
 
 async def test_fix_menu_for_a_movie_names_it_when_sonarr_is_not_configured():
@@ -173,7 +173,7 @@ async def test_fix_menu_for_a_movie_names_it_when_sonarr_is_not_configured():
     upd = make_update(callback_data="tkf:5", user_id=ADMIN)
     await tk_fix(upd, ctx)
     text = upd.callback_query.edits[-1]["text"]
-    assert "Radarr: Alien (1979)" in text
+    assert "Movie: Alien (1979)" in text
     assert "how?" in text
 
 

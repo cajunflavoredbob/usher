@@ -235,7 +235,7 @@ async def _ticket_expect_text_description(update: Update, ctx: ContextTypes.DEFA
     common case)."""
     await update.effective_message.reply_text(
         "I can only read text here: describe the problem in words "
-        "(screenshots don't reach Seerr), or /cancel to stop.")
+        "(screenshots can't go on a ticket), or /cancel to stop.")
     return DESCRIPTION
 
 
@@ -515,7 +515,7 @@ async def ticket_pick_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     selected = (current.get("by_key") or {}).get((media_type, tmdb_id))
     if selected is None or selected.seerr_media_id is None:
         parent = ctx.user_data.get("research_parent")
-        text = "That title isn't in Seerr's library yet (no Plex match / no prior request)."
+        text = "That title isn't in the library yet (no Plex match / no prior request)."
         rows: list[list[InlineKeyboardButton]] = []
         if parent:
             text += (

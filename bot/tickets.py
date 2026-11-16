@@ -195,7 +195,8 @@ async def tickets_hub_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
     # tickets (25)" while tickets 26+ were silently invisible.
     scope = "All open tickets" if is_admin else "Your open tickets"
     if total > len(tickets):
-        header = f"📋 {scope} (showing {len(tickets)} of {total}; manage the rest in Seerr):"
+        rest = "; manage the rest in Seerr" if is_admin else ""
+        header = f"📋 {scope} (showing {len(tickets)} of {total}{rest}):"
     else:
         header = f"📋 {scope} ({len(tickets)}):"
     lines = [header, ""]
@@ -642,7 +643,7 @@ async def resolve_fix_context(
     if media_type == "tv" and (season is None or not episode):
         return None, (
             f"{action_name} only works on individual episodes or movies, not "
-            f"whole seasons or shows. For #{ticket_id}, fix it in Sonarr directly."
+            f"whole seasons or shows. For #{ticket_id}, it has to be fixed by hand."
         )
 
     media: dict = {"type": media_type, "tmdb_id": tmdb_id}
@@ -656,7 +657,7 @@ async def resolve_fix_context(
         except Exception as exc:
             logger.exception("get_media_title failed for #%d", ticket_id, exc_info=exc)
     if media_type == "movie" and label_title:
-        # What describe_fix_target shows as "Radarr: <Title> (<Year>)".
+        # What describe_fix_target shows as "Movie: <Title> (<Year>)".
         media["title"] = label_title
         media["year"] = label_year
     if media_type == "tv":
@@ -1303,13 +1304,13 @@ async def run_arr_action(
     try:
         if media["type"] == "movie":
             if not radarr:
-                return FixResult.failed("Radarr not configured.")
+                return FixResult.failed("The download system isn't set up for movies.")
             if action == "fix":
                 return await radarr.auto_fix(media["tmdb_id"])
             return await radarr.mark_failed(media["tmdb_id"])
         if media["type"] == "tv":
             if not sonarr:
-                return FixResult.failed("Sonarr not configured.")
+                return FixResult.failed("The download system isn't set up for shows.")
             if not episode:
                 # Whole-season / whole-show variants are too destructive.
                 return FixResult.failed(
@@ -1332,8 +1333,8 @@ async def describe_fix_target(
     sonarr: Optional[SonarrClient],
 ) -> str:
     """The file a Fix is about to delete, shown first so a wrong pick is
-    visible. A movie: "Radarr: <Title> (<Year>)" from the picked title
-    ("couldn't check which movie this is" when the media carries no title). A TV episode: the Sonarr episode (and
+    visible. A movie: "Movie: <Title> (<Year>)" from the picked title
+    ("couldn't check which movie this is" when the media carries no title). A TV episode: "Episode: " and the Sonarr episode (and
     any other episodes its file holds) the typed number resolves to; '' for
     whole seasons or when Sonarr is missing, "couldn't check" when the TVDb
     id is missing. Never raises."""
@@ -1342,7 +1343,7 @@ async def describe_fix_target(
         if not title:
             return PREVIEW_UNKNOWN_MOVIE
         year = media.get("year")
-        return f"Radarr: {title} ({year})" if year else f"Radarr: {title}"
+        return f"Movie: {title} ({year})" if year else f"Movie: {title}"
     if (media.get("type") != "tv" or sonarr is None or not episode
             or season is None):
         return ""

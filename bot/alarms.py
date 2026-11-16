@@ -235,7 +235,7 @@ async def plex_state(ctx) -> tuple[Optional[bool], str]:
                       "(check which Plex account the Admin linked with /link)")
     except Exception as exc:
         logger.warning("Plex presence check failed: %s", exc)
-        errors.append(user_friendly_message(exc))
+        errors.append(user_friendly_message(exc, admin=True))
     tautulli = bd.get("tautulli")
     if tautulli is not None:
         try:
@@ -244,7 +244,7 @@ async def plex_state(ctx) -> tuple[Optional[bool], str]:
                 answers.append(conn)
         except Exception as exc:
             logger.warning("Tautulli server_status check failed: %s", exc)
-            errors.append(user_friendly_message(exc))
+            errors.append(user_friendly_message(exc, admin=True))
     if False in answers:
         return False, ""
     if True in answers:
@@ -334,7 +334,7 @@ async def status_section(ctx) -> str:
     for svc, items in checks.health.items():
         if isinstance(items, BaseException):
             health.append(f"  • <b>{svc}</b>: couldn't ask. "
-                          f"{html.escape(user_friendly_message(items))}")
+                          f"{html.escape(user_friendly_message(items, admin=True))}")
             continue
         probs = [i for i in items or [] if isinstance(i, dict)
                  and str(i.get("type") or "").lower() in HEALTH_LEVELS]
@@ -359,7 +359,7 @@ async def status_section(ctx) -> str:
         lines.append("  • no disks reported")
     for s in failed:
         lines.append(f"  • <b>{s}</b>: couldn't ask. "
-                     f"{html.escape(user_friendly_message(checks.disks[s]))}")
+                     f"{html.escape(user_friendly_message(checks.disks[s], admin=True))}")
     if plex_line:
         lines.append("\n" + plex_line)
     return "\n".join(lines)

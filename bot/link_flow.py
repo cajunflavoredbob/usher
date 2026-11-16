@@ -304,9 +304,9 @@ async def _finalize_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         sent = await ctx.bot.send_message(
             chat_id=chat_id,
             text=(
-                "✓ Plex authorized you, but Seerr rejected the sign-in.\n"
+                "✓ Plex authorized you, but this server didn't accept the sign-in.\n"
                 f"{user_friendly_message(exc)}\n\n"
-                "Your Plex account probably isn't shared in Seerr yet. "
+                "Your Plex account probably isn't shared on this server yet. "
                 "Ask the admin to invite you."
             ),
             reply_markup=offer_markup(hub, ACCOUNT_LINK if hub else None),

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 from typing import Awaitable, Callable, Optional, TypeVar
 
 import httpx
@@ -264,16 +265,58 @@ def json_or_raise(r: httpx.Response, *, service: str, what: str,
     return data
 
 
-def user_friendly_message(exc: BaseException) -> str:
+# What a User reads in place of each backend service's name. Longest names
+# first, so "Sonarr/Radarr" becomes one phrase rather than two.
+_NEUTRAL_NAMES = (
+    (r"Overseerr|Jellyseerr|Seerr", "the request system"),
+    (r"Sonarr|Radarr|Lidarr|Readarr|Prowlarr|Bazarr|\barrs?\b",
+     "the download system"),
+    (r"SABnzbd|NZBGet", "the downloader"),
+    (r"Tautulli", "watch history"),
+)
+# Any case, and a "the" in front is swallowed: the words carry their own.
+_NEUTRAL_RE = [(re.compile(r"(?:\bthe\s+)?(?:" + p + ")", re.I), word)
+               for p, word in _NEUTRAL_NAMES]
+_NEUTRAL_WORDS = ("the request system|the download system|the downloader"
+                  "|watch history")
+# "Sonarr/Radarr", "Sonarr, Radarr or Lidarr": one phrase, not a list of
+# the same words.
+_REPEATS = re.compile(
+    r"\b(" + _NEUTRAL_WORDS + r")((?:\s*(?:,|/|\bor\b|\band\b)\s*\1)+)\b")
+_SENTENCE_START = re.compile(r"(^|[.!?]\s+|\n\s*)(" + _NEUTRAL_WORDS + ")")
+
+
+def neutral_service_names(text: str) -> str:
+    """Replace backend service names (Seerr, Sonarr, Radarr, Tautulli,
+    SABnzbd...), in any case, with the plain words Users see. A name that
+    opens the text, a sentence or a line gets a capital. Plex is left alone:
+    Users know it."""
+    for pattern, word in _NEUTRAL_RE:
+        text = pattern.sub(word, text)
+    text = _REPEATS.sub(r"\1", text)
+    return _SENTENCE_START.sub(
+        lambda m: m.group(1) + m.group(2)[0].upper() + m.group(2)[1:], text)
+
+
+def user_friendly_message(exc: BaseException, *, admin: bool = False) -> str:
     """Format an exception as a short user-facing message. Safe for Telegram.
     Falls back to a generic message for unknown exceptions to avoid leaking
-    URLs, headers, or stack traces."""
+    URLs, headers, or stack traces. Users never see a backend service's name
+    (see neutral_service_names); admin=True keeps it, for text only the Admin
+    reads."""
+    name = getattr(exc, "service", "")
+    detail = getattr(exc, "user_message", "")
+    if not admin:
+        neutral = neutral_service_names(name)
+        if neutral != name:
+            name = neutral[0].upper() + neutral[1:]
+        detail = neutral_service_names(detail)
     if isinstance(exc, TransientAPIError):
-        return f"({exc.service} isn't responding right now; try again in a minute.)"
+        return f"({name} isn't responding right now; try again in a minute.)"
     if isinstance(exc, NotFoundAPIError):
-        return f"({exc.service} doesn't know about this item. It may have been deleted.)"
+        return f"({name} doesn't know about this item. It may have been deleted.)"
     if isinstance(exc, PermanentAPIError):
-        return f"({exc.service}: {exc.user_message})"
+        return f"({name}: {detail})"
     if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException,
                         httpx.RemoteProtocolError)):
         return "(connection problem. Try again in a moment.)"

@@ -334,7 +334,7 @@ async def test_hub_link_seerr_rejection_offers_try_again_and_back():
     upd = make_update(callback_data=LINK_HELP)
     await link_flow._finalize_link(upd, ctx, "tok", hub="account")
     kwargs = ctx.bot.send_message.call_args.kwargs
-    assert "Seerr rejected the sign-in" in kwargs["text"]
+    assert "this server didn't accept the sign-in" in kwargs["text"]
     assert _flat(kwargs["reply_markup"]) == [
         ("🙋 Ask for access", ACCESS_ASK), ("🔁 Try again", ACCOUNT_LINK), BACK]
 

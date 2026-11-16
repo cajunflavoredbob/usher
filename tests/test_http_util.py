@@ -339,20 +339,20 @@ async def test_execute_delete_retries_transient():
 # --- user_friendly_message ---
 
 
-def test_user_friendly_transient_mentions_service():
-    msg = user_friendly_message(TransientAPIError("oops", service="Sonarr"))
+def test_user_friendly_transient_mentions_service_for_admin():
+    msg = user_friendly_message(TransientAPIError("oops", service="Sonarr"), admin=True)
     assert "Sonarr" in msg
     assert "try again" in msg.lower()
 
 
-def test_user_friendly_not_found_mentions_deleted():
-    msg = user_friendly_message(NotFoundAPIError("gone", service="Radarr"))
+def test_user_friendly_not_found_mentions_deleted_for_admin():
+    msg = user_friendly_message(NotFoundAPIError("gone", service="Radarr"), admin=True)
     assert "Radarr" in msg
     assert "deleted" in msg.lower()
 
 
-def test_user_friendly_permanent_includes_message():
-    msg = user_friendly_message(PermanentAPIError("validation failed", service="Seerr"))
+def test_user_friendly_permanent_includes_message_for_admin():
+    msg = user_friendly_message(PermanentAPIError("validation failed", service="Seerr"), admin=True)
     assert "Seerr" in msg
     assert "validation failed" in msg
 

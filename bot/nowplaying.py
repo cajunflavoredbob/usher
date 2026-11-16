@@ -72,7 +72,7 @@ async def now_playing_section(ctx) -> tuple[str, list[list[InlineKeyboardButton]
     except Exception as exc:
         logger.exception("Tautulli get_activity failed")
         return ("\n\n<b>Now playing:</b>\n  Couldn't ask Tautulli. "
-                f"{html.escape(user_friendly_message(exc))}"), []
+                f"{html.escape(user_friendly_message(exc, admin=True))}"), []
     if not sessions:
         return "\n\n<b>Now playing:</b>\n  Nothing playing", []
     text = "\n\n<b>Now playing:</b>\n" + "\n".join(_line(s) for s in sessions)
@@ -96,7 +96,7 @@ async def _find(ctx, token: str) -> tuple[Optional[dict], Optional[str]]:
         sessions = _sessions(await tau.get_activity())
     except Exception as exc:
         logger.exception("Tautulli get_activity failed")
-        return None, f"Couldn't ask Tautulli. {user_friendly_message(exc)}"
+        return None, f"Couldn't ask Tautulli. {user_friendly_message(exc, admin=True)}"
     for s in sessions:
         if _token(s["session_id"]) == token:
             return s, None
@@ -157,7 +157,7 @@ async def stop_confirmed(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     except Exception as exc:
         logger.exception("Tautulli terminate_session failed")
         await _show(update, ctx,
-                    f"Couldn't stop it. {html.escape(user_friendly_message(exc))}",
+                    f"Couldn't stop it. {html.escape(user_friendly_message(exc, admin=True))}",
                     [[InlineKeyboardButton(
                         "🔁 Try again",
                         callback_data=f"{STOP_ASK}:{_token(session['session_id'])}")],

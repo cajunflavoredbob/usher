@@ -988,7 +988,7 @@ async def test_the_movie_auto_fix_confirm_names_the_title_it_deletes(rig):
     await rig.tap(DM_ID, f"{TICKET_AUTOFIX_OFFER}:{version}:yes",
                   rig.last_menu(DM_ID))
     confirm = rig.texts(DM_ID)[-1]
-    assert confirm.startswith("Radarr: Movie X (2001)\n\n"), confirm
+    assert confirm.startswith("Movie: Movie X (2001)\n\n"), confirm
     assert "delete the current file" in confirm
 
 

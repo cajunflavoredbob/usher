@@ -120,14 +120,16 @@ async def test_missing_radarr_leaves_out_movies_only():
 
 async def test_neither_service_shows_a_clear_message():
     edit = await _tap(_ctx())
-    assert "aren't set up" in edit["text"]
+    assert ("This server has no release calendar set up, so I have nothing "
+            "to show.") in edit["text"]
 
 
 async def test_failing_service_is_noted_and_the_other_still_lists():
     radarr = SimpleNamespace(get_calendar=AsyncMock(side_effect=RuntimeError))
     ctx = _ctx(sonarr=_sonarr([_ep("Show", 1, TODAY)]), radarr=radarr)
     edit = await _tap(ctx)
-    assert "Show" in edit["text"] and "Couldn't read Radarr" in edit["text"]
+    assert "Show" in edit["text"] and ("Couldn't read the movie calendar, so that part is missing."
+                                       in edit["text"])
 
 
 async def test_every_service_failing_says_so():

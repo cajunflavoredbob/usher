@@ -1,5 +1,5 @@
 """Admin Request DM buttons: which DMs get Approve / Decline / Retry /
-Open in Seerr, and what a tap does (status check first, edit in place,
+Open on the web, and what a tap does (status check first, edit in place,
 error line on a Seerr failure, Admin only)."""
 from __future__ import annotations
 
@@ -63,26 +63,26 @@ def _buttons(markup):
             for row in markup.inline_keyboard for b in row]
 
 
-async def test_pending_dm_has_approve_decline_and_open_in_seerr():
+async def test_pending_dm_has_approve_decline_and_open_on_the_web():
     app = _app()
     await handle_seerr_media(app, _payload("MEDIA_PENDING"))
     markup, _ = _admin_markup(app)
     assert _buttons(markup) == [
         ("✅ Approve", "rqap:12", None),
         ("🚫 Decline", "rqdc:12", None),
-        ("Open in Seerr", None, f"{PUBLIC_URL}/movie/550"),
+        ("Open on the web", None, f"{PUBLIC_URL}/movie/550"),
     ]
     # Recorded for the button gate, or the gate could refuse the taps.
     assert len(app.bot_data["btn_msgs"][ADMIN_ID]) == 1
 
 
-async def test_failed_dm_has_retry_and_open_in_seerr():
+async def test_failed_dm_has_retry_and_open_on_the_web():
     app = _app()
     await handle_seerr_media(app, _payload("MEDIA_FAILED"))
     markup, _ = _admin_markup(app)
     assert _buttons(markup) == [
         ("🔁 Retry", "rqrt:12", None),
-        ("Open in Seerr", None, f"{PUBLIC_URL}/movie/550"),
+        ("Open on the web", None, f"{PUBLIC_URL}/movie/550"),
     ]
 
 
@@ -100,11 +100,11 @@ async def test_no_request_id_means_no_action_buttons_and_same_text():
     app2 = _app()
     await handle_seerr_media(app2, _payload("MEDIA_PENDING", request_id=None))
     markup, text = _admin_markup(app2)
-    assert _buttons(markup) == [("Open in Seerr", None, f"{PUBLIC_URL}/movie/550")]
+    assert _buttons(markup) == [("Open on the web", None, f"{PUBLIC_URL}/movie/550")]
     assert text == text_with_id
 
 
-async def test_no_public_url_means_no_open_in_seerr():
+async def test_no_public_url_means_no_open_on_the_web():
     app = _app(public_url="")
     await handle_seerr_media(app, _payload("MEDIA_PENDING"))
     markup, _ = _admin_markup(app)
@@ -168,7 +168,7 @@ async def test_pending_action_calls_seerr_once_and_leaves_only_link(
     edit = _last_edit(upd)
     assert edit["text"] == f"{DM_TEXT}\n\n{outcome}"
     assert _buttons(edit["reply_markup"]) == [
-        ("Open in Seerr", None, f"{PUBLIC_URL}/movie/550")]
+        ("Open on the web", None, f"{PUBLIC_URL}/movie/550")]
 
 
 async def test_decline_is_one_tap_with_no_confirm():
@@ -184,7 +184,7 @@ async def test_retry_calls_seerr_once_and_reads_retrying():
     seerr.retry_request.assert_awaited_once_with(12)
     edit = _last_edit(upd)
     assert edit["text"].endswith("\n\n🔁 Retrying")
-    assert [b[0] for b in _buttons(edit["reply_markup"])] == ["Open in Seerr"]
+    assert [b[0] for b in _buttons(edit["reply_markup"])] == ["Open on the web"]
 
 
 async def test_already_approved_changes_nothing_and_says_so():
@@ -194,7 +194,7 @@ async def test_already_approved_changes_nothing_and_says_so():
     seerr.decline_request.assert_not_awaited()
     edit = _last_edit(upd)
     assert edit["text"].endswith("Already approved in Seerr")
-    assert [b[0] for b in _buttons(edit["reply_markup"])] == ["Open in Seerr"]
+    assert [b[0] for b in _buttons(edit["reply_markup"])] == ["Open on the web"]
 
 
 async def test_retry_on_request_no_longer_failed_changes_nothing():
@@ -212,7 +212,7 @@ async def test_request_gone_from_seerr_removes_action_buttons():
     seerr.approve_request.assert_not_awaited()
     edit = _last_edit(upd)
     assert "no longer exists in Seerr" in edit["text"]
-    assert [b[0] for b in _buttons(edit["reply_markup"])] == ["Open in Seerr"]
+    assert [b[0] for b in _buttons(edit["reply_markup"])] == ["Open on the web"]
 
 
 async def test_seerr_error_keeps_buttons_and_adds_error_line():
@@ -285,14 +285,14 @@ def _admin_requested_app():
     return app
 
 
-async def test_admin_own_failed_request_dm_has_retry_and_open_in_seerr():
+async def test_admin_own_failed_request_dm_has_retry_and_open_on_the_web():
     app = _admin_requested_app()
     await handle_seerr_media(app, _payload("MEDIA_FAILED"))
     markup, text = _admin_markup(app)
     assert "failed to download" in text
     assert _buttons(markup) == [
         ("🔁 Retry", "rqrt:12", None),
-        ("Open in Seerr", None, f"{PUBLIC_URL}/movie/550"),
+        ("Open on the web", None, f"{PUBLIC_URL}/movie/550"),
     ]
     assert len(app.bot_data["btn_msgs"][ADMIN_ID]) == 1
 
@@ -302,7 +302,7 @@ async def test_admin_own_failed_request_without_request_id_has_link_only():
     await handle_seerr_media(app, _payload("MEDIA_FAILED", request_id=None))
     markup, _ = _admin_markup(app)
     assert _buttons(markup) == [
-        ("Open in Seerr", None, f"{PUBLIC_URL}/movie/550")]
+        ("Open on the web", None, f"{PUBLIC_URL}/movie/550")]
 
 
 async def test_admin_own_approved_request_dm_stays_bare():
@@ -330,7 +330,7 @@ async def test_retry_tap_on_the_requester_line_dm_reads_retrying():
     edit = _last_edit(upd)
     assert edit["text"] == ("⚠️ Your request failed to download.\n"
                             "Some Movie (2026)\n\n🔁 Retrying")
-    assert [b[0] for b in _buttons(edit["reply_markup"])] == ["Open in Seerr"]
+    assert [b[0] for b in _buttons(edit["reply_markup"])] == ["Open on the web"]
 
 
 async def test_admin_own_failed_request_keeps_retry_with_admin_alarm_off():

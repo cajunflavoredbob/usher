@@ -137,7 +137,7 @@ async def downloads(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as exc:
         logger.exception("SABnzbd downloads call failed")
         await _show(update, ctx,
-                    f"Couldn't reach SABnzbd. {html.escape(user_friendly_message(exc))}",
+                    f"Couldn't reach SABnzbd. {html.escape(user_friendly_message(exc, admin=True))}",
                     InlineKeyboardMarkup([[try_again_button(q.data),
                                            back_button(ADMIN_HUB)]]))
         return
