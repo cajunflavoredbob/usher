@@ -7,8 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.4] - 2026-11-16
+
 ### Changed
-- **Users no longer see backend service names**: messages, buttons and error replies a User can see now say "the request system", "the download system", "the downloader" or "watch history" instead of Seerr, Sonarr, Radarr, SABnzbd or Tautulli. Plex keeps its name. Fix previews read `Movie: Title (Year)` and `Episode: S01E03 "Title"` instead of `Radarr:` and `Sonarr:`, for the Admin too. The request DM's "Open in Seerr" button now reads "Open on the web". The Admin's own screens (connection status, health alarms, Downloads, Invite and Shares, Now playing, the Fix menu's not-configured lines, request approval DMs) and the web admin panel keep the service names. A test now fails when a new User-facing string names a service.
+- **Users no longer see backend service names**: messages, buttons and error replies a User can see now say "the request system", "the download system", "the downloader" or "watch history" instead of Seerr, Sonarr, Radarr, SABnzbd or Tautulli. Plex keeps its name. Fix previews read `Movie: Title (Year)` and `Episode: S01E03 "Title"` instead of `Radarr:` and `Sonarr:`, for the Admin too. The request DM's "Open in Seerr" button now reads "Open on the web". The Admin's own screens (connection status, health alarms, Downloads, Invite and Shares, Now playing, the Fix menu's not-configured lines, request approval DMs) and the web admin panel keep the service names.
 
 ## [0.20.3] - 2026-11-16
 
